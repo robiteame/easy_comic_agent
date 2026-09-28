@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  BulbOutlined,
   CloseOutlined,
   DeleteOutlined,
   ExclamationCircleOutlined,
@@ -41,6 +42,8 @@ import {
 import { useTaskStore } from '../stores/taskStore'
 import { useProjectStore } from '../stores/projectStore'
 import {
+  ERROR_CODE_LABELS,
+  FAILURE_CATEGORY_OPTIONS,
   JOB_STATUSES,
   JOB_TYPES,
   JOB_TYPE_LABELS,
@@ -48,7 +51,10 @@ import {
   STATUS_LABELS,
   connectionLabel,
   emptyStateText,
-  errorSummary,
+  errorCategoryLabel,
+  errorCodeTone,
+  errorHeadline,
+  effectiveErrorCode,
   formatDuration,
   formatRelativeTime,
   jobActionState,
@@ -210,8 +216,25 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
     return buckets
   }, [visibleJobs])
 
+  // 失败分组标题下的共性原因提示：只统计当前筛选结果里的失败任务。
+  const failedCategoryCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const job of sections.failed) {
+      const code = effectiveErrorCode(job) || 'job_failed'
+      counts.set(code, (counts.get(code) || 0) + 1)
+    }
+    return Array.from(counts.entries())
+      .map(([code, count]) => ({ code, label: ERROR_CODE_LABELS[code] || code, count }))
+      .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code))
+  }, [sections])
+
   const filtersActive = Boolean(
-    filters.projectId || filters.statuses.length || filters.jobTypes.length || filters.search.trim() || filters.onlyActive,
+    filters.projectId ||
+      filters.statuses.length ||
+      filters.jobTypes.length ||
+      filters.errorCodes.length ||
+      filters.search.trim() ||
+      filters.onlyActive,
   )
 
   const projectOptions = useMemo(() => {
@@ -304,7 +327,13 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
 
         {job.error_message && (
           <p className="task-error" role="note">
-            <ExclamationCircleOutlined aria-hidden="true" /> {errorSummary(job)}
+            <ExclamationCircleOutlined aria-hidden="true" />
+            {errorCategoryLabel(job) && (
+              <span className={'task-error-code task-error-code-' + errorCodeTone(effectiveErrorCode(job))}>
+                {errorCategoryLabel(job)}
+              </span>
+            )}
+            <span className="task-error-text">{errorHeadline(job)}</span>
           </p>
         )}
         {!job.error_message && job.message && <p className="task-message">{job.message}</p>}
@@ -549,6 +578,19 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
             />
           </label>
           <label className="task-filter-field">
+            <span className="task-filter-label">失败原因</span>
+            <Select
+              size="small"
+              mode="multiple"
+              allowClear
+              value={filters.errorCodes}
+              options={FAILURE_CATEGORY_OPTIONS}
+              placeholder="全部原因"
+              onChange={(value: string[]) => setFilters({ errorCodes: value || [] })}
+              aria-label="按失败原因筛选任务"
+            />
+          </label>
+          <label className="task-filter-field">
             <span className="task-filter-label">排序方式</span>
             <Select
               size="small"
@@ -625,11 +667,38 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
           {visibleSections.map((key) => {
             const items = sections[key]
             if (items.length === 0) return null
+            const categoryChips =
+              key === 'failed' && failedCategoryCounts.length > 0 && failedCategoryCounts.length <= 4
+                ? failedCategoryCounts
+                : []
             return (
               <section key={key} className="task-section" aria-label={SECTION_TITLES[key]}>
                 <h3 className="task-section-title">
                   {SECTION_TITLES[key]}
                   <span className="task-section-count">{items.length}</span>
+                  {categoryChips.map((item) => (
+                    <button
+                      key={item.code}
+                      type="button"
+                      className={
+                        'task-cat-chip task-cat-chip-' +
+                        errorCodeTone(item.code) +
+                        (filters.errorCodes.indexOf(item.code) >= 0 ? ' task-cat-chip-active' : '')
+                      }
+                      title={'按「' + item.label + '」筛选失败任务'}
+                      onClick={() =>
+                        setFilters({
+                          errorCodes:
+                            filters.errorCodes.indexOf(item.code) >= 0
+                              ? filters.errorCodes.filter((code) => code !== item.code)
+                              : [...filters.errorCodes, item.code],
+                        })
+                      }
+                      aria-pressed={filters.errorCodes.indexOf(item.code) >= 0}
+                    >
+                      {item.label} ×{item.count}
+                    </button>
+                  ))}
                 </h3>
                 <ul className="task-list" role="list">
                   {items.map(renderJob)}
@@ -677,10 +746,37 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
                       : ''}
                   </dd>
                 </dl>
-                {selectedJob.error_message && (
-                  <p className="task-error" role="note">
-                    失败原因（{selectedJob.error_code || 'job_failed'}）：{selectedJob.error_message}
-                  </p>
+                {(selectedJob.error_message || selectedJob.error_detail) && (
+                  <div className="task-error-block" role="note">
+                    <div className="task-error-block-head">
+                      <span className={'task-error-code task-error-code-' + errorCodeTone(effectiveErrorCode(selectedJob))}>
+                        {errorCategoryLabel(selectedJob) || '任务失败'}
+                      </span>
+                      <span className="task-error-code-id">{effectiveErrorCode(selectedJob) || 'job_failed'}</span>
+                    </div>
+                    <p className="task-error-text">{errorHeadline(selectedJob)}</p>
+                    {selectedJob.error_detail?.suggestion && (
+                      <p className="task-error-advice">
+                        <BulbOutlined aria-hidden="true" /> 修复建议：{selectedJob.error_detail.suggestion}
+                      </p>
+                    )}
+                    {selectedJob.error_detail?.summary &&
+                      selectedJob.error_message &&
+                      selectedJob.error_detail.summary !== selectedJob.error_message && (
+                        <details className="task-error-raw">
+                          <summary>原始错误信息</summary>
+                          <pre>{selectedJob.error_message}</pre>
+                        </details>
+                      )}
+                    {selectedJob.error_detail?.source && (
+                      <p className="task-error-source">
+                        {selectedJob.error_detail.source === 'llm'
+                          ? '原因由 AI 自动识别' +
+                            (selectedJob.error_detail.model ? '（' + selectedJob.error_detail.model + '）' : '')
+                          : '原因由规则自动识别'}
+                      </p>
+                    )}
+                  </div>
                 )}
                 <h4 className="task-detail-subtitle">历次尝试</h4>
                 <ol className="task-attempt-list">
@@ -690,7 +786,12 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
                       <span>{STATUS_LABELS[attempt.status] || attempt.status}</span>
                       <span>{formatDuration(attempt.duration_seconds)}</span>
                       <span>{formatRelativeTime(attempt.updated_at)}</span>
-                      {attempt.error_message && <em>{attempt.error_message}</em>}
+                      {attempt.error_message && (
+                        <em>
+                          {attempt.error_code_label ? attempt.error_code_label + '：' : ''}
+                          {attempt.error_message}
+                        </em>
+                      )}
                     </li>
                   ))}
                 </ol>

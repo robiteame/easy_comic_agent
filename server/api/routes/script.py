@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import uuid
+import hashlib
 from pathlib import Path
 
 import aiofiles
@@ -21,7 +22,7 @@ from services.error_reporter import ERROR_PIPELINE, report_failure
 from services.image_service import ImageService
 from services.llm_service import LLMService
 from services.shot_version_service import create_version
-from services.skill_config_service import agent_prompt_append, agent_style_id, resolve_skill_config
+from services.skill_config_service import agent_prompt_append, resolve_effective_style, resolve_skill_config
 from services.style_templates import style_prompt_params, style_template
 from services.tts_service import normalize_mimo_voice
 from services.security import UploadLimitExceeded, safe_filename, save_upload_stream, validate_identifier, validate_script_upload
@@ -61,12 +62,14 @@ class ScriptParseRequest(BaseModel):
 @router.post("/generate")
 async def generate_script(data: ScriptGenerateRequest):
     skill_config = _resolved_skill_config(data.project_id or "")
+    style_meta = resolve_effective_style(data.style, skill_config, "script_agent")
     script = await _generate_script_text(data, skill_config)
     return {
         "project_id": data.project_id,
         "title": _script_title(script),
         "script": script,
-        "style": data.style,
+        "style": style_meta["effective_style"],
+        **style_meta,
         "genre": data.genre,
         "target_duration": data.target_duration,
     }
@@ -81,19 +84,22 @@ async def parse_script(data: ScriptParseRequest):
     _require_project(data.project_id)
     # 启动前预检：LLM（手动模式）/ 全链路 Provider（自动模式）未配置时直接拒绝。
     ensure_providers_ready("script_pipeline", mode=data.mode)
+    skill_config = _resolved_skill_config(data.project_id)
+    style_meta = resolve_effective_style(data.style, skill_config, "script_agent")
     task = _spawn_pipeline(
         data.project_id,
-        _initial_state(data.model_dump(), _resolved_skill_config(data.project_id)),
+        _initial_state(data.model_dump(), skill_config),
         data.mode,
         data.output_format,
         data.resolution,
     )
     if task is None:
-        return {"status": "already_running", "project_id": data.project_id, "mode": data.mode, "deduplicated": True}
+        return {"status": "already_running", "project_id": data.project_id, "mode": data.mode, "deduplicated": True, **style_meta}
     return {
         "status": "started",
         "project_id": data.project_id,
         "mode": data.mode,
+        **style_meta,
         **getattr(task, "budget_notice", {}),
     }
 
@@ -164,15 +170,18 @@ async def upload_script(
     except HTTPException:
         file_path.unlink(missing_ok=True)
         raise
-    task = _spawn_pipeline(safe_project_id, _initial_state(payload, _resolved_skill_config(safe_project_id)), mode, output_format, resolution)
+    skill_config = _resolved_skill_config(safe_project_id)
+    style_meta = resolve_effective_style(style, skill_config, "script_agent")
+    task = _spawn_pipeline(safe_project_id, _initial_state(payload, skill_config), mode, output_format, resolution)
     if task is None:
-        return {"status": "already_running", "project_id": safe_project_id, "mode": mode, "deduplicated": True}
+        return {"status": "already_running", "project_id": safe_project_id, "mode": mode, "deduplicated": True, **style_meta}
     return {
         "status": "started",
         "project_id": safe_project_id,
         "mode": mode,
         "file": file.filename,
         "script": user_input,
+        **style_meta,
         **getattr(task, "budget_notice", {}),
     }
 
@@ -181,7 +190,7 @@ async def _generate_script_text(data: ScriptGenerateRequest, skill_config: dict 
     if not llm_service.available:
         raise RuntimeError("未配置可用的 Mimo/LLM API Key，无法生成真实剧本")
 
-    script_style = agent_style_id(skill_config, "script_agent", data.style)
+    script_style = resolve_effective_style(data.style, skill_config, "script_agent")["effective_style"]
     script_append = agent_prompt_append(skill_config, "script_agent")
     try:
         script = await llm_service.call(
@@ -207,7 +216,8 @@ Skill 配置：{script_append}
 
 
 def _initial_state(data: dict, skill_config: dict | None = None) -> dict:
-    style = agent_style_id(skill_config, "script_agent", data.get("style", "anime"))
+    style_meta = resolve_effective_style(data.get("style", "anime"), skill_config, "script_agent")
+    style = style_meta["effective_style"]
     return {
         "project_id": data["project_id"],
         "user_input": data.get("user_input", ""),
@@ -223,6 +233,7 @@ def _initial_state(data: dict, skill_config: dict | None = None) -> dict:
         "logic_issues": [],
         "shots": [],
         "style": style,
+        **style_meta,
         "style_params": style_prompt_params(style),
         "skill_config": skill_config or {},
         "skill_prompt_append": agent_prompt_append(skill_config, "script_agent"),
@@ -374,6 +385,9 @@ async def _run_storyboard_phase(project_id: str, state: dict):
                 "shots": state.get("shots", []),
                 "video_path": "",
                 "asset_board_ready": True,
+                "requested_style": state.get("requested_style", state.get("style")),
+                "effective_style": state.get("effective_style", state.get("style")),
+                "style_source": state.get("style_source", "project_request"),
             },
         )
     except Exception as exc:
@@ -404,7 +418,9 @@ def _persist_phase1(db, project_id: str, state: dict, status: str = "assets_read
     # 根据剧本自动命名：优先用 LLM 解析出的剧名，其次回退到剧本文本本身的标题行。
     project.title = state.get("script_title") or _script_title(state.get("user_input", "")) or project.title
     project.genre = state.get("genre") or project.genre
-    project.style = state.get("style") or project.style
+    # The request/state style is authoritative. Never fall back through a
+    # parser suggestion or legacy Skill default that can silently become anime.
+    project.style = state.get("effective_style") or state.get("style") or project.style
     project.input_text = state.get("user_input", "")
     project.input_type = state.get("input_type", "text")
     project.output_format = state.get("output_format", project.output_format)
@@ -413,8 +429,8 @@ def _persist_phase1(db, project_id: str, state: dict, status: str = "assets_read
     project.consistency_config = json.dumps(consistency_service.project_config(), ensure_ascii=False)
     project.status = status
 
-    character_ids = _upsert_characters(db, asset_project_id, state.get("characters", []))
-    scene_ids = _upsert_scenes(db, asset_project_id, state.get("script_scenes", []))
+    character_ids = _upsert_characters(db, asset_project_id, state.get("characters", []), state.get("effective_style") or state.get("style"))
+    scene_ids = _upsert_scenes(db, asset_project_id, state.get("script_scenes", []), state.get("effective_style") or state.get("style"))
 
     existing_shots = db.query(ShotModel).filter(ShotModel.project_id == project_id).all()
     if any(shot.confirmed or shot.video_path for shot in existing_shots):
@@ -424,6 +440,7 @@ def _persist_phase1(db, project_id: str, state: dict, status: str = "assets_read
     shots = state.get("shots", [])
     for index, shot in enumerate(shots):
         model = _shot_model(project_id, shot, index + 1, character_ids, scene_ids, state.get("script_scenes", []), state.get("characters", []))
+        model.style_fingerprint = hashlib.sha256(str(state.get("effective_style") or state.get("style") or "anime").encode()).hexdigest()[:16]
         db.add(model)
         # 剧本解析生成的镜头以 import 来源进入版本历史，作为时间线的 v1。
         create_version(db, model, "import")
@@ -433,7 +450,7 @@ def _persist_phase1(db, project_id: str, state: dict, status: str = "assets_read
 
 
 async def _ensure_character_reference_images(asset_project_id: str, state: dict) -> None:
-    style = state.get("style") or state.get("style_suggestion") or "anime"
+    style = state.get("effective_style") or state.get("style") or state.get("style_suggestion") or "anime"
     skill_append = agent_prompt_append(state.get("skill_config"), "script_agent")
     characters = state.get("characters", [])
     semaphore = asyncio.Semaphore(3)
@@ -467,7 +484,7 @@ async def _ensure_character_reference_images(asset_project_id: str, state: dict)
 
 
 async def _ensure_scene_baseline_images(asset_project_id: str, state: dict) -> None:
-    style = state.get("style") or state.get("style_suggestion") or "anime"
+    style = state.get("effective_style") or state.get("style") or state.get("style_suggestion") or "anime"
     skill_append = agent_prompt_append(state.get("skill_config"), "script_agent")
     for index, scene in enumerate(state.get("script_scenes", [])):
         scene.setdefault("id", _scene_asset_id(asset_project_id, index))
@@ -500,7 +517,7 @@ def _resolve_asset_project_id(db, project_id: str) -> str:
     return (project.parent_project_id or project.id) if project else project_id
 
 
-def _upsert_characters(db, asset_project_id: str, characters: list[dict]) -> dict[str, str]:
+def _upsert_characters(db, asset_project_id: str, characters: list[dict], style: str = "anime") -> dict[str, str]:
     ids: dict[str, str] = {}
     for index, char in enumerate(characters):
         name = char.get("name") or f"角色{index + 1}"
@@ -509,6 +526,14 @@ def _upsert_characters(db, asset_project_id: str, characters: list[dict]) -> dic
         existing = db.query(CharacterModel).filter(CharacterModel.project_id == asset_project_id, CharacterModel.id == char_id).first()
         item = existing or CharacterModel(id=char_id, project_id=asset_project_id, name=name)
         item.name = name
+        fingerprint = hashlib.sha256(str(style or "anime").encode()).hexdigest()[:16]
+        # 空指纹 = 历史遗留、来源未知：不猜测它属于哪种风格，一律视为与当前
+        # 风格不一致，标记 stale 并清空引用（不删除旧文件）。
+        style_changed = existing is not None and (item.style_fingerprint or "") != fingerprint
+        if style_changed:
+            item.asset_status = "stale"
+            item.reference_images = "[]"
+        item.style_fingerprint = fingerprint
         item.appearance = json.dumps(char.get("appearance", {}), ensure_ascii=False)
         item.personality = char.get("personality", "")
         item.visual_prompt = char.get("visual_prompt", "")
@@ -518,12 +543,17 @@ def _upsert_characters(db, asset_project_id: str, characters: list[dict]) -> dic
         item.key_features = json.dumps(char.get("key_features", []), ensure_ascii=False)
         appearance = char.get("appearance", {}) if isinstance(char.get("appearance"), dict) else {}
         item.default_outfit = char.get("default_outfit") or appearance.get("default_outfit", "")
-        item.lora_profile = char.get("lora_profile", "")
-        item.ip_adapter_profile = char.get("ip_adapter_profile", "")
+        item.lora_profile = ""
+        item.ip_adapter_profile = ""
         item.wardrobe_lock = char.get("wardrobe_lock", "")
         next_refs = char.get("reference_images", [])
-        if next_refs or not existing:
+        if next_refs:
+            # 本次运行内按当前生效风格新生成的参考图：直接置为 active。
             item.reference_images = json.dumps(next_refs, ensure_ascii=False)
+            item.asset_status = "active"
+        elif not existing:
+            item.reference_images = "[]"
+            item.asset_status = "active"
         item.seed = str(char.get("seed", 42 + index))
         if not existing:
             db.add(item)
@@ -535,7 +565,7 @@ def _character_asset_id(asset_project_id: str, index: int) -> str:
     return f"{asset_project_id}_char_{index + 1:04d}"
 
 
-def _upsert_scenes(db, asset_project_id: str, scenes: list[dict]) -> list[str]:
+def _upsert_scenes(db, asset_project_id: str, scenes: list[dict], style: str = "anime") -> list[str]:
     ids: list[str] = []
     for index, scene in enumerate(scenes):
         location = scene.get("location") or scene.get("name") or f"场景{index + 1}"
@@ -550,19 +580,32 @@ def _upsert_scenes(db, asset_project_id: str, scenes: list[dict]) -> list[str]:
             existing = base_query.filter(SceneAsset.name == name).first()
         item = existing or SceneAsset(id=scene_id, project_id=asset_project_id, name=name)
         item.name = name
+        fingerprint = hashlib.sha256(str(style or "anime").encode()).hexdigest()[:16]
+        # 与角色资产同口径：指纹为空（来源未知）或与当前风格不一致都标记
+        # stale 并清空基准图引用（不删除旧文件），等待按当前风格重建。
+        style_changed = existing is not None and (item.style_fingerprint or "") != fingerprint
+        if style_changed:
+            item.asset_status = "stale"
+            item.baseline_image_path = ""
+            item.reference_images = "[]"
+        item.style_fingerprint = fingerprint
         item.description = scene.get("actions") or scene.get("description") or ""
-        item.visual_prompt = scene.get("visual_prompt") or item.visual_prompt or f"{name}, consistent comic background, clean composition"
+        item.visual_prompt = scene.get("visual_prompt") or item.visual_prompt or f"{name}, consistent {style} background, clean composition"
         item.negative_prompt = "watermark, subtitles, text artifacts, low quality"
         item.key_features = json.dumps([scene.get("emotion", "neutral"), scene.get("camera_suggestion", "medium")], ensure_ascii=False)
         item.scene_group_key = scene_group_key
         item.time_of_day = time_of_day
-        if scene.get("baseline_image_path") or not existing:
+        next_refs = scene.get("reference_images", [])
+        if scene.get("baseline_image_path") or next_refs:
             item.baseline_image_path = scene.get("baseline_image_path", "")
+            item.reference_images = json.dumps(next_refs, ensure_ascii=False)
+            item.asset_status = "active"
+        elif not existing:
+            item.baseline_image_path = ""
+            item.reference_images = "[]"
+            item.asset_status = "active"
         item.consistency_profile = json.dumps(scene.get("consistency_profile", {}), ensure_ascii=False)
         item.prop_lock = scene.get("prop_lock", "")
-        next_refs = scene.get("reference_images", [])
-        if next_refs or not existing:
-            item.reference_images = json.dumps(next_refs, ensure_ascii=False)
         item.seed = 1200 + index
         if not existing:
             db.add(item)

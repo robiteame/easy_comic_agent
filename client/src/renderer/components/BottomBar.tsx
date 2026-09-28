@@ -15,7 +15,7 @@ const stepLabels: Record<string, string> = {
   generate_voice: 'Mimo 配音',
   generate_seedance_video: 'Seedance 视频',
   compose_video: '视频合成',
-  quality_check: '质量校验',
+  quality_check: '结构检查（仅结构，非质量认证）',
 }
 
 const BottomBar: React.FC = () => {

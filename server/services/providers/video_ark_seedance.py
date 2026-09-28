@@ -2,6 +2,7 @@
 
 异步任务式：创建任务 → 轮询 → 下载视频 + 尾帧。产物为无声视频（对白由独立的
 TTS 路径配音），capabilities.native_audio=False 供音频路由识别。
+参考图模式为 first_frame_only：只接受一张已审核故事板首帧。
 """
 
 from __future__ import annotations
@@ -14,7 +15,9 @@ import httpx
 
 from config import settings
 from services.providers.base import BaseAdapter, VideoCapabilities, VideoRequest, VideoResult
+from services.providers.http_retry import request_with_retry
 from services.providers.usage import CAPABILITY_VIDEO, UsageMetadata
+from services.reference_asset_service import ReferenceAssetService
 from services.security import (
     UploadLimitExceeded,
     atomic_write_bytes,
@@ -31,11 +34,16 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
         dialogue_in_prompt=False,
         voice_consistent=False,
         fixed_duration=5,
+        reference_mode="first_frame_only",
+        # 方舟内容生成接口允许 MB 级 base64 图片内联；参考图按此预算压缩，
+        # 尽量保留首帧里的人脸、服装与材质细节。
+        max_reference_inline_bytes=8 * 1024 * 1024,
     )
 
     def __init__(self, endpoint):
         super().__init__(endpoint)
         self.storage = StorageService()
+        self.reference_assets = ReferenceAssetService()
 
     def usage_for_request(
         self,
@@ -61,8 +69,15 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
     async def generate(self, request: VideoRequest) -> VideoResult:
         content: list[dict] = [{"type": "text", "text": request.prompt}]
         if request.reference_image:
+            # 服务层已按能力预算压缩；这里兜底覆盖直传大 data URL 的调用路径。
+            reference_url = self.reference_assets.to_image_url(
+                request.reference_image,
+                max_bytes=self.capabilities.max_reference_inline_bytes or settings.VIDEO_REFERENCE_INLINE_BUDGET_BYTES,
+            )
+            if not reference_url:
+                raise RuntimeError("视频首帧参考图缺失，或无法压缩到方舟请求体预算内")
             content.append(
-                {"type": "image_url", "image_url": {"url": request.reference_image}, "role": "first_frame"}
+                {"type": "image_url", "image_url": {"url": reference_url}, "role": "first_frame"}
             )
         payload_mode = self._reference_payload_mode(content)
 
@@ -99,20 +114,39 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
             "content": request_content,
             "duration": duration,
             "ratio": ratio,
-            "resolution": resolution,
+            "resolution": self._normalized_resolution(resolution),
+            # 保留尾帧返回：同场景下一镜的连续性参考依赖上一镜尾帧。
             "return_last_frame": True,
             "watermark": False,
         }
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(self._tasks_url(), headers=self._headers(), json=payload)
+        # Seedance 1.5 Pro 及 2.x 系列「音画同生」默认开启（generate_audio=true）；
+        # 本链路契约为无声视频 + 独立 TTS 配音，需显式关闭。1.0 系列不支持该参数，
+        # 强校验下携带会报错，故仅在受支持的模型上发送。
+        if self._supports_generate_audio(self.endpoint.model):
+            payload["generate_audio"] = False
+        async with httpx.AsyncClient(timeout=60, trust_env=settings.PROVIDER_HTTP_TRUST_ENV) as client:
+            response = await request_with_retry(
+                client,
+                "POST",
+                self._tasks_url(),
+                headers=self._headers(),
+                json=payload,
+                name="ark-seedance:create",
+            )
         if response.status_code >= 400:
             raise RuntimeError(f"Seedance 创建任务失败: {response.status_code} {response.text[:1000]}")
         return response.json()
 
     async def _wait_for_task(self, task_id: str) -> dict:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60, trust_env=settings.PROVIDER_HTTP_TRUST_ENV) as client:
             for _ in range(90):
-                response = await client.get(f"{self._tasks_url()}/{task_id}", headers=self._headers())
+                response = await request_with_retry(
+                    client,
+                    "GET",
+                    f"{self._tasks_url()}/{task_id}",
+                    headers=self._headers(),
+                    name="ark-seedance:poll",
+                )
                 if response.status_code >= 400:
                     raise RuntimeError(f"Seedance 查询任务失败: {response.status_code} {response.text[:1000]}")
                 data = response.json()
@@ -125,6 +159,31 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
                     raise RuntimeError(f"Seedance 任务失败: {data}")
                 await asyncio.sleep(5)
         raise TimeoutError(f"Seedance 任务超时: {task_id}")
+
+    @staticmethod
+    def _supports_generate_audio(model: str) -> bool:
+        """Seedance 2.x 系列支持 generate_audio；1.0 系列不支持。
+
+        1.5 Pro 已从模型列表下线，保留匹配仅为兼容历史端点配置。
+        """
+
+        normalized = model.replace(".", "-").lower()
+        return "seedance-1-5" in normalized or "seedance-2" in normalized
+
+    def _normalized_resolution(self, resolution: str) -> str:
+        """按模型档位归一化分辨率。
+
+        官方模型列表：Seedance 2.0 Fast / 2.0 Mini 仅提供 480p/720p 档位
+        （2.5 与 2.0 标准版到 1080p，2.0 另有 4k），而项目默认分辨率为 1080p，
+        直传会被方舟拒绝，统一降 720p。
+        """
+
+        value = str(resolution or "").strip().lower()
+        normalized_model = self.endpoint.model.replace(".", "-").lower()
+        limited = "seedance-2-0-fast" in normalized_model or "seedance-2-0-mini" in normalized_model
+        if limited and value in {"1080p", "1080", "2k", "4k"}:
+            return "720p"
+        return value
 
     def _reference_payload_mode(self, content: list[dict]) -> str:
         roles = {str(item.get("role") or "") for item in content if item.get("type") == "image_url"}

@@ -502,31 +502,35 @@ runner 上成套构建三个平台的安装包并发布到 GitHub Releases（当
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `IMAGE_PROVIDER` | `local` | 图像生成提供商：`local`（PIL 占位图）/ `stability` / `doubao-seedream-5.0-lite` / `qwen-image` |
+| `IMAGE_PROVIDER` | `local` | 图像生成提供商：`local`（PIL 占位图）/ `stability` / `ark-seedream`（Seedream）/ `qwen-image` |
 | `STABILITY_API_KEY` | — | Stability AI API Key |
 | `STABILITY_API_URL` | `https://api.stability.ai/v2beta` | Stability API 地址 |
 | `ARK_API_KEY` | — | 火山方舟 API Key（Seedream 图像 + SeedDance 视频共用）；**视频生成必填** |
 | `SEEDREAM_API_KEY` | — | Seedream 专用 API Key |
-| `SEEDREAM_MODEL` | `doubao-seedream-5.0-lite` | Seedream 模型 |
+| `SEEDREAM_MODEL` | `doubao-seedream-5-0-lite-260128` | Seedream 模型（另有 `…-5-0-pro-260628` / `…-5-0-flash-260915` / `…-4-5-251128`） |
 | `SEEDREAM_IMAGE_SIZE` | `1440x2560` | 默认出图尺寸（宽x高） |
 | `QWEN_IMAGE_API_KEY` | — | 阿里云百炼 Qwen-Image API Key（留空则复用 `DASHSCOPE_API_KEY`） |
 | `QWEN_IMAGE_BASE_URL` | `https://dashscope.aliyuncs.com/api/v1` | Qwen-Image 原生 API 地址 |
-| `QWEN_IMAGE_MODEL` | `qwen-image-plus` | Qwen-Image 模型 |
+| `QWEN_IMAGE_MODEL` | `qwen-image-3.0` | Qwen-Image 模型（另有 `qwen-image-3.0-pro` / `qwen-image-2.0-pro` / `qwen-image-plus`） |
 | `QWEN_IMAGE_SIZE` | `1440x2560` | 默认出图尺寸（宽x高） |
+| `IMAGE_REFERENCE_ENFORCEMENT` | `prefer` | 参考图能力策略：`prefer`＝先尝试切到已配置且支持参考图的 Provider，都没有时明确告警并如实记录 `references_sent=0` 后继续；`strict`＝同样先尝试切换，仍无可用参考图 Provider 时直接阻止生成 |
 
 > `IMAGE_PROVIDER=local` 或缺少对应 API Key 时，系统自动使用 PIL 生成纯色占位图，图像阶段可离线跑通。但剧本解析、配音和视频生成仍需对应 API Key。
+
+> **参考图能力（如实声明）**：只有 `ark-seedream` 适配器声明 `reference_images=True`；`qwen-image` / `stability` / `placeholder` 均声明不支持参考图，不会收到角色三视图、场景基准图或续帧参考。此时接口与日志会返回 `provider` / `model` / `provider_source` / `reference_mode` / `references_validated` / `references_sent`，其中 `references_validated` 是「文件存在并已读取」的数量，`references_sent` 是「实际发送给模型」的数量——两者分开记录，界面不会声称参考图已生效。
+> **没有用户上传参考图的 API/UI**：本项目不提供用户上传自定义参考图的入口，参考资产全部由系统按角色/场景生成。需要真实参考图条件作用时，请把图像 Provider 切到 `ark-seedream`。
 
 #### 视频生成配置
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `VIDEO_PROVIDER` | `Doubao-Seedance-1.5-pro` | 视频生成提供商；填 `wanx` / `dashscope` 切换到阿里云百炼通义万相 |
+| `VIDEO_PROVIDER` | `Doubao-Seedance-2.0` | 视频生成提供商；填 `wanx` / `dashscope` 切换到阿里云百炼通义万相 |
 | `SEEDDANCE_API_KEY` | — | SeedDance 专用 API Key（可选，留空回退 `ARK_API_KEY`） |
 | `SEEDDANCE_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` | SeedDance API 地址 |
-| `SEEDDANCE_MODEL` | `doubao-seedance-1-5-pro-251215` | SeedDance 模型 |
+| `SEEDDANCE_MODEL` | `doubao-seedance-2-0-260128` | SeedDance 模型（1.5 Pro 已下线；另有 `…-2-5-260628` / `…-2-0-fast-260128` / `…-2-0-mini-260615` / `…-1-0-pro-250528`） |
 | `DASHSCOPE_API_KEY` | — | 阿里云百炼 API Key（`dashscope-wanx` 协议，Bearer 鉴权） |
 | `DASHSCOPE_BASE_URL` | `https://dashscope.aliyuncs.com/api/v1` | 百炼 DashScope API 地址 |
-| `DASHSCOPE_VIDEO_MODEL` | `wan2.5-i2v-plus` | 通义万相模型：图生视频（首帧驱动）用 `wan2.5-i2v-plus`，文生视频用 `wan2.5-t2v-plus` |
+| `DASHSCOPE_VIDEO_MODEL` | `wan2.7-i2v` | 通义万相模型：新一代用 `wan3.0-video` / `wan2.7-i2v`，旧代用 `wan2.6-i2v`（`wan2.5-*-plus` 已下线） |
 
 #### TTS 配音配置
 
@@ -558,7 +562,7 @@ runner 上成套构建三个平台的安装包并发布到 GitHub Releases（当
 
 ### 风格模板
 
-内置 8 套预置画风模板（`server/prompts/styles/` + `server/services/style_templates.py`），支持自定义添加：
+内置 8 套预置画风模板（运行时唯一来源：`server/services/style_templates.py`；自定义模板落在 `server/data/custom_style_templates.json`），支持自定义添加：
 
 | 模板 Key | 中文标签 | 风格描述 |
 |----------|---------|---------|
@@ -616,7 +620,7 @@ runner 上成套构建三个平台的安装包并发布到 GitHub Releases（当
 |------|------|------|
 | `GET` | `/api/shot/{project_id}/shots` | 获取项目镜头列表（按 sequence 排序） |
 | `PUT` | `/api/shot/{shot_id}` | 修改镜头参数（场景描述、运镜、情绪等），自动失效下游产物并增加版本号 |
-| `POST` | `/api/shot/{shot_id}/regenerate` | 重新生成单个镜头故事板 |
+| `POST` | `/api/shot/{shot_id}/regenerate` | 重新生成单个镜头故事板；`candidates=2` 时一次生成 2 个候选（各占一版版本历史，可对比后选用） |
 | `POST` | `/api/shot/batch-regenerate` | 批量重新生成镜头故事板 |
 | `GET` | `/api/shot/{shot_id}/generation-prompt` | 获取镜头完整生成 Prompt（含一致性注入结果，调试用） |
 | `POST` | `/api/shot/{project_id}/generate-storyboard` | 批量生成定稿故事板参考图 |
@@ -627,6 +631,7 @@ runner 上成套构建三个平台的安装包并发布到 GitHub Releases（当
 | `PUT` | `/api/asset/shot/{shot_id}` | 重新绑定镜头的场景/角色资产 |
 | `PUT` | `/api/asset/character/{character_id}` | 更新角色资产（Prompt、外观、服装锁定等） |
 | `PUT` | `/api/asset/scene/{scene_id}` | 更新场景资产 |
+| `POST` | `/api/project/{project_id}/assets/rebuild` | 画风切换后按当前生效画风重建 stale 的角色三视图与场景基准图（旧文件保留，仅解除引用） |
 
 ### 渲染与导出
 

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { mergeShotServerUpdate, type ShotServerUpdate } from '../services/shotUpdateGuard.ts'
 
 export interface Shot {
   id: string
@@ -22,6 +23,8 @@ export interface Shot {
   storyboard_status: string
   version: number
   confirmed: boolean
+  // 参数/配置已变更但旧素材仍保留：true 时界面在旧素材上显示「待重新生成」。
+  media_stale?: boolean
   characters_in_scene: string[]
   scene_asset_id: string
   character_asset_ids: string[]
@@ -47,6 +50,7 @@ interface ShotState {
 
   setShots: (shots: Shot[]) => void
   updateShot: (id: string, data: Partial<Shot>) => void
+  applyServerShotUpdate: (id: string, payload: ShotServerUpdate) => void
   selectShot: (id: string | null) => void
   setGenerating: (v: boolean) => void
   setProgress: (progress: number, step: string) => void
@@ -75,6 +79,17 @@ export const useShotStore = create<ShotState>((set, get) => ({
     set((state) => ({
       shots: state.shots.map((s) => (s.id === id ? { ...s, ...data } : s)),
     })),
+
+  // WebSocket / 异步任务回写专用：字段级守卫（空媒体路径不覆盖有效路径、
+  // 旧任务版本回退整体丢弃）后再合并。
+  applyServerShotUpdate: (id, payload) =>
+    set((state) => {
+      const current = state.shots.find((s) => s.id === id)
+      if (!current) return {}
+      const patch = mergeShotServerUpdate(current, payload)
+      if (!patch) return {}
+      return { shots: state.shots.map((s) => (s.id === id ? { ...s, ...patch } : s)) }
+    }),
 
   selectShot: (id) => set({ selectedShotId: id }),
 

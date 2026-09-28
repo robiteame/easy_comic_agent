@@ -20,7 +20,7 @@ from api.schemas import (
 from db import get_db
 from models import Character, Project, SceneAsset, Shot
 from services.image_service import ImageService
-from services.invalidation_service import invalidate_asset_consumers
+from services.invalidation_service import invalidate_asset_consumers, mark_shot_media_stale
 from services.security import validate_identifier
 from services.shot_version_service import create_version
 from services.task_registry import cancel_scopes
@@ -125,20 +125,16 @@ async def update_shot_assets(shot_id: str, data: ShotAssetUpdate, db: Session = 
     shot_project_id = shot.project_id
     result_id = shot.id
     if changed:
-        # 资产换绑会清空全部下游产物：被替换的当前状态先进入版本历史。
+        # 资产换绑会使现有素材与绑定不一致：被替换的当前状态先进版本历史。
         create_version(db, shot, "manual_edit")
     shot.scene_asset_id = scene_asset_id
     shot.character_asset_ids = json.dumps(character_ids, ensure_ascii=False)
     if changed:
-        # Asset changes invalidate every downstream artifact, including audio
-        # and the last-frame continuity reference.
+        # Asset rebinding invalidates every downstream artifact, including audio
+        # and the last-frame continuity reference — but only as a stale marker:
+        # the old media stays referenced and previewable until regenerated.
+        mark_shot_media_stale(shot)
         shot.storyboard_status = "pending"
-        shot.storyboard_path = ""
-        shot.image_path = ""
-        shot.audio_path = ""
-        shot.video_path = ""
-        shot.last_frame_path = ""
-        shot.status = "pending"
         shot.version = (shot.version or 1) + 1
         project = db.query(Project).filter(Project.id == shot_project_id).first()
         if project:
@@ -323,6 +319,7 @@ def _serialize_character(item: Character) -> dict:
         "ip_adapter_profile": item.ip_adapter_profile or "",
         "wardrobe_lock": item.wardrobe_lock or "",
         "seed": item.seed,
+        "asset_status": str(item.asset_status or "active"),
     }
 
 
@@ -343,4 +340,5 @@ def _serialize_scene(item: SceneAsset) -> dict:
         "consistency_profile": json.loads(item.consistency_profile) if item.consistency_profile else {},
         "prop_lock": item.prop_lock or "",
         "seed": item.seed,
+        "asset_status": str(item.asset_status or "active"),
     }

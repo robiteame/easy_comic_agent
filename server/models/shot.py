@@ -43,6 +43,10 @@ class Shot(Base):
     pose_reference_path = Column(String, default="")
     depth_reference_path = Column(String, default="")
     last_frame_path = Column(String, default="")
+    style_fingerprint = Column(String, default="")
+    # 参数/配置已变更但旧素材仍保留：True 表示当前媒体与最新参数不一致，
+    # 需要重新生成；旧路径在新素材成功生成前不得清空。
+    media_stale = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

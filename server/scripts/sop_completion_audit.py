@@ -156,9 +156,11 @@ def main() -> None:
     character_b = consistency.enrich_character({"id": "char2", "name": "Bo", "appearance": {"default_outfit": "hoodie"}, "reference_images": ["char_b.png"]}, 1)
     checks.append(
         _assert(
-            all(character_a.get(key) for key in ("lora_profile", "ip_adapter_profile", "wardrobe_lock")),
-            "character_lora_ip_wardrobe_lock",
-            f"{character_a['lora_profile']}|{character_a['ip_adapter_profile']}",
+            not character_a.get("lora_profile")
+            and not character_a.get("ip_adapter_profile")
+            and bool(character_a.get("wardrobe_lock")),
+            "character_unsupported_lora_ip_and_wardrobe_lock",
+            "LoRA/IP-Adapter remain empty; wardrobe text lock remains available",
         )
     )
 
@@ -192,9 +194,11 @@ def main() -> None:
     )
     checks.append(
         _assert(
-            generation_context["continuity_profile"]["openpose_lock"] == "enabled"
-            and generation_context["continuity_profile"]["depth_lock"] == "enabled",
-            "complex_motion_openpose_depth_enabled",
+            generation_context["continuity_profile"]["openpose_lock"] == "unsupported"
+            and generation_context["continuity_profile"]["depth_lock"] == "unsupported"
+            and not generation_context.get("pose_reference_path")
+            and not generation_context.get("depth_reference_path"),
+            "complex_motion_openpose_depth_unsupported",
             json.dumps(generation_context["continuity_profile"], ensure_ascii=False)[:240],
         )
     )
@@ -237,8 +241,9 @@ def main() -> None:
         _assert(
             "locked character blocking" in video_prompt
             and "previous shot final frame" in video_prompt
-            and "Seedance 1.5 pro API-safe reference mode" in video_prompt,
-            "seedance_prompt_contains_sop_context",
+            and "first_frame_only" in video_prompt
+            and "receives first frame only" in video_prompt,
+            "seedance_prompt_contains_honest_first_frame_context",
             video_prompt[:220],
         )
     )
@@ -282,9 +287,13 @@ def main() -> None:
     shot_route._invalidate_storyboard_outputs(stale)
     checks.append(
         _assert(
-            not stale.confirmed and not stale.video_path and not stale.last_frame_path and stale.continuity_profile == "{}",
-            "shot_edit_invalidates_stale_media",
-            "confirmed/video/last-frame/control refs cleared",
+            not stale.confirmed
+            and stale.media_stale
+            and stale.video_path == "video.mp4"
+            and stale.last_frame_path == "last.png"
+            and stale.storyboard_path == "story.png",
+            "shot_edit_marks_stale_media",
+            "confirmed revoked, media paths preserved with stale marker",
         )
     )
     previous = _shot(sequence=1, scene_group_id="classroom-morning", scene_asset_id="sceneA", storyboard_path="prev_story.png", last_frame_path="prev_last.png")

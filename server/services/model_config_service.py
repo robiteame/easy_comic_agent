@@ -227,6 +227,36 @@ def _mask_secret(value: Any) -> str:
     return MASKED_SECRET
 
 
+def _capability_summary(capability: str, protocol: str) -> dict[str, Any]:
+    """协议适配器的能力摘要（供设置页如实展示，不含密钥）。"""
+    from services.providers.registry import UnknownProtocolError, get_adapter
+
+    summary: dict[str, Any] = {"protocol": protocol}
+    try:
+        adapter_cls = get_adapter(protocol_family(capability), protocol)
+    except UnknownProtocolError:
+        summary["adapter_registered"] = False
+        return summary
+    summary["adapter_registered"] = True
+    capabilities = getattr(adapter_cls, "capabilities", None)
+    if capabilities is None:
+        return summary
+    for field in (
+        "reference_images",
+        "requires_credentials",
+        "reference_image",
+        "reference_mode",
+        "native_audio",
+        "dialogue_in_prompt",
+        "fixed_duration",
+        "max_reference_inline_bytes",
+    ):
+        value = getattr(capabilities, field, None)
+        if value is not None:
+            summary[field] = value
+    return summary
+
+
 def _effective(*, mask_secrets: bool = True) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for capability in CAPABILITIES:
@@ -238,6 +268,7 @@ def _effective(*, mask_secrets: bool = True) -> dict[str, dict[str, Any]]:
             "model": endpoint.model,
             "api_key": _mask_secret(endpoint.api_key) if mask_secrets else endpoint.api_key,
             "params": dict(endpoint.params),
+            "capabilities": _capability_summary(capability, endpoint.protocol),
             # 旧版前端兼容镜像：provider 等价于 protocol，参数字段平铺到顶层。
             "provider": endpoint.protocol,
         }

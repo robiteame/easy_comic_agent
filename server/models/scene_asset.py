@@ -23,6 +23,8 @@ class SceneAsset(Base):
     consistency_profile = Column(Text, default="{}")
     prop_lock = Column(Text, default="")
     seed = Column(Integer, default=1200)
+    style_fingerprint = Column(String, default="")
+    asset_status = Column(String, default="active")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

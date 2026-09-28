@@ -31,6 +31,7 @@ from services.job_types import (
     JOB_STATUSES,
     JOB_TYPES,
     TERMINAL_STATUSES,
+    error_code_label,
     parse_job_key,
 )
 from services.task_registry import SCOPE_BLOCK_KEY_PREFIX
@@ -308,6 +309,7 @@ def attempt_history(db: Session, job: BackgroundJob) -> list[dict[str, Any]]:
             "attempt": max(1, int(row.attempt or 1)),
             "status": str(row.status),
             "error_code": str(row.error_code or ""),
+            "error_code_label": error_code_label(str(row.error_code or "")),
             "error_message": str(row.error_message or row.error or "")[:240],
             "started_at": _iso_utc(row.started_at),
             "finished_at": _iso_utc(row.finished_at),

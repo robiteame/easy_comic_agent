@@ -242,9 +242,10 @@ class AssetIsolationRegressionTests(DatabaseTestCase):
         current = self.db.get(Shot, shot_id)
         self.assertEqual(current.version, 5)
         self.assertFalse(current.confirmed)
-        self.assertEqual(current.status, "pending")
-        self.assertEqual(current.storyboard_path, "")
-        self.assertEqual(current.video_path, "")
+        # 素材只标记过期：旧故事板 / 视频保留引用，供预览与回滚。
+        self.assertTrue(current.media_stale)
+        self.assertEqual(current.storyboard_path, "story.png")
+        self.assertEqual(current.video_path, "video.mp4")
         self.assertEqual(self.db.get(Project, episode_id).status, "assets_ready")
 
     def test_compat_character_update_invalidates_referencing_episode(self) -> None:
@@ -286,8 +287,9 @@ class AssetIsolationRegressionTests(DatabaseTestCase):
         current = self.db.get(Shot, shot.id)
         self.assertEqual(current.version, 4)
         self.assertFalse(current.confirmed)
-        self.assertEqual(current.storyboard_path, "")
-        self.assertEqual(current.video_path, "")
+        self.assertTrue(current.media_stale)
+        self.assertEqual(current.storyboard_path, "story.png")
+        self.assertEqual(current.video_path, "video.mp4")
         self.assertEqual(self.db.get(Project, episode.id).status, "assets_ready")
 
     def test_character_regeneration_does_not_overwrite_concurrent_edit(self) -> None:
@@ -669,8 +671,10 @@ class MediaAndProjectRegressionTests(DatabaseTestCase):
         current = self.db.get(Shot, shot.id)
         self.assertEqual(current.version, 6)
         self.assertFalse(current.confirmed)
-        self.assertEqual(current.storyboard_path, "")
-        self.assertEqual(current.video_path, "")
+        # 生成配置变化：全部镜头标记待重新生成，媒体路径保留不清空。
+        self.assertTrue(current.media_stale)
+        self.assertEqual(current.storyboard_path, "story.png")
+        self.assertEqual(current.video_path, "video.mp4")
 
     def test_project_delete_waits_for_background_scope(self) -> None:
         project_id = "delete-active"

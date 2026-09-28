@@ -59,13 +59,18 @@ class _FakeAsyncClient:
         self.requests.append({"method": "GET", "url": url, **kwargs})
         return self._responses.pop(0)
 
+    async def request(self, method, url, **kwargs):
+        # 适配 request_with_retry 所用的通用请求入口。
+        self.requests.append({"method": str(method).upper(), "url": url, **kwargs})
+        return self._responses.pop(0)
 
-def _wanx_endpoint(api_key: str = "sk-test") -> EndpointConfig:
+
+def _wanx_endpoint(api_key: str = "sk-test", model: str = "wan2.6-i2v") -> EndpointConfig:
     return EndpointConfig(
         protocol="dashscope-wanx",
         base_url="https://dashscope.aliyuncs.com/api/v1",
         api_key=api_key,
-        model="wan2.5-i2v-plus",
+        model=model,
     )
 
 
@@ -120,12 +125,13 @@ class DashscopeWanxAdapterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.adapter = DashscopeWanxVideoAdapter(_wanx_endpoint())
 
-    def test_resolve_size(self) -> None:
-        self.assertEqual(self.adapter._resolve_size("9:16", "720p"), "720*1280")
-        self.assertEqual(self.adapter._resolve_size("9:16", "1080p"), "1080*1920")
-        self.assertEqual(self.adapter._resolve_size("16:9", "720p"), "1280*720")
-        self.assertEqual(self.adapter._resolve_size("16:9", "1080p"), "1920*1080")
-        self.assertEqual(self.adapter._resolve_size("1:1", "720p"), "960*960")
+    def test_resolve_resolution(self) -> None:
+        self.assertEqual(self.adapter._resolve_resolution("720p"), "720P")
+        self.assertEqual(self.adapter._resolve_resolution("1080p"), "1080P")
+        self.assertEqual(self.adapter._resolve_resolution("480p"), "480P")
+        # 2K/4K/未知值统一回落到万相最高档 1080P。
+        self.assertEqual(self.adapter._resolve_resolution("4k"), "1080P")
+        self.assertEqual(self.adapter._resolve_resolution(""), "1080P")
 
     def test_create_task_payload_and_headers(self) -> None:
         client = _FakeAsyncClient(
@@ -149,12 +155,56 @@ class DashscopeWanxAdapterTests(unittest.TestCase):
         )
         self.assertEqual(sent["headers"]["Authorization"], "Bearer sk-test")
         self.assertEqual(sent["headers"]["X-DashScope-Async"], "enable")
-        self.assertEqual(sent["json"]["model"], "wan2.5-i2v-plus")
+        # Wan 2.6 及更早：旧代接口，首帧放 input.img_url，分辨率用档位。
+        self.assertEqual(sent["json"]["model"], "wan2.6-i2v")
         self.assertEqual(sent["json"]["input"]["img_url"], "data:image/png;base64,AAAA")
-        self.assertEqual(sent["json"]["parameters"]["size"], "720*1280")
+        self.assertNotIn("media", sent["json"]["input"])
+        self.assertEqual(sent["json"]["parameters"]["resolution"], "720P")
         self.assertEqual(sent["json"]["parameters"]["duration"], 5)
+        self.assertNotIn("audio", sent["json"]["parameters"])
 
-    def test_create_task_text_only_omits_img_url(self) -> None:
+    def test_create_task_wan3_uses_media_and_disables_audio(self) -> None:
+        adapter = DashscopeWanxVideoAdapter(_wanx_endpoint(model="wan3.0-video"))
+        client = _FakeAsyncClient(
+            [_FakeResponse({"output": {"task_id": "tid-3", "task_status": "PENDING"}})]
+        )
+        from services.providers.base import VideoRequest
+
+        request = VideoRequest(
+            prompt="少女在雨中奔跑",
+            reference_image="data:image/png;base64,AAAA",
+            duration=5,
+            ratio="9:16",
+            resolution="1080p",
+        )
+        with patch("services.providers.video_dashscope_wanx.httpx.AsyncClient", return_value=client):
+            task_id = asyncio.run(adapter._create_task(request))
+        self.assertEqual(task_id, "tid-3")
+        payload = client.requests[0]["json"]
+        # Wan 3.0：新一代接口，首帧放 input.media（type=first_frame），
+        # 默认有声视频，需显式 audio=false 维持「无声视频 + 独立 TTS」契约。
+        self.assertNotIn("img_url", payload["input"])
+        self.assertEqual(payload["input"]["media"], [{"type": "first_frame", "url": "data:image/png;base64,AAAA"}])
+        self.assertEqual(payload["parameters"]["resolution"], "1080P")
+        self.assertFalse(payload["parameters"]["audio"])
+
+    def test_create_task_wan27_media_without_audio_toggle(self) -> None:
+        adapter = DashscopeWanxVideoAdapter(_wanx_endpoint(model="wan2.7-i2v"))
+        client = _FakeAsyncClient(
+            [_FakeResponse({"output": {"task_id": "tid-7", "task_status": "PENDING"}})]
+        )
+        from services.providers.base import VideoRequest
+
+        request = VideoRequest(prompt="空镜", reference_image="data:image/png;base64,AAAA", duration=5)
+        with patch("services.providers.video_dashscope_wanx.httpx.AsyncClient", return_value=client):
+            asyncio.run(adapter._create_task(request))
+        payload = client.requests[0]["json"]
+        # Wan 2.7 同为 media 输入，但无默认音频，不携带 audio 开关。
+        self.assertNotIn("img_url", payload["input"])
+        self.assertEqual(payload["input"]["media"][0]["type"], "first_frame")
+        self.assertNotIn("audio", payload["parameters"])
+
+    def test_create_task_text_only_omits_reference_fields(self) -> None:
         client = _FakeAsyncClient(
             [_FakeResponse({"output": {"task_id": "tid-2", "task_status": "PENDING"}})]
         )
@@ -163,6 +213,7 @@ class DashscopeWanxAdapterTests(unittest.TestCase):
         with patch("services.providers.video_dashscope_wanx.httpx.AsyncClient", return_value=client):
             asyncio.run(self.adapter._create_task(VideoRequest(prompt="空镜", duration=5)))
         self.assertNotIn("img_url", client.requests[0]["json"]["input"])
+        self.assertNotIn("media", client.requests[0]["json"]["input"])
 
     def test_create_task_missing_task_id_raises(self) -> None:
         client = _FakeAsyncClient([_FakeResponse({"output": {}})])

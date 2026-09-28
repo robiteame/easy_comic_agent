@@ -39,6 +39,7 @@ type StyleOption = { value: string; label: string; keywords?: string; custom?: b
 
 type AgentSkillConfig = {
   style_template_id: string
+  style_override_enabled: boolean
   custom_style_keywords: string
   filter_tts_instruction_text: boolean
   camera_composition: string
@@ -73,13 +74,13 @@ type DiscoveredModelState = Record<ModelCategory, DiscoveredModel[]>
 const PROTOCOL_OPTIONS: Partial<Record<ModelCategory, { value: string; label: string }[]>> = {
   image: [
     { value: 'ark-seedream', label: '火山方舟 Seedream（支持参考图）' },
-    { value: 'qwen-image', label: '阿里云百炼 Qwen-Image（异步任务）' },
-    { value: 'stability', label: 'Stability AI' },
+    { value: 'qwen-image', label: '阿里云百炼 Qwen-Image（不支持参考图）' },
+    { value: 'stability', label: 'Stability AI（不支持参考图）' },
     { value: 'placeholder', label: '本地占位图（离线/免密钥）' },
   ],
   video: [
-    { value: 'ark-seedance', label: '火山方舟 Seedance（无声视频 + TTS）' },
-    { value: 'dashscope-wanx', label: '阿里云百炼 通义万相（无声视频 + TTS）' },
+    { value: 'ark-seedance', label: '火山方舟 Seedance（首帧参考 + 无声视频 + TTS，固定约 5 秒）' },
+    { value: 'dashscope-wanx', label: '阿里云百炼 通义万相（首帧参考 + 无声视频 + TTS）' },
     { value: 'native-audio', label: '原生音视频（对白直出，厂商接入中）' },
   ],
   voice: [
@@ -112,20 +113,56 @@ const VENDOR_PRESETS: Record<ModelCategory, { label: string; patch: ModelConfig 
   ],
   image: [
     {
-      label: '火山 Seedream',
+      label: '火山 Seedream 5.0 Pro',
       patch: {
         protocol: 'ark-seedream',
         base_url: 'https://ark.cn-beijing.volces.com/api/v3',
-        model: 'doubao-seedream-5.0-lite',
+        model: 'doubao-seedream-5-0-pro-260628',
         image_size: '1440x2560',
       },
     },
     {
-      label: '阿里百炼 Qwen-Image',
+      label: '火山 Seedream 5.0 Flash',
+      patch: {
+        protocol: 'ark-seedream',
+        base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+        model: 'doubao-seedream-5-0-flash-260915',
+        image_size: '1440x2560',
+      },
+    },
+    {
+      label: '火山 Seedream 5.0 Lite',
+      patch: {
+        protocol: 'ark-seedream',
+        base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+        model: 'doubao-seedream-5-0-lite-260128',
+        image_size: '1440x2560',
+      },
+    },
+    {
+      label: '火山 Seedream 4.5',
+      patch: {
+        protocol: 'ark-seedream',
+        base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+        model: 'doubao-seedream-4-5-251128',
+        image_size: '1440x2560',
+      },
+    },
+    {
+      label: '阿里百炼 Qwen-Image 3.0 Pro',
       patch: {
         protocol: 'qwen-image',
         base_url: 'https://dashscope.aliyuncs.com/api/v1',
-        model: 'qwen-image-plus',
+        model: 'qwen-image-3.0-pro',
+        image_size: '1440x2560',
+      },
+    },
+    {
+      label: '阿里百炼 Qwen-Image 3.0',
+      patch: {
+        protocol: 'qwen-image',
+        base_url: 'https://dashscope.aliyuncs.com/api/v1',
+        model: 'qwen-image-3.0',
         image_size: '1440x2560',
       },
     },
@@ -134,19 +171,75 @@ const VENDOR_PRESETS: Record<ModelCategory, { label: string; patch: ModelConfig 
   ],
   video: [
     {
-      label: '火山 Seedance 1.5 Pro',
+      label: '火山 Seedance 2.5',
       patch: {
         protocol: 'ark-seedance',
         base_url: 'https://ark.cn-beijing.volces.com/api/v3',
-        model: 'doubao-seedance-1-5-pro-251215',
+        model: 'doubao-seedance-2-5-260628',
       },
     },
     {
-      label: '阿里百炼 Wan2.5',
+      label: '火山 Seedance 2.0',
+      patch: {
+        protocol: 'ark-seedance',
+        base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+        model: 'doubao-seedance-2-0-260128',
+      },
+    },
+    {
+      label: '火山 Seedance 2.0 Fast',
+      patch: {
+        protocol: 'ark-seedance',
+        base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+        model: 'doubao-seedance-2-0-fast-260128',
+      },
+    },
+    {
+      label: '火山 Seedance 2.0 Mini',
+      patch: {
+        protocol: 'ark-seedance',
+        base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+        model: 'doubao-seedance-2-0-mini-260615',
+      },
+    },
+    {
+      label: '火山 Seedance 1.0 Pro',
+      patch: {
+        protocol: 'ark-seedance',
+        base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+        model: 'doubao-seedance-1-0-pro-250528',
+      },
+    },
+    {
+      label: '阿里百炼 Wan3.0',
       patch: {
         protocol: 'dashscope-wanx',
         base_url: 'https://dashscope.aliyuncs.com/api/v1',
-        model: 'wan2.5-i2v-plus',
+        model: 'wan3.0-video',
+      },
+    },
+    {
+      label: '阿里百炼 Wan3.0 Prime',
+      patch: {
+        protocol: 'dashscope-wanx',
+        base_url: 'https://dashscope.aliyuncs.com/api/v1',
+        model: 'wan3.0-video-prime',
+      },
+    },
+    {
+      label: '阿里百炼 Wan2.7 图生视频',
+      patch: {
+        protocol: 'dashscope-wanx',
+        base_url: 'https://dashscope.aliyuncs.com/api/v1',
+        model: 'wan2.7-i2v',
+      },
+    },
+    {
+      label: '阿里百炼 Wan2.6 图生视频',
+      patch: {
+        protocol: 'dashscope-wanx',
+        base_url: 'https://dashscope.aliyuncs.com/api/v1',
+        model: 'wan2.6-i2v',
       },
     },
   ],
@@ -179,13 +272,14 @@ interface SystemSettingsPageProps {
 type SettingsTab = 'appearance' | 'models' | 'pricing' | 'skill'
 
 const DEFAULT_AGENT_CONFIG: AgentSkillConfig = {
-  style_template_id: 'anime',
+  style_template_id: '',
+  style_override_enabled: false,
   custom_style_keywords: '',
   filter_tts_instruction_text: true,
   camera_composition: 'medium shot, vertical 9:16, clear subject staging',
   force_character_scene_references: true,
   prompt_auto_assembly: true,
-  openpose_lock_enabled: true,
+  openpose_lock_enabled: false,
   style_reference_weight: 0.45,
   action_reference_weight: 0.3,
   continuity_enabled: true,
@@ -281,6 +375,7 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
   }
 
   const updateProjectField = async (field: 'style' | 'resolution' | 'outputFormat', value: string) => {
+    const previousValue = { style, resolution, outputFormat }[field]
     setProject({ [field]: value } as any)
     if (!projectId) return
 
@@ -293,6 +388,7 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
     try {
       await projectApi.update(projectId, { [apiFieldMap[field]]: value })
     } catch (err: any) {
+      setProject({ [field]: previousValue } as any)
       message.error('项目配置更新失败：' + (err.message || '未知错误'))
     }
   }
@@ -778,6 +874,56 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
   )
 }
 
+// Provider 能力徽标：数据来自后端适配器 capabilities 声明（实时、如实），
+// 不在前端硬编码任何能力，避免界面宣称不存在的能力。
+function CapabilityBadges({
+  category,
+  protocol,
+  capabilities,
+}: {
+  category: ModelCategory
+  protocol: string
+  capabilities?: Record<string, any>
+}) {
+  if (!capabilities || !protocol) return null
+  const badges: string[] = []
+  if (category === 'image') {
+    badges.push(
+      capabilities.reference_images
+        ? '支持参考图（多图）'
+        : '不支持参考图（需参考图的阶段会降级为纯文本生成并明确告警，绝不假装参考图已生效）',
+    )
+    if (capabilities.requires_credentials === false) badges.push('免密钥（本地占位图）')
+  }
+  if (category === 'video') {
+    badges.push(capabilities.reference_image ? `首帧参考：${capabilities.reference_mode || 'first_frame_only'}` : '不支持首帧参考图')
+    if (capabilities.fixed_duration) badges.push(`固定时长 ${capabilities.fixed_duration}s（超长镜头需拆分）`)
+    badges.push(capabilities.native_audio ? '原生音频' : '无声视频（对白走 TTS 配音链路）')
+  }
+  if (!badges.length) return null
+  return (
+    <div
+      className="model-config-capabilities"
+      style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '4px 0 10px' }}
+    >
+      {badges.map((badge) => (
+        <span
+          key={badge}
+          style={{
+            fontSize: 12,
+            padding: '2px 8px',
+            borderRadius: 10,
+            background: 'rgba(127,127,127,0.14)',
+            color: 'var(--ant-color-text-secondary, #888)',
+          }}
+        >
+          {badge}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function ModelConfigCard({
   title,
   subtitle,
@@ -823,6 +969,7 @@ function ModelConfigCard({
         <strong>{title}</strong>
         <span>{subtitle}</span>
       </div>
+      <CapabilityBadges category={category} protocol={currentProtocol} capabilities={config.capabilities} />
       <div className="settings-field">
         <span>厂商预设（点击填充表单）</span>
         <div className="settings-template-list">
@@ -992,13 +1139,22 @@ function AgentSkillPanel({
     <div className="skill-agent-panel">
       <div className="skill-agent-title">{title}</div>
       <div className="settings-field">
-        <span>全局画风模板</span>
+        <span>Skill 画风模板</span>
         <Select
           value={agent.style_template_id}
+          disabled={!agent.style_override_enabled}
           onChange={(value) => update('style_template_id', value)}
-          options={styleTemplates.map((item) => ({ value: item.value, label: item.custom ? `${item.label}（自定义）` : item.label }))}
+          options={[
+            { value: '', label: '继承项目画风' },
+            ...styleTemplates.map((item) => ({ value: item.value, label: item.custom ? `${item.label}（自定义）` : item.label })),
+          ]}
         />
       </div>
+      <ToggleRow
+        label="允许 Skill 覆盖项目画风"
+        checked={agent.style_override_enabled}
+        onChange={(value) => update('style_override_enabled', value)}
+      />
       <div className="settings-field">
         <span>自定义画风补充</span>
         <TextArea
@@ -1018,7 +1174,7 @@ function AgentSkillPanel({
       <ToggleRow label="TTS 过滤指令话术" checked={agent.filter_tts_instruction_text} onChange={(value) => update('filter_tts_instruction_text', value)} />
       <ToggleRow label="强制引用人物/场景基准图" checked={agent.force_character_scene_references} onChange={(value) => update('force_character_scene_references', value)} />
       <ToggleRow label="Prompt 自动拼装" checked={agent.prompt_auto_assembly} onChange={(value) => update('prompt_auto_assembly', value)} />
-      <ToggleRow label="OpenPose 骨骼锁定" checked={agent.openpose_lock_enabled} onChange={(value) => update('openpose_lock_enabled', value)} />
+      <div className="skill-toggle-row"><span>OpenPose / Depth 控制</span><span>未接入（unsupported）</span></div>
       <ToggleRow label="镜头续帧连贯逻辑" checked={agent.continuity_enabled} onChange={(value) => update('continuity_enabled', value)} />
       <WeightField label="参考图画风权重" value={agent.style_reference_weight} onChange={(value) => update('style_reference_weight', value)} />
       <WeightField label="动作权重" value={agent.action_reference_weight} onChange={(value) => update('action_reference_weight', value)} />

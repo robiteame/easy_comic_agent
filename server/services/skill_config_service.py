@@ -11,13 +11,16 @@ from services.atomic_json import atomic_write_json, path_lock, read_json_file
 
 
 DEFAULT_AGENT_CONFIG: dict[str, Any] = {
-    "style_template_id": "anime",
+    # Style belongs to the project/request. A Skill only overrides it when the
+    # user explicitly enables the override switch.
+    "style_template_id": "",
+    "style_override_enabled": False,
     "custom_style_keywords": "",
     "filter_tts_instruction_text": True,
     "camera_composition": "medium shot, vertical 9:16, clear subject staging, readable foreground and background layers",
     "force_character_scene_references": True,
     "prompt_auto_assembly": True,
-    "openpose_lock_enabled": True,
+    "openpose_lock_enabled": False,
     "style_reference_weight": 0.45,
     "action_reference_weight": 0.30,
     "continuity_enabled": True,
@@ -123,9 +126,34 @@ def resolve_skill_config(project_id: str = "", db=None) -> dict[str, Any]:
     return template
 
 
-def agent_style_id(skill_config: dict[str, Any] | None, agent: str, fallback: str = "anime") -> str:
+def resolve_effective_style(
+    requested_style: str | None,
+    skill_config: dict[str, Any] | None = None,
+    agent: str = "storyboard_agent",
+    *,
+    fallback: str = "anime",
+) -> dict[str, str]:
+    """Resolve one style for every generation stage.
+
+    Legacy skill files often contain ``style_template_id=anime``. That value
+    is treated as inherit unless ``style_override_enabled`` is explicitly true,
+    preventing historical defaults from silently changing a realistic request.
+    """
+    requested = str(requested_style or fallback or "anime").strip() or fallback
     config = _agent_config(skill_config, agent)
-    return str(config.get("style_template_id") or fallback or "anime")
+    override = bool(config.get("style_override_enabled"))
+    skill_style = str(config.get("style_template_id") or "").strip()
+    effective = skill_style if override and skill_style else requested
+    source = "skill_override" if override and skill_style else "project_request"
+    return {
+        "requested_style": requested,
+        "effective_style": effective,
+        "style_source": source,
+    }
+
+
+def agent_style_id(skill_config: dict[str, Any] | None, agent: str, fallback: str = "anime") -> str:
+    return resolve_effective_style(fallback, skill_config, agent, fallback=fallback)["effective_style"]
 
 
 def agent_prompt_append(skill_config: dict[str, Any] | None, agent: str) -> str:
@@ -138,8 +166,6 @@ def agent_prompt_append(skill_config: dict[str, Any] | None, agent: str) -> str:
     ]
     if config.get("force_character_scene_references", True):
         parts.append("strictly use bound character assets and scene baseline references when available")
-    if config.get("openpose_lock_enabled", True):
-        parts.append("use OpenPose/body-joint lock for complex character motion when a pose source is available")
     if config.get("continuity_enabled", True):
         parts.append("continue from the previous shot frame for pose, eye-line, axis and lighting continuity")
     return ", ".join(str(part).strip() for part in parts if str(part or "").strip())
@@ -147,7 +173,9 @@ def agent_prompt_append(skill_config: dict[str, Any] | None, agent: str) -> str:
 
 def apply_agent_config_to_shot(shot_data: dict[str, Any], skill_config: dict[str, Any] | None, agent: str = "storyboard_agent") -> None:
     config = _agent_config(skill_config, agent)
-    shot_data["style"] = str(config.get("style_template_id") or shot_data.get("style") or "anime")
+    metadata = resolve_effective_style(shot_data.get("style") or shot_data.get("effective_style"), skill_config, agent)
+    shot_data.update(metadata)
+    shot_data["style"] = metadata["effective_style"]
     weights = shot_data.get("reference_weights") if isinstance(shot_data.get("reference_weights"), dict) else {}
     weights["environment"] = float(config.get("style_reference_weight") or 0.45)
     weights["style"] = float(config.get("style_reference_weight") or 0.45)
@@ -164,7 +192,9 @@ def apply_agent_config_to_shot(shot_data: dict[str, Any], skill_config: dict[str
 
 
 def should_materialize_openpose(skill_config: dict[str, Any] | None, agent: str = "storyboard_agent") -> bool:
-    return bool(_agent_config(skill_config, agent).get("openpose_lock_enabled", True))
+    # No real pose estimator/control model is integrated. Historical switches
+    # must not reactivate PIL edge images as fake OpenPose controls.
+    return False
 
 
 def clean_tts_text(text: str, skill_config: dict[str, Any] | None) -> str:
@@ -232,6 +262,13 @@ def _normalize_template(template: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_agent_config(config: dict[str, Any]) -> dict[str, Any]:
     normalized = {**DEFAULT_AGENT_CONFIG, **(config or {})}
+    # Files written by older releases used anime as an implicit default. Keep
+    # that file readable, but do not interpret it as an opt-in override.
+    if "style_override_enabled" not in config:
+        normalized["style_override_enabled"] = False
+    if not normalized.get("style_override_enabled") and normalized.get("style_template_id") == "anime":
+        normalized["style_template_id"] = ""
+    normalized["openpose_lock_enabled"] = False
     normalized["style_reference_weight"] = _clamp_float(normalized.get("style_reference_weight"), 0, 1, 0.45)
     normalized["action_reference_weight"] = _clamp_float(normalized.get("action_reference_weight"), 0, 1, 0.30)
     for key in (

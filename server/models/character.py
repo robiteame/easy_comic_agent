@@ -25,6 +25,8 @@ class Character(Base):
     ip_adapter_profile = Column(Text, default="")
     wardrobe_lock = Column(Text, default="")
     seed = Column(String, default="42")
+    style_fingerprint = Column(String, default="")
+    asset_status = Column(String, default="active")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

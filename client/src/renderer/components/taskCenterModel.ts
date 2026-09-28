@@ -5,7 +5,7 @@
  * 「调用纯函数 + 渲染 / 发送请求」，避免把业务判断散落在 JSX 里。
  */
 
-import type { JobDto, JobEvent, JobQueryParams, JobStatus, JobType } from '../services/jobTypes'
+import type { JobDto, JobErrorDetail, JobEvent, JobQueryParams, JobStatus, JobType } from '../services/jobTypes'
 import { normalizeJobCost } from '../services/costModel.ts'
 
 export const JOB_STATUSES: JobStatus[] = [
@@ -53,6 +53,57 @@ export const STATUS_LABELS: Record<string, string> = {
   interrupted: '已中断',
 }
 
+// 失败类别中文标签：服务端 error_code_label 缺失（历史行/旧后端）时的前端兜底，
+// 取值与后端 job_types.ERROR_CODE_LABELS 保持一致。
+export const ERROR_CODE_LABELS: Record<string, string> = {
+  job_failed: '任务失败',
+  job_cancelled: '任务已取消',
+  job_interrupted: '任务被中断',
+  server_restart: '服务重启中断',
+  timeout: '调用超时',
+  provider_error: 'API 调用失败',
+  provider_config_error: '鉴权失败或未配置',
+  provider_quota_exceeded: '额度不足',
+  provider_rate_limited: '触发限流',
+  provider_invalid_request: 'API 参数错误',
+  dependency_failed: '前置阶段失败',
+  storage_error: '存储异常',
+  budget_exceeded: '超出项目预算',
+  budget_soft_exceeded: '接近预算上限',
+}
+
+// 失败原因筛选项（稳定错误码 + 标签）。
+export const FAILURE_CATEGORY_OPTIONS: { value: string; label: string }[] = [
+  { value: 'provider_error', label: 'API 调用失败' },
+  { value: 'provider_quota_exceeded', label: '额度不足' },
+  { value: 'provider_rate_limited', label: '触发限流' },
+  { value: 'provider_invalid_request', label: 'API 参数错误' },
+  { value: 'provider_config_error', label: '鉴权失败或未配置' },
+  { value: 'timeout', label: '调用超时' },
+  { value: 'dependency_failed', label: '前置阶段失败' },
+  { value: 'budget_exceeded', label: '超出项目预算' },
+  { value: 'storage_error', label: '存储异常' },
+  { value: 'job_failed', label: '其他失败' },
+]
+
+/** 类别徽标的色调：账户类可自查（橙）、配置/调用类需处理（红）、环境/业务类（灰）。 */
+export type ErrorCodeTone = 'warn' | 'danger' | 'muted'
+
+export function errorCodeTone(code: string): ErrorCodeTone {
+  if (code === 'provider_quota_exceeded' || code === 'provider_rate_limited') return 'warn'
+  if (
+    code === 'provider_error' ||
+    code === 'provider_invalid_request' ||
+    code === 'provider_config_error' ||
+    code === 'timeout' ||
+    code === 'job_failed' ||
+    code === ''
+  ) {
+    return 'danger'
+  }
+  return 'muted'
+}
+
 export type JobTone = 'active' | 'success' | 'danger' | 'muted'
 
 export function statusTone(status: JobStatus): JobTone {
@@ -84,6 +135,8 @@ export interface JobFilters {
   projectId: string
   statuses: JobStatus[]
   jobTypes: JobType[]
+  /** 失败原因筛选（稳定错误码）；纯客户端过滤，不发给服务端。 */
+  errorCodes: string[]
   search: string
   onlyActive: boolean
 }
@@ -92,6 +145,7 @@ export const DEFAULT_FILTERS: JobFilters = {
   projectId: '',
   statuses: [],
   jobTypes: [],
+  errorCodes: [],
   search: '',
   onlyActive: false,
 }
@@ -140,6 +194,21 @@ function asIsoOrNull(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null
 }
 
+/** 分析结果白名单归一化：只有带有效 summary/suggestion 才保留。 */
+function normalizeErrorDetail(raw: unknown): JobErrorDetail | null {
+  if (!raw || typeof raw !== 'object') return null
+  const source = raw as Record<string, unknown>
+  const summary = asString(source.summary)
+  const suggestion = asString(source.suggestion)
+  if (!summary && !suggestion) return null
+  return {
+    summary,
+    suggestion,
+    source: asString(source.source),
+    model: asString(source.model),
+  }
+}
+
 /**
  * 把服务端时间戳解析成绝对时刻（毫秒）。
  *
@@ -180,7 +249,9 @@ export function normalizeJob(raw: unknown): JobDto | null {
     current_step: asString(source.current_step),
     message: asString(source.message),
     error_code: asString(source.error_code),
+    error_code_label: asString(source.error_code_label),
     error_message: asString(source.error_message),
+    error_detail: normalizeErrorDetail(source.error_detail),
     attempt: Math.max(1, Math.round(asNumber(source.attempt, 1))),
     retry_of: asIsoOrNull(source.retry_of),
     version: asNumber(source.version),
@@ -296,6 +367,7 @@ export function matchesFilters(job: JobDto, filters: JobFilters): boolean {
   if (filters.onlyActive && ACTIVE_STATUSES.indexOf(job.status) < 0) return false
   if (filters.statuses.length > 0 && filters.statuses.indexOf(job.status) < 0) return false
   if (filters.jobTypes.length > 0 && filters.jobTypes.indexOf(job.job_type) < 0) return false
+  if (filters.errorCodes.length > 0 && filters.errorCodes.indexOf(effectiveErrorCode(job)) < 0) return false
   const term = filters.search.trim().toLowerCase()
   if (!term) return true
   const haystack = [
@@ -361,6 +433,23 @@ export interface JobSummary {
   retryableCount: number
   total: number
   latest: JobDto | null
+  /** 失败任务按失败类别的计数（count 降序），用于分组标题的共性原因提示。 */
+  failedByCategory: { code: string; label: string; count: number }[]
+}
+
+/** 稳定错误码：历史行可能为空，失败状态按 job_failed 归类参与筛选与统计。 */
+export function effectiveErrorCode(job: JobDto): string {
+  return job.error_code || (job.status === 'failed' ? 'job_failed' : '')
+}
+
+export function errorCategoryLabel(job: JobDto): string {
+  if (!job.error_message && !job.error_detail) return ''
+  return job.error_code_label || ERROR_CODE_LABELS[effectiveErrorCode(job)] || ''
+}
+
+/** 失败原因的首行文案：优先 LLM 摘要，其次错误码标签，最后回落原始短消息。 */
+export function errorHeadline(job: JobDto): string {
+  return job.error_detail?.summary || job.error_message || '任务未正常完成'
 }
 
 export function summarizeJobs(jobs: JobDto[]): JobSummary {
@@ -369,14 +458,30 @@ export function summarizeJobs(jobs: JobDto[]): JobSummary {
   let interruptedCount = 0
   let retryableCount = 0
   let latest: JobDto | null = null
+  const categoryCounts = new Map<string, number>()
   for (const job of jobs) {
     if (ACTIVE_STATUSES.indexOf(job.status) >= 0) activeCount += 1
-    if (job.status === 'failed') failedCount += 1
+    if (job.status === 'failed') {
+      failedCount += 1
+      const code = effectiveErrorCode(job) || 'job_failed'
+      categoryCounts.set(code, (categoryCounts.get(code) || 0) + 1)
+    }
     if (job.status === 'interrupted') interruptedCount += 1
     if (job.can_retry) retryableCount += 1
     if (!latest || compareByUpdatedDesc(job, latest) < 0) latest = job
   }
-  return { activeCount, failedCount, interruptedCount, retryableCount, total: jobs.length, latest }
+  const failedByCategory = Array.from(categoryCounts.entries())
+    .map(([code, count]) => ({ code, label: ERROR_CODE_LABELS[code] || code, count }))
+    .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code))
+  return {
+    activeCount,
+    failedCount,
+    interruptedCount,
+    retryableCount,
+    total: jobs.length,
+    latest,
+    failedByCategory,
+  }
 }
 
 export interface ActionButtonState {
@@ -462,7 +567,8 @@ export function stepText(job: JobDto): string {
 
 export function errorSummary(job: JobDto): string {
   if (!job.error_message) return ''
-  return job.error_code ? job.error_code + '：' + job.error_message : job.error_message
+  const label = errorCategoryLabel(job)
+  return label ? label + '：' + job.error_message : job.error_message
 }
 
 export function queryFromFilters(

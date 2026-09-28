@@ -209,9 +209,13 @@ def _script_defaults(*, fallback: bool) -> dict:
     }
 
 
-def _image_defaults() -> dict:
-    provider = (settings.IMAGE_PROVIDER or "").strip().lower()
-    protocol = normalize_protocol("image", provider)
+def _image_defaults(protocol: str = "") -> dict:
+    """图像端点默认值。protocol 为空时按 .env 的 IMAGE_PROVIDER 推导；
+    显式传入时按指定协议构造（用于探测「其它已配置的图像端点」，
+    例如当前 Provider 不支持参考图时寻找支持参考图的替代端点）。"""
+    if not protocol:
+        provider = (settings.IMAGE_PROVIDER or "").strip().lower()
+        protocol = normalize_protocol("image", provider)
     if protocol == "stability":
         return {
             "protocol": "stability",
@@ -332,6 +336,27 @@ def endpoint_from_stored(capability: str, stored: dict | None) -> EndpointConfig
     )
 
 
+def image_protocol_defaults(protocol: str) -> EndpointConfig:
+    """按显式协议构造图像端点（只用 settings / .env，不读持久化选择）。
+
+    用于在多 Provider 环境下探测「账号已配置、且适配器声明支持参考图」
+    的候选图像端点，作为当前 Provider 的能力补充。
+    """
+    return _endpoint_from_merged("image", _image_defaults(protocol))
+
+
+def _endpoint_from_merged(capability: str, merged: dict) -> EndpointConfig:
+    """把一份已合并的默认配置转为 EndpointConfig（不做持久化覆盖）。"""
+    return EndpointConfig(
+        protocol=normalize_protocol(capability, merged.get("protocol", "")),
+        base_url=str(merged.get("base_url") or "").rstrip("/"),
+        api_key=str(merged.get("api_key") or ""),
+        model=str(merged.get("model") or ""),
+        auth_style=normalize_auth_style(merged.get("auth_style", "")),
+        params=dict(merged.get("params") or {}),
+    )
+
+
 def get_endpoint(capability: str) -> EndpointConfig:
     """单一读取入口：返回某能力的生效端点配置。
 
@@ -354,6 +379,7 @@ __all__ = [
     "endpoint_from_stored",
     "endpoint_identity",
     "get_endpoint",
+    "image_protocol_defaults",
     "normalize_auth_style",
     "normalize_protocol",
     "protocol_family",

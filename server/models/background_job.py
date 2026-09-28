@@ -50,6 +50,9 @@ class BackgroundJob(Base):
     # 稳定错误码 + 脱敏截断后的短错误消息；完整堆栈只写服务端日志。
     error_code = Column(String, nullable=False, default="")
     error_message = Column(String, nullable=False, default="")
+    # 失败原因分析结果（JSON 字符串）：{"summary","suggestion","source","model","analyzed_at"}。
+    # source 为 "rule" 或 "llm"；类别本身不在这里重复存，始终以 error_code 为准。
+    error_detail = Column(Text, nullable=False, default="")
     # 第几次尝试；重试会新建一行 attempt+1 并保留原行，绝不覆盖历史。
     attempt = Column(Integer, nullable=False, default=1)
     retry_of = Column(String, nullable=True)

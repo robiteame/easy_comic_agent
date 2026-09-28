@@ -22,6 +22,8 @@ os.environ["OUTPUT_DIR"] = str(TEST_ROOT / "output")
 os.environ["CHROMADB_PATH"] = str(TEST_ROOT / "chromadb")
 os.environ["CHECKPOINT_PATH"] = str(TEST_ROOT / "checkpoints")
 os.environ["IMAGE_PROVIDER"] = "local"
+# 测试环境禁用失败原因的 LLM 自动识别（规则分类仍生效），避免真实外呼与长事务。
+os.environ["ERROR_ANALYSIS_LLM_ENABLED"] = "false"
 
 atexit.register(shutil.rmtree, TEST_ROOT, ignore_errors=True)
 

@@ -25,8 +25,9 @@ class ConsistencyService:
     CONTINUITY_SOP = (
         "Apply continuity editing rules: eye-line continuity, match-on-action cuts, and 180-degree axis lock. "
         "Inside the same scene only use small camera zoom or position changes; do not cross the axis without explicit direction. "
-        "Use previous shot final frame as continuity reference when available. For complex motion, preserve OpenPose-like body joints; "
-        "bind perspective and depth to the current scene depth map logic."
+        "Use previous shot final frame as continuity reference when available. "
+        "No external pose or depth control model is integrated in this pipeline; motion continuity relies on the "
+        "approved storyboard first frame, character reference sheets and these text rules only."
     )
     POST_SOP = (
         "Same-scene transition must be hard cut or 0.2s fade. Cross-scene transition must be 0.3-0.5s white flash or push-pull. "
@@ -38,13 +39,14 @@ class ConsistencyService:
         name = item.get("name") or f"character_{index + 1}"
         appearance = item.get("appearance") if isinstance(item.get("appearance"), dict) else {}
         default_outfit = item.get("default_outfit") or appearance.get("default_outfit") or appearance.get("outfit") or "locked default outfit"
-        digest = self._digest(f"{name}|{json.dumps(appearance, ensure_ascii=False, sort_keys=True)}")[:10]
         item["default_outfit"] = default_outfit
         item["wardrobe_lock"] = item.get("wardrobe_lock") or (
             f"LOCKED wardrobe for {name}: {default_outfit}; makeup and accessories unchanged unless script marks costume_change."
         )
-        item["lora_profile"] = item.get("lora_profile") or f"project_lora_{self._slug(name)}_{digest}"
-        item["ip_adapter_profile"] = item.get("ip_adapter_profile") or f"ip_adapter_identity_{self._slug(name)}_{digest}"
+        # LoRA / IP-Adapter 均未接入：不生成看似已绑定的档案名，避免任何
+        # 「已启用」的虚假声明。字段保留为空串以兼容存储结构。
+        item["lora_profile"] = ""
+        item["ip_adapter_profile"] = ""
         item.setdefault("reference_images", item.get("reference_images") or [])
         return item
 
@@ -129,13 +131,9 @@ class ConsistencyService:
             parts.append("Seedance video must match the approved storyboard frame first, then animate only within the locked scene and character constraints.")
 
         for char in selected_characters:
-            parts.extend(
-                [
-                    char.get("lora_profile", ""),
-                    char.get("ip_adapter_profile", ""),
-                    char.get("wardrobe_lock", ""),
-                ]
-            )
+            wardrobe = char.get("wardrobe_lock", "")
+            if wardrobe:
+                parts.append(wardrobe)
 
         prompt = " ".join(self._clean_text(part) for part in parts if part)
         return {
@@ -183,8 +181,12 @@ class ConsistencyService:
             "scene_anchor": True,
             "character_identity_lock": True,
             "continuity_frame_lock": True,
-            "pose_lock_for_complex_motion": True,
-            "depth_lock_for_complex_motion": True,
+            # 没有接入真实的姿态/深度控制模型，画像统一声明 unsupported，
+            # 不允许任何「已启用」的虚假能力标记。
+            "pose_lock_for_complex_motion": False,
+            "depth_lock_for_complex_motion": False,
+            "pose_control_model": "unsupported",
+            "depth_control_model": "unsupported",
             "reference_weight_ranges": {"environment": [0.4, 0.5], "action": [0.25, 0.35]},
             "rules_override_single_shot_customization": True,
             "manual_storyboard_approval_required_before_video": True,
@@ -248,8 +250,6 @@ class ConsistencyService:
         complex_motion = self._is_complex_motion(shot)
         same_scene_transition = scene_profile.get("transition_same_scene") or "hard cut or 0.2s fade only"
         cross_scene_transition = scene_profile.get("transition_cross_scene") or "0.3-0.5s white flash or push-pull"
-        pose_reference_path = previous_reference_path if complex_motion and previous_reference_path else ""
-        depth_reference_path = previous_reference_path if complex_motion and previous_reference_path else ""
         return {
             "editing_logic": ["eye_line_continuity", "match_on_action", "180_degree_axis_lock"],
             "same_scene_transition": same_scene_transition,
@@ -260,10 +260,14 @@ class ConsistencyService:
             "ambient_audio_policy": "continuous room tone; do not cut background ambience at shot boundary",
             "previous_reference_path": previous_reference_path,
             "complex_motion": complex_motion,
-            "openpose_lock": "enabled" if complex_motion else "not_required",
-            "depth_lock": "enabled" if complex_motion else "not_required",
-            "pose_reference_path": pose_reference_path,
-            "depth_reference_path": depth_reference_path,
+            # 本流水线没有接入 OpenPose / 深度估计模型；即便镜头动作复杂，
+            # 也只能如实标记 unsupported，由首帧参考 + 文本规则约束运动。
+            "openpose_lock": "unsupported",
+            "depth_lock": "unsupported",
+            "pose_control_model": "unsupported",
+            "depth_control_model": "unsupported",
+            "pose_reference_path": "",
+            "depth_reference_path": "",
             "control_source": "previous_final_frame" if previous_reference_path else "current_scene_baseline",
             "video_generation_gate": "approved_storyboard_required" if for_video else "storyboard_reference_generation",
             "axis_rule": scene_profile.get("axis_rule") or "180-degree axis locked",
@@ -281,8 +285,8 @@ class ConsistencyService:
             f"same-scene transition {profile.get('same_scene_transition')}",
             f"cross-scene transition {profile.get('cross_scene_transition')}",
             f"LUT {profile.get('lut')}",
-            f"OpenPose control {profile.get('openpose_lock')}",
-            f"Depth control {profile.get('depth_lock')}",
+            "OpenPose control unsupported (no pose model integrated)",
+            "Depth control unsupported (no depth model integrated)",
             self._blocking_sentence(blocking),
             profile.get("ambient_audio_policy", ""),
         ]
@@ -364,10 +368,8 @@ class ConsistencyService:
             assets.append({"type": "character_three_view", "path": path, "role": "identity_outfit_face_body_hair", "weight": weights["action"], "required": True})
         if previous_reference_path:
             assets.append({"type": "continuity_frame", "path": previous_reference_path, "role": "eye_line_axis_pose_depth_motion", "weight": weights["action"], "required": True})
-        if continuity_profile.get("pose_reference_path"):
-            assets.append({"type": "openpose_source_frame", "path": continuity_profile["pose_reference_path"], "role": "complex_motion_body_joint_lock", "weight": weights["action"], "required": True})
-        if continuity_profile.get("depth_reference_path"):
-            assets.append({"type": "depth_source_frame", "path": continuity_profile["depth_reference_path"], "role": "perspective_depth_lock", "weight": weights["environment"], "required": True})
+        # 没有姿态/深度控制模型，不产出 openpose/depth 类参考资产；
+        # 伪造这两类图只会误导下游与展示层。
         return assets
 
     def _is_complex_motion(self, shot: dict[str, Any]) -> bool:

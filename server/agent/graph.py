@@ -32,14 +32,17 @@ GRAPH_NODE_META: dict[str, dict] = {
         "description": "逐镜头生成成品故事板参考图",
     },
     "auto_approve_storyboard": {
-        "label": "自动审核",
+        "label": "结构检查+自动审核",
         "type": "process",
-        "description": "自动模式跳过人工卡点,直接确认全部已出图镜头",
+        "description": (
+            "仅结构检查（可读性/尺寸/文件大小）通过的镜头自动确认；"
+            "不合格镜头单独重生成一次，仍失败则中止，不批量放过"
+        ),
     },
     "generate_shot_videos": {
         "label": "逐镜头视频",
         "type": "process",
-        "description": "逐镜头按音频路由生成（TTS 配音合成或原生音视频）并出视频",
+        "description": "逐镜头按音频路由生成（TTS 配音合成或原生音视频）并出视频；失败镜头只重试自身",
     },
     "compose": {
         "label": "合成成片",
@@ -105,19 +108,67 @@ async def _generate_storyboard_images(state: AgentState) -> dict:
 
 
 async def _auto_approve_storyboard(state: AgentState) -> dict:
+    """结构检查门禁 + 单镜头重试，而不是「有图就全批」。
+
+    1. 每个已出图镜头先过结构检查（文件存在、可解码、尺寸与字节数达标）；
+    2. 不合格的镜头单独重新生成一次（不重跑整个项目），再复检；
+    3. 复检仍不合格则中止自动流程并明确列出失败镜头——绝不自动批准
+       结构不合格的故事板，也不把结构检查结果当成「质量通过」。
+    """
     if state.get("errors"):
         return {}
     from db import SessionLocal
     from models import Shot
+    from services.structural_validation import validate_image_file
 
     project_id = state["project_id"]
+
+    def _structural_failures(shot_rows) -> list[str]:
+        failed: list[str] = []
+        for shot in shot_rows:
+            path = shot.storyboard_path or shot.image_path
+            if not path or not validate_image_file(path)["passed"]:
+                failed.append(shot.id)
+        return failed
+
     db = SessionLocal()
     try:
         shots = db.query(Shot).filter(Shot.project_id == project_id).all()
+        without_image = [shot.id for shot in shots if not (shot.storyboard_path or shot.image_path)]
+        if without_image:
+            return _abort("auto_approve_storyboard", f"仍有镜头未生成故事板: {', '.join(without_image)}")
+        # 与人工审核同口径：参数已修改、素材待重生成的镜头不得自动批准。
+        stale_shots = [shot.id for shot in shots if shot.media_stale]
+        if stale_shots:
+            return _abort(
+                "auto_approve_storyboard",
+                f"以下镜头参数已修改、素材待重新生成: {', '.join(stale_shots)}",
+            )
+        failed_once = _structural_failures(shots)
+    finally:
+        db.close()
+
+    if failed_once:
+        logger.info("结构检查未通过的故事板镜头，单独重生成一次: %s", failed_once)
+        try:
+            from api.routes.shot import _run_storyboard_generation
+
+            await _run_storyboard_generation(project_id, list(failed_once))
+        except Exception as exc:
+            return _abort("auto_approve_storyboard", exc)
+
+    db = SessionLocal()
+    try:
+        shots = db.query(Shot).filter(Shot.project_id == project_id).all()
+        failed = _structural_failures(shots)
+        if failed:
+            return _abort(
+                "auto_approve_storyboard",
+                f"以下镜头故事板未通过结构检查（已重试一次仍失败）: {', '.join(failed)}",
+            )
         for shot in shots:
-            if shot.storyboard_path or shot.image_path:
-                shot.confirmed = True
-                shot.status = "storyboard_approved"
+            shot.confirmed = True
+            shot.status = "storyboard_approved"
         db.commit()
     finally:
         db.close()
@@ -130,11 +181,26 @@ async def _generate_shot_videos(state: AgentState) -> dict:
     from api.routes.shot import _run_single_shot_video
 
     project_id = state["project_id"]
-    for shot_id in _shot_ids(project_id):
+    shot_ids = _shot_ids(project_id)
+    failures: dict[str, str] = {}
+    for shot_id in shot_ids:
         try:
             await _run_single_shot_video(shot_id, force=False)
         except Exception as exc:
-            return _abort("generate_shot_videos", exc)
+            failures[shot_id] = str(exc)
+    if failures:
+        # 只重试失败镜头本身，不重复生成整个项目。
+        logger.info("视频生成失败镜头，单独重试一次: %s", sorted(failures))
+        retried = list(failures)
+        for shot_id in retried:
+            try:
+                await _run_single_shot_video(shot_id, force=True)
+                failures.pop(shot_id, None)
+            except Exception as exc:
+                failures[shot_id] = str(exc)
+    if failures:
+        summary = "; ".join(f"{shot_id}: {reason[:120]}" for shot_id, reason in sorted(failures.items()))
+        return _abort("generate_shot_videos", f"以下镜头视频生成失败（已单独重试一次）: {summary}")
     if _has_unfinished_videos(project_id):
         return _abort("generate_shot_videos", "仍有镜头视频未生成")
     return {"current_step": "generate_shot_videos"}

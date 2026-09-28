@@ -18,6 +18,7 @@ import InputNumber from 'antd/es/input-number'
 import message from 'antd/es/message'
 import Select from 'antd/es/select'
 import { assetApi, shotApi, toOutputUrl } from '../services/api'
+import { optimisticShotFieldPatch, saveFailureRollbackPatch, type MediaStaleBackup } from '../services/shotEditGuard'
 import { notifyBudgetBlocked, notifyBudgetWarning, notifyProviderBlocked, useTaskEstimateGate } from './TaskEstimateModal'
 import {
   drainPendingSaves,
@@ -52,7 +53,7 @@ const stepLabels: Record<string, string> = {
   generate_voice: '配音生成',
   generate_seedance_video: '单镜视频',
   compose_video: '视频合成',
-  quality_check: '质量校验',
+  quality_check: '结构检查（仅结构，非质量认证）',
   rendering: '导出渲染',
 }
 
@@ -65,6 +66,11 @@ type ShotSaveEntry = PendingSaveEntry<Record<string, any>> & {
   timer: number | null
   projectId: string
   shotId: string
+  // 乐观写入 store 的素材过期标记在保存失败时按此快照回滚（素材路径本身
+  // 从不被乐观清空，无需回滚）。
+  optimisticMediaStale: MediaStaleBackup | null
+  // 保存批次中普通镜头字段是否已成功落库（资产绑定失败不影响该结论）。
+  paramsPersisted: boolean
 }
 
 const shotSaveKey = (projectId: string, shotId: string) => `${projectId}:${shotId}`
@@ -163,6 +169,8 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
         shotId,
         promise: null,
         retired: false,
+        optimisticMediaStale: null,
+        paramsPersisted: false,
       }
       shotSaveEntriesRef.current.set(key, entry)
     }
@@ -217,6 +225,8 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
         if (Object.keys(shotChanges).length > 0) {
           await shotApi.update(shotId, shotChanges)
           shotSaved = true
+          // 参数已真实落库：media_stale 的乐观标记从此以服务端为准。
+          entry.paramsPersisted = true
         }
         if (Object.keys(assetChanges).length > 0) {
           if (!entry.projectId) throw new Error('缺少项目上下文，无法保存资产绑定')
@@ -239,13 +249,22 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
     })
 
     if (saved && !hasPendingChanges(entry)) {
+      entry.optimisticMediaStale = null
+      entry.paramsPersisted = false
       if (canUpdateSaveState(shotId, entry.projectId)) {
         setShotDirty(false)
         setShotSaveState('idle')
       }
       if (shotSaveEntriesRef.current.get(key) === entry) shotSaveEntriesRef.current.delete(key)
-    } else if (!saved && canUpdateSaveState(shotId, entry.projectId)) {
-      setShotDirty(true)
+    } else if (!saved) {
+      // 保存失败：素材路径从未被清空、无需恢复；只回滚乐观写入的过期标记，
+      // 避免界面在「服务端其实还是旧参数」时误报「待重新生成」。
+      if (entry.optimisticMediaStale && !entry.paramsPersisted) {
+        updateShot(shotId, saveFailureRollbackPatch(entry.optimisticMediaStale))
+      }
+      if (canUpdateSaveState(shotId, entry.projectId)) {
+        setShotDirty(true)
+      }
     }
     return saved
   }
@@ -326,6 +345,8 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
       storyboard_status: shotPayload.storyboard_status || 'pending',
       version: Number(shotPayload.version || 1),
       confirmed: Boolean(shotPayload.confirmed),
+      // 恢复后的素材与恢复后的参数一致：清除过期标记。
+      media_stale: Boolean(shotPayload.media_stale),
       scene_asset_id: shotPayload.scene_asset_id || '',
       scene_group_id: shotPayload.scene_group_id || '',
       characters_in_scene: Array.isArray(shotPayload.characters_in_scene) ? shotPayload.characters_in_scene : [],
@@ -370,21 +391,19 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
       setShotDirty(true)
       setShotSaveState('dirty')
     }
-    // A changed parameter invalidates all generated media immediately. This
-    // prevents a stale image/video from remaining visible while the debounced
-    // request is pending.
-    updateShot(shotId, {
-      [field]: value,
-      status: 'pending',
-      storyboard_status: 'pending',
-      image_path: '',
-      storyboard_path: '',
-      audio_path: '',
-      video_path: '',
-      confirmed: false,
-    })
-
     const entry = getShotSaveEntry(entryProjectId, shotId)
+    // 参数变更只把素材标记为「待重新生成」：旧素材路径全部保留，界面继续
+    // 预览旧图，等新素材生成成功后由服务端原子替换。绝不提前清空路径——
+    // 保存失败、请求取消时素材也就不会凭空消失。
+    const { patch, backup } = optimisticShotFieldPatch(
+      field,
+      value,
+      Boolean(currentShot.media_stale),
+      entry.optimisticMediaStale,
+    )
+    entry.optimisticMediaStale = backup
+    updateShot(shotId, patch)
+
     entry.retired = false
     entry.failed = false
     entry.pending = { ...entry.pending, [field]: value }
@@ -521,7 +540,8 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
     }
   }
 
-  const regenerateCurrentShot = async () => {
+  // candidates > 1：关键镜头一次生成多个故事板候选，全部进入版本历史供挑选。
+  const regenerateCurrentShot = async (candidates = 1) => {
     if (!selectedShot || !projectId) return
     if (selectedShot.confirmed) {
       message.warning('已审核锁定的镜头不可重新生成')
@@ -584,22 +604,22 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
         dialogue: draft.dialogue ?? shot.dialogue,
         duration: draft.duration ?? shot.duration,
         reason: fullPrompt,
+        candidates,
       })
       notifyBudgetWarning(regenerateResult)
       if (requestId !== regenerateRequestRef.current || !isCurrentShotContext(entryProjectId, shot.id)) return
+      // 重生成排队成功：旧素材保留预览（生成中遮罩由全局生成态展示），
+      // 只标记过期与排队状态；新素材成功后经 shot_update 原子替换路径。
       updateShot(shot.id, {
         confirmed: false,
         status: 'pending',
         storyboard_status: 'queued',
-        storyboard_path: '',
-        image_path: '',
-        video_path: '',
-        audio_path: '',
+        media_stale: true,
       })
       setShotDirty(false)
       setShotSaveState('idle')
       appendLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] Shot ${shot.sequence} regeneration submitted`)
-      message.success('当前镜头重生成已启动')
+      message.success(candidates > 1 ? `已开始生成 ${candidates} 个故事板候选，完成后在版本历史中挑选` : '当前镜头重生成已启动')
     } catch (err: any) {
       if (requestId !== regenerateRequestRef.current || !isCurrentShotContext(entryProjectId, shot.id)) return
       // 硬预算拦截（HTTP 409 / budget_exceeded）单独提示，不混进通用错误文案。
@@ -630,7 +650,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
     { label: '环境权重', value: typeof referenceWeights.environment === 'number' ? referenceWeights.environment.toFixed(2) : '0.40-0.50' },
     { label: '动作权重', value: typeof referenceWeights.action === 'number' ? referenceWeights.action.toFixed(2) : '0.25-0.35' },
     { label: '续帧', value: selectedShot?.continuity_reference_path ? '上一镜头末帧' : '场景基准' },
-    { label: '骨骼', value: continuityProfile.openpose_lock || '复杂动作启用' },
+    { label: '姿态控制', value: continuityProfile.openpose_lock || 'unsupported（未接入）' },
   ]
 
   const blockingRows = [
@@ -673,6 +693,11 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                 {selectedShot && (
                   <>
                     {selectedShot.confirmed && <div className="locked-shot-note">该镜头已审核锁定，禁止修改参数或重生成。</div>}
+                    {selectedShot.media_stale && (
+                      <div className="media-stale-note" role="status">
+                        参数已修改，素材待重新生成：当前预览仍是旧素材，新素材生成成功后自动替换；可在版本历史中回滚。
+                      </div>
+                    )}
                     <div className="form-block">
                       <label className="form-label" htmlFor="shot-visual-notes">镜头 Prompt</label>
                       <TextArea
@@ -817,6 +842,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                                 <span>{item.personality || '性格待补充'}</span>
                                 <em>音色：{item.voice_id || 'Mimo 默认音色'}</em>
                                 <em>{item.appearance?.default_outfit || item.appearance?.description || item.visual_prompt || '人设待补充'}</em>
+                                {item.asset_status === 'stale' && (
+                                  <em className="media-stale-note">参考资产已过期（风格已切换）：生成时不再作为参考图，请先重建资产。</em>
+                                )}
                               </div>
                             </div>
                           )
@@ -845,6 +873,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                           <strong>{selectedScene.name}</strong>
                           <span>{selectedScene.description || '场景描述待补充'}</span>
                           <em>{selectedScene.visual_prompt || '场景视觉提示词待补充'}</em>
+                          {selectedScene.asset_status === 'stale' && (
+                            <em className="media-stale-note">参考资产已过期（风格已切换）：生成时不再作为参考图，请先重建资产。</em>
+                          )}
                         </div>
                       </div>
                     )}
@@ -940,6 +971,15 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                         ? '回填全量 Prompt'
                         : '按 Prompt 重新生成'}
                     </Button>
+                    <Button
+                      icon={<ReloadOutlined />}
+                      loading={regeneratingShot || loadingPrompt}
+                      disabled={selectedShot.confirmed}
+                      title="关键镜头一次生成 2 个故事板候选，两个候选都会进入版本历史，可对比后选用"
+                      onClick={() => void regenerateCurrentShot(2)}
+                    >
+                      生成 2 个候选
+                    </Button>
                   </>
                 )}
               </div>
@@ -984,8 +1024,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                         selectedCharacters.map((item) => (
                           <div className="consistency-lock-row" key={item.id}>
                             <strong>{item.name}</strong>
-                            <span>{item.lora_profile || 'LoRA 自动绑定'}</span>
-                            <span>{item.ip_adapter_profile || 'IP-Adapter 自动绑定'}</span>
+                            {/* LoRA / IP-Adapter 未接入，不允许显示「自动绑定」的虚假声明 */}
+                            <span>LoRA：未接入（unsupported）</span>
+                            <span>IP-Adapter：未接入（unsupported）</span>
                             <em>{item.wardrobe_lock || item.default_outfit || '穿搭妆容全程锁定'}</em>
                           </div>
                         ))

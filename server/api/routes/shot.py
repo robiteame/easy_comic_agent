@@ -14,6 +14,7 @@ from db import SessionLocal, get_db
 from models import Character, Project, SceneAsset, Shot, ShotVersion
 from services.audio_routing import resolve_audio_mode
 from services.consistency_service import ConsistencyService
+from services.invalidation_service import clear_shot_media_stale, mark_shot_media_stale
 from services.error_reporter import (
     ERROR_SHOT_VIDEO,
     ERROR_STORYBOARD,
@@ -23,7 +24,7 @@ from services.error_reporter import (
 )
 from services.image_service import ImageService
 from services.providers.base import Dialogue
-from services.reference_asset_service import ReferenceAssetService
+from services.providers.endpoint import get_endpoint
 from services.shot_version_service import (
     apply_snapshot_to_shot,
     capture_current_snapshot,
@@ -37,11 +38,10 @@ from services.shot_version_service import (
     version_detail,
 )
 from services.skill_config_service import (
-    agent_style_id,
     apply_agent_config_to_shot,
     clean_tts_text,
+    resolve_effective_style,
     resolve_skill_config,
-    should_materialize_openpose,
 )
 from services.style_templates import style_prompt_params
 from services.tts_service import TTSService
@@ -64,7 +64,6 @@ image_service = ImageService()
 tts_service = TTSService()
 seedance_service = SeedanceVideoService()
 consistency_service = ConsistencyService()
-reference_asset_service = ReferenceAssetService()
 _regeneration_tasks: set[asyncio.Task] = set()
 _shot_video_tasks: set[asyncio.Task] = set()
 _project_generation_locks: dict[str, asyncio.Lock] = {}
@@ -99,6 +98,8 @@ class RegenerateRequest(BaseModel):
     dialogue: schemas.ShotText | None = None
     duration: schemas.ShotDuration | None = None
     force_confirmed: bool = False
+    # 关键镜头可一次生成 2 个候选：每个候选各自进入版本历史，人工对比后选用。
+    candidates: schemas.CandidateCount = 1
 
 
 class StoryboardGenerateRequest(BaseModel):
@@ -134,7 +135,8 @@ async def get_shot_generation_prompt(shot_id: str, db: Session = Depends(get_db)
     skill_config = resolve_skill_config(shot.project_id, db)
     characters = _characters(db, shot.project_id)
     scenes = _scenes(db, shot.project_id)
-    previous_reference = _previous_reference_for_shot(db, shot)
+    # 与实际生成路径保持一致：同场景优先上一镜尾帧，无则回退上一镜故事板。
+    previous_reference = _previous_reference_for_shot(db, shot, prefer_last_frame=True)
     shot_data = _shot_dict(shot)
     shot_data["storyboard_prompt"] = _storyboard_notes(shot, scenes)
     shot_data.update(
@@ -158,6 +160,7 @@ async def get_shot_generation_prompt(shot_id: str, db: Session = Depends(get_db)
         "negative_prompt": negative_prompt,
         "scene_reference_images": shot_data.get("scene_reference_images", []),
         "character_reference_images": shot_data.get("character_reference_images", []),
+        **resolve_effective_style(project.style if project else "anime", skill_config, "storyboard_agent"),
     }
 
 
@@ -167,7 +170,9 @@ async def get_project_shots(project_id: str, db: Session = Depends(get_db)):
     if not db.query(Project).filter(Project.id == project_id).first():
         raise HTTPException(status_code=404, detail="Project not found")
     shots = db.query(Shot).filter(Shot.project_id == project_id).order_by(Shot.sequence).all()
-    return [_serialize_shot(s) for s in shots]
+    project = db.query(Project).filter(Project.id == project_id).first()
+    style_meta = resolve_effective_style((project.style if project else "anime"), resolve_skill_config(project_id, db), "storyboard_agent")
+    return [{**_serialize_shot(s), **style_meta} for s in shots]
 
 
 @router.put("/{shot_id}")
@@ -224,6 +229,67 @@ async def update_shot(shot_id: str, data: ShotUpdate, db: Session = Depends(get_
     return {"id": result_id, "status": "updated", "needs_render": bool(changed)}
 
 
+def _prepare_storyboard_candidate(shot: Shot, db: Session, data: RegenerateRequest) -> tuple[int, str]:
+    """登记一版故事板候选：版本快照 + 失效下游 + 应用本次参数。
+
+    返回 (本次 expected_version, 生成理由)。多个候选共用同一段登记逻辑，
+    因此第 2 个候选与第 1 个候选一样会进入版本历史，可对比后再选用。
+    """
+    task_key = _shot_task_key(shot.id, "storyboard")
+    create_version(db, shot, "regenerate", task_id=task_key)
+    previous_scene_key = _shot_scene_key(shot)
+    _invalidate_storyboard_outputs(shot)
+    _invalidate_downstream_media(db, shot, {previous_scene_key, _shot_scene_key(shot)}, source="regenerate")
+    shot.status = "pending"
+    shot.storyboard_status = "queued"
+    shot.version = (shot.version or 1) + 1
+    if data.new_emotion:
+        shot.emotion = data.new_emotion
+    if data.new_scene:
+        shot.scene_description = data.new_scene
+    if data.new_camera_angle:
+        shot.camera_angle = data.new_camera_angle
+    if data.shot_type:
+        shot.shot_type = data.shot_type
+    if data.character_action is not None:
+        shot.character_action = data.character_action
+    if data.dialogue is not None:
+        shot.dialogue = data.dialogue
+    if data.duration is not None:
+        shot.duration = data.duration
+    prompt = data.prompt if data.prompt is not None else data.visual_notes
+    if prompt is not None:
+        shot.visual_notes = prompt
+    _mark_project_output_stale(db, shot.project_id)
+    db.commit()
+    return int(shot.version or 1), str(data.reason or prompt or "")
+
+
+async def _run_storyboard_candidates(
+    shot_id: str, data: RegenerateRequest, candidates: int, first_expected_version: int, first_reason: str
+) -> None:
+    """顺序生成 N 个故事板候选（同一镜头锁内串行，避免版本互相踩踏）。"""
+    expected_version = first_expected_version
+    reason = first_reason
+    for index in range(candidates):
+        if index:
+            db = SessionLocal()
+            try:
+                shot = db.query(Shot).filter(Shot.id == shot_id).first()
+                if not shot:
+                    return
+                expected_version, reason = _prepare_storyboard_candidate(shot, db, data)
+            finally:
+                db.close()
+        update_job_progress(
+            _shot_task_key(shot_id, "storyboard"),
+            40,
+            current_step="regenerate_storyboard",
+            message=f"正在生成故事板候选 {index + 1}/{candidates}",
+        )
+        await _regenerate_single_shot(shot_id, reason, expected_version)
+
+
 @router.post("/{shot_id}/regenerate")
 async def regenerate_shot(shot_id: str, data: RegenerateRequest, db: Session = Depends(get_db)):
     shot = db.query(Shot).filter(Shot.id == shot_id).first()
@@ -233,6 +299,7 @@ async def regenerate_shot(shot_id: str, data: RegenerateRequest, db: Session = D
     _ensure_shot_unlocked(shot, force=data.force_confirmed)
     task_key = _shot_task_key(shot_id, "storyboard")
     expected_version = (shot.version or 1) + 1
+    candidates = int(data.candidates or 1)
     claim = claim_or_block(
         task_key,
         f"shot:{shot_id}",
@@ -244,42 +311,27 @@ async def regenerate_shot(shot_id: str, data: RegenerateRequest, db: Session = D
         return {"id": shot.id, "status": "regenerating", "version": shot.version, "deduplicated": True}
 
     try:
-        create_version(db, shot, "regenerate", task_id=task_key)
-        previous_scene_key = _shot_scene_key(shot)
-        _invalidate_storyboard_outputs(shot)
-        _invalidate_downstream_media(db, shot, {previous_scene_key, _shot_scene_key(shot)}, source="regenerate")
-        shot.status = "pending"
-        shot.storyboard_status = "queued"
-        shot.version = (shot.version or 1) + 1
-        expected_version = shot.version
-        if data.new_emotion:
-            shot.emotion = data.new_emotion
-        if data.new_scene:
-            shot.scene_description = data.new_scene
-        if data.new_camera_angle:
-            shot.camera_angle = data.new_camera_angle
-        if data.shot_type:
-            shot.shot_type = data.shot_type
-        if data.character_action is not None:
-            shot.character_action = data.character_action
-        if data.dialogue is not None:
-            shot.dialogue = data.dialogue
-        if data.duration is not None:
-            shot.duration = data.duration
-        prompt = data.prompt if data.prompt is not None else data.visual_notes
-        if prompt is not None:
-            shot.visual_notes = prompt
-        _mark_project_output_stale(db, shot.project_id)
-        db.commit()
-
-        task = start_task(task_key, _regenerate_single_shot(shot_id, data.reason or prompt or "", expected_version))
+        expected_version, reason = _prepare_storyboard_candidate(shot, db, data)
+        if candidates > 1:
+            # 关键镜头：一次提交生成 N 个候选，全部进入版本历史供人工挑选。
+            task = start_task(
+                task_key,
+                _run_storyboard_candidates(shot_id, data, candidates, expected_version, reason),
+            )
+        else:
+            task = start_task(task_key, _regenerate_single_shot(shot_id, reason, expected_version))
     except BaseException as exc:
         db.rollback()
         finish_task(task_key, "failed", f"storyboard scheduling failed: {exc}")
         raise
     _regeneration_tasks.add(task)
     task.add_done_callback(_regeneration_tasks.discard)
-    return {"id": shot.id, "status": "regenerating", "version": shot.version}
+    return {
+        "id": shot.id,
+        "status": "regenerating" if candidates <= 1 else "generating_candidates",
+        "version": shot.version,
+        "candidates": candidates,
+    }
 
 
 @router.post("/batch-regenerate")
@@ -394,9 +446,16 @@ async def confirm_storyboard(project_id: str, db: Session = Depends(get_db)):
     shots = db.query(Shot).filter(Shot.project_id == project_id).order_by(Shot.sequence).all()
     if not shots:
         raise HTTPException(status_code=404, detail="No storyboard shots available for confirmation")
-    unfinished = [shot.id for shot in shots if not shot.storyboard_path and not shot.image_path]
+    unfinished = [
+        shot.id
+        for shot in shots
+        if (not shot.storyboard_path and not shot.image_path) or shot.media_stale
+    ]
     if unfinished:
-        raise HTTPException(status_code=400, detail="仍有镜头未生成定稿故事板")
+        raise HTTPException(
+            status_code=400,
+            detail="仍有镜头未生成定稿故事板或素材待重新生成（参数已变更）",
+        )
     unapproved = [shot.id for shot in shots if not shot.confirmed]
     if unapproved:
         raise HTTPException(status_code=400, detail="仍有镜头未通过人工审核")
@@ -416,6 +475,9 @@ async def approve_storyboard(shot_id: str, data: StoryboardApprovalRequest, db: 
         raise HTTPException(status_code=404, detail="Shot not found")
     if data.approved and not (shot.storyboard_path or shot.image_path):
         raise HTTPException(status_code=400, detail="该镜头故事板尚未生成")
+    if data.approved and shot.media_stale:
+        # 参数已变更但旧素材仍在展示：审核的必须是「与当前参数一致」的素材。
+        raise HTTPException(status_code=400, detail="该镜头参数已修改，素材待重新生成，请先重新生成再审核")
     project_id = shot.project_id
     result_id = shot.id
     was_approved = bool(shot.confirmed)
@@ -623,6 +685,8 @@ async def restore_shot_version(shot_id: str, version_id: str, db: Session = Depe
     create_version(db, shot, "restore")
     apply_snapshot_to_shot(shot, snapshot)
     shot.version = (shot.version or 1) + 1
+    # 恢复后的媒体与恢复后的参数一致：清除过期标记，旧素材重新作为当前素材。
+    clear_shot_media_stale(shot)
     _mark_project_output_stale(db, project_id)
     # 恢复必须留下新版本记录（内容与被恢复版本一致，来源标记为 restore）。
     restored_row = create_version(db, shot, "restore", force=True)
@@ -708,7 +772,9 @@ async def _run_storyboard_generation_impl(
                 shot_data["visual_notes"] = _storyboard_notes(shot, scenes)
                 if project:
                     shot_data["output_format"] = project.output_format or "9:16"
-                previous_reference = _previous_reference_for_shot(db, shot)
+                # 同场景优先用上一镜尾帧（Seedance return_last_frame 产物）作为续帧参考：
+                # 该帧尚无视频时自动回退到上一镜已审核故事板，首次全量出图行为不变。
+                previous_reference = _previous_reference_for_shot(db, shot, prefer_last_frame=True)
                 shot_data.update(
                     consistency_service.build_generation_context(
                         shot_data,
@@ -748,14 +814,40 @@ async def _run_storyboard_generation_impl(
                 shot.scene_group_id = shot_data.get("scene_group_id", shot.scene_group_id)
                 shot.consistency_context = shot_data.get("consistency_context", shot.consistency_context)
                 shot.reference_weights = json.dumps(shot_data.get("reference_weights", {}), ensure_ascii=False)
-                shot.continuity_profile = json.dumps(shot_data.get("continuity_profile", {}), ensure_ascii=False)
+                storyboard_profile = shot_data.get("continuity_profile", {}) or {}
+                # 图像 Provider 真实能力如实落库：provider/model/reference_mode、
+                # references_validated（已校验数）与 references_sent（实际发送数）。
+                image_meta = dict(image_service.last_generation_metadata or {})
+                storyboard_profile.update(
+                    {
+                        "provider": image_meta.get("provider", ""),
+                        "model": image_meta.get("model", ""),
+                        "provider_source": image_meta.get("provider_source", ""),
+                        "reference_mode": image_meta.get("reference_mode", ""),
+                        "references_validated": image_meta.get("references_validated", 0),
+                        "references_sent": image_meta.get("references_sent", 0),
+                        "references_unsupported": bool(image_meta.get("references_unsupported")),
+                        "reference_capability_warning": image_meta.get("reference_capability_warning", ""),
+                        "prompt_trimmed_fields": list(image_service.last_prompt_trimmed_fields or []),
+                        "requested_style": shot_data.get("requested_style", shot_data.get("style", "anime")),
+                        "effective_style": shot_data.get("effective_style", shot_data.get("style", "anime")),
+                        "style_source": shot_data.get("style_source", "project_request"),
+                    }
+                )
+                shot.continuity_profile = json.dumps(storyboard_profile, ensure_ascii=False)
                 shot.continuity_reference_path = previous_reference
-                shot.pose_reference_path = shot_data.get("pose_reference_path", "")
-                shot.depth_reference_path = shot_data.get("depth_reference_path", "")
+                shot.pose_reference_path = ""
+                shot.depth_reference_path = ""
                 shot.image_path = image_path
                 shot.storyboard_path = image_path
                 shot.storyboard_status = "done"
                 shot.status = "storyboard_done"
+                # 新故事板原子替换旧路径；若旧视频/配音仍引用旧故事板，保持
+                # stale 提示用户重生成下游媒体，否则过期标记就此清除。
+                shot.media_stale = bool(shot.video_path or shot.audio_path or shot.last_frame_path)
+                shot.style_fingerprint = hashlib.sha256(
+                    str(shot_data.get("effective_style") or shot_data.get("style") or "anime").encode()
+                ).hexdigest()[:16]
                 # 生成结果同样入版本历史（与版本校验同事务，过期任务写不进来）。
                 create_version(db, shot, "regenerate", task_id=f"project:{project_id}:storyboard")
                 db.commit()
@@ -792,6 +884,7 @@ async def _run_storyboard_generation_impl(
             if project:
                 project.status = "storyboard_ready"
                 db.commit()
+            project_style = (project.style if project else "anime") or "anime"
         finally:
             db.close()
         await _progress(
@@ -801,7 +894,15 @@ async def _run_storyboard_generation_impl(
             "定稿故事板参考图已生成，等待人工审核",
             job_keys=(f"project:{project_id}:storyboard",),
         )
-        await ws_manager.send_to_project(project_id, {"type": "storyboard_ready", "project_id": project_id})
+        style_meta = resolve_effective_style(project_style, skill_config, "storyboard_agent")
+        await ws_manager.send_to_project(
+            project_id,
+            {
+                "type": "storyboard_ready",
+                "project_id": project_id,
+                **style_meta,
+            },
+        )
     except Exception as exc:
         db = SessionLocal()
         try:
@@ -861,7 +962,9 @@ async def _regenerate_single_shot(shot_id: str, reason: str = "", expected_versi
             shot_data["visual_notes"] = reason or _storyboard_notes(shot, scenes)
             if project:
                 shot_data["output_format"] = project.output_format or "9:16"
-            previous_reference = _previous_reference_for_shot(db, shot)
+            # 同场景优先用上一镜尾帧（Seedance return_last_frame 产物）作为续帧参考：
+            # 该帧尚无视频时自动回退到上一镜已审核故事板，因此首次全量出图行为不变。
+            previous_reference = _previous_reference_for_shot(db, shot, prefer_last_frame=True)
             shot_data.update(
                 consistency_service.build_generation_context(
                     shot_data,
@@ -900,14 +1003,35 @@ async def _regenerate_single_shot(shot_id: str, reason: str = "", expected_versi
             shot.scene_group_id = shot_data.get("scene_group_id", shot.scene_group_id)
             shot.consistency_context = shot_data.get("consistency_context", shot.consistency_context)
             shot.reference_weights = json.dumps(shot_data.get("reference_weights", {}), ensure_ascii=False)
-            shot.continuity_profile = json.dumps(shot_data.get("continuity_profile", {}), ensure_ascii=False)
+            storyboard_profile = shot_data.get("continuity_profile", {}) or {}
+            image_meta = dict(image_service.last_generation_metadata or {})
+            storyboard_profile.update(
+                {
+                    "provider": image_meta.get("provider", ""),
+                    "model": image_meta.get("model", ""),
+                    "reference_mode": image_meta.get("reference_mode", ""),
+                    "references_validated": image_meta.get("references_validated", 0),
+                    "references_sent": image_meta.get("references_sent", 0),
+                    "prompt_trimmed_fields": list(image_service.last_prompt_trimmed_fields or []),
+                    "requested_style": shot_data.get("requested_style", shot_data.get("style", "anime")),
+                    "effective_style": shot_data.get("effective_style", shot_data.get("style", "anime")),
+                    "style_source": shot_data.get("style_source", "project_request"),
+                }
+            )
+            shot.continuity_profile = json.dumps(storyboard_profile, ensure_ascii=False)
             shot.continuity_reference_path = previous_reference
-            shot.pose_reference_path = shot_data.get("pose_reference_path", "")
-            shot.depth_reference_path = shot_data.get("depth_reference_path", "")
+            shot.pose_reference_path = ""
+            shot.depth_reference_path = ""
             shot.image_path = image_path
             shot.storyboard_path = image_path
             shot.storyboard_status = "done"
             shot.status = "storyboard_done"
+            # 新故事板原子替换旧路径；若旧视频/配音仍引用旧故事板，保持
+            # stale 提示用户重生成下游媒体，否则过期标记就此清除。
+            shot.media_stale = bool(shot.video_path or shot.audio_path or shot.last_frame_path)
+            shot.style_fingerprint = hashlib.sha256(
+                str(shot_data.get("effective_style") or shot_data.get("style") or "anime").encode()
+            ).hexdigest()[:16]
             create_version(db, shot, "regenerate", task_id=f"shot:{shot_id}:storyboard")
             db.commit()
             update = _shot_update_payload(shot)
@@ -1131,6 +1255,14 @@ async def _run_single_shot_video(
         continuity_profile = shot_data.get("continuity_profile", {}) or {}
         if result.get("reference_payload_mode"):
             continuity_profile["seedance_reference_payload_mode"] = result["reference_payload_mode"]
+            continuity_profile["reference_mode"] = "first_frame_only"
+            continuity_profile["references_validated"] = len(video_shot_data.get("seedance_reference_manifest") or [])
+            continuity_profile["references_sent"] = ["approved_storyboard_first_frame"] if result["reference_payload_mode"] == "first_frame_reference" else []
+            continuity_profile["provider"] = get_endpoint("video").protocol
+            continuity_profile["model"] = get_endpoint("video").model
+            continuity_profile["requested_style"] = video_shot_data.get("requested_style", video_shot_data.get("style", "anime"))
+            continuity_profile["effective_style"] = video_shot_data.get("effective_style", video_shot_data.get("style", "anime"))
+            continuity_profile["style_source"] = video_shot_data.get("style_source", "project_request")
             shot_data["continuity_profile"] = continuity_profile
         if native_routed:
             # 标记音轨来源为视频自带，渲染时沿用视频音轨而非叠加 TTS。
@@ -1159,6 +1291,8 @@ async def _run_single_shot_video(
             if not shot.image_path:
                 shot.image_path = result.get("frame_path", "")
             shot.status = "video_done"
+            # 视频 + 配音 + 尾帧全部基于当前参数重新生成：过期标记就此清除。
+            clear_shot_media_stale(shot)
             create_version(db, shot, "regenerate", task_id=f"shot:{shot_id}:video")
             db.commit()
             update = _shot_update_payload(shot)
@@ -1219,6 +1353,7 @@ def _serialize_shot(s: Shot) -> dict:
         "storyboard_status": s.storyboard_status,
         "version": s.version,
         "confirmed": s.confirmed,
+        "media_stale": bool(s.media_stale),
         "characters_in_scene": json.loads(s.characters_in_scene) if s.characters_in_scene else [],
         "scene_asset_id": s.scene_asset_id or "",
         "character_asset_ids": json.loads(s.character_asset_ids) if s.character_asset_ids else [],
@@ -1230,6 +1365,7 @@ def _serialize_shot(s: Shot) -> dict:
         "pose_reference_path": s.pose_reference_path or "",
         "depth_reference_path": s.depth_reference_path or "",
         "last_frame_path": s.last_frame_path or "",
+        "style_fingerprint": s.style_fingerprint or "",
     }
 
 
@@ -1238,6 +1374,11 @@ def _shot_update_payload(shot: Shot) -> dict:
         "type": "shot_update",
         "shot_id": shot.id,
         "status": shot.status,
+        "storyboard_status": shot.storyboard_status or "pending",
+        # 版本号随更新下发：前端用它丢弃旧任务的迟到响应（expected_version 语义）。
+        "version": shot.version or 1,
+        "confirmed": bool(shot.confirmed),
+        "media_stale": bool(shot.media_stale),
         "image_path": shot.image_path,
         "storyboard_path": shot.storyboard_path,
         "audio_path": shot.audio_path,
@@ -1249,6 +1390,17 @@ def _shot_update_payload(shot: Shot) -> dict:
         "continuity_reference_path": shot.continuity_reference_path,
         "pose_reference_path": shot.pose_reference_path,
         "depth_reference_path": shot.depth_reference_path,
+        "reference_mode": _json_dict(shot.continuity_profile).get("reference_mode", ""),
+        "references_validated": _json_dict(shot.continuity_profile).get("references_validated", False),
+        "references_sent": _json_dict(shot.continuity_profile).get("references_sent", []),
+        "provider": _json_dict(shot.continuity_profile).get("provider", ""),
+        "model": _json_dict(shot.continuity_profile).get("model", ""),
+        "requested_style": _json_dict(shot.continuity_profile).get("requested_style", ""),
+        "effective_style": _json_dict(shot.continuity_profile).get("effective_style", ""),
+        "style_source": _json_dict(shot.continuity_profile).get("style_source", ""),
+        "provider_source": _json_dict(shot.continuity_profile).get("provider_source", ""),
+        "references_unsupported": bool(_json_dict(shot.continuity_profile).get("references_unsupported")),
+        "reference_capability_warning": _json_dict(shot.continuity_profile).get("reference_capability_warning", ""),
     }
 
 
@@ -1334,49 +1486,61 @@ def _versioned_media_id(shot_id: str, version: int | None) -> str:
 def _characters(db, project_id: str) -> list[dict]:
     asset_project_id = _asset_project_id(db, project_id)
     chars = db.query(Character).filter(Character.project_id == asset_project_id).all()
-    return [
-        {
-            "id": c.id,
-            "name": c.name,
-            "appearance": json.loads(c.appearance) if c.appearance else {},
-            "personality": c.personality or "",
-            "visual_prompt": c.visual_prompt or "",
-            "negative_prompt": c.negative_prompt or "",
-            "voice_id": c.voice_id or "",
-            "key_features": json.loads(c.key_features) if c.key_features else [],
-            "emotion_variants": json.loads(c.emotion_variants) if c.emotion_variants else {},
-            "reference_images": json.loads(c.reference_images) if c.reference_images else [],
-            "default_outfit": c.default_outfit or "",
-            "lora_profile": c.lora_profile or "",
-            "ip_adapter_profile": c.ip_adapter_profile or "",
-            "wardrobe_lock": c.wardrobe_lock or "",
-            "seed": int(c.seed) if c.seed and c.seed.isdigit() else 42,
-        }
-        for c in chars
-    ]
+    result: list[dict] = []
+    for c in chars:
+        # stale 资产（风格已切换或来源未知）不再作为参考图复用；
+        # 只保留文字画像，参考图等待按当前风格重建。
+        stale = str(c.asset_status or "active") == "stale"
+        references = json.loads(c.reference_images) if c.reference_images else []
+        result.append(
+            {
+                "id": c.id,
+                "name": c.name,
+                "appearance": json.loads(c.appearance) if c.appearance else {},
+                "personality": c.personality or "",
+                "visual_prompt": c.visual_prompt or "",
+                "negative_prompt": c.negative_prompt or "",
+                "voice_id": c.voice_id or "",
+                "key_features": json.loads(c.key_features) if c.key_features else [],
+                "emotion_variants": json.loads(c.emotion_variants) if c.emotion_variants else {},
+                "reference_images": [] if stale else references,
+                "default_outfit": c.default_outfit or "",
+                "lora_profile": "",
+                "ip_adapter_profile": "",
+                "wardrobe_lock": c.wardrobe_lock or "",
+                "seed": int(c.seed) if c.seed and c.seed.isdigit() else 42,
+                "asset_status": str(c.asset_status or "active"),
+                "style_fingerprint": c.style_fingerprint or "",
+            }
+        )
+    return result
 
 
 def _scenes(db, project_id: str) -> dict[str, dict]:
     asset_project_id = _asset_project_id(db, project_id)
     scenes = db.query(SceneAsset).filter(SceneAsset.project_id == asset_project_id).all()
-    return {
-        item.id: {
+    result: dict[str, dict] = {}
+    for item in scenes:
+        stale = str(item.asset_status or "active") == "stale"
+        references = json.loads(item.reference_images) if item.reference_images else []
+        result[item.id] = {
             "id": item.id,
             "name": item.name,
             "description": item.description,
             "visual_prompt": item.visual_prompt,
             "negative_prompt": item.negative_prompt,
             "key_features": json.loads(item.key_features) if item.key_features else [],
-            "reference_images": json.loads(item.reference_images) if item.reference_images else [],
+            "reference_images": [] if stale else references,
             "scene_group_key": item.scene_group_key or item.id,
             "time_of_day": item.time_of_day or "",
-            "baseline_image_path": item.baseline_image_path or "",
+            "baseline_image_path": "" if stale else (item.baseline_image_path or ""),
             "consistency_profile": json.loads(item.consistency_profile) if item.consistency_profile else {},
             "prop_lock": item.prop_lock or "",
             "seed": item.seed or 1200,
+            "asset_status": str(item.asset_status or "active"),
+            "style_fingerprint": item.style_fingerprint or "",
         }
-        for item in scenes
-    }
+    return result
 
 
 def _json_dict(raw: str | None) -> dict:
@@ -1395,15 +1559,13 @@ def _ensure_shot_unlocked(shot: Shot, *, force: bool = False) -> None:
 
 
 def _invalidate_storyboard_outputs(shot: Shot) -> None:
-    shot.confirmed = False
-    shot.status = "pending"
-    shot.storyboard_status = "pending"
-    shot.storyboard_path = ""
-    shot.image_path = ""
-    shot.scene_group_id = ""
-    shot.reference_weights = "{}"
-    shot.consistency_context = ""
-    _invalidate_video_outputs(shot, reset_status=False)
+    """编辑 / 重生成排队时标记素材过期待重生成。
+
+    旧故事板与全部下游媒体路径必须保留（预览、对比、回滚都依赖它们），
+    直到新素材生成成功的写回原子替换；这里只撤销审核并打上 stale 标记。
+    """
+
+    mark_shot_media_stale(shot)
 
 
 def _reusable_audio_path(shot_id: str, version: int | None, audio_path: str | None) -> str:
@@ -1425,7 +1587,7 @@ def _reusable_audio_path(shot_id: str, version: int | None, audio_path: str | No
 
 
 def _can_reuse_existing_video(shot: Shot, force: bool = False) -> bool:
-    if force or shot.status != "video_done" or not shot.video_path:
+    if force or getattr(shot, "media_stale", False) or shot.status != "video_done" or not shot.video_path:
         return False
     return existing_file(
         shot.video_path,
@@ -1435,19 +1597,13 @@ def _can_reuse_existing_video(shot: Shot, force: bool = False) -> bool:
 
 
 def _invalidate_video_outputs(shot: Shot, reset_status: bool = True) -> None:
-    shot.audio_path = ""
-    shot.video_path = ""
-    shot.last_frame_path = ""
-    shot.continuity_reference_path = ""
-    shot.pose_reference_path = ""
-    shot.depth_reference_path = ""
-    # 镜头级 audio_mode 覆盖是用户设定，重建一致性档案时必须保留。
-    preserved_audio_mode = _json_dict(shot.continuity_profile).get("audio_mode")
-    shot.continuity_profile = (
-        json.dumps({"audio_mode": str(preserved_audio_mode).lower()}, ensure_ascii=False)
-        if preserved_audio_mode
-        else "{}"
-    )
+    """撤销审核等显式操作后的失效：只标记 stale，不清空任何媒体路径。
+
+    旧视频 / 配音 / 尾帧保留在镜头上供预览与回滚；一致性档案（含镜头级
+    audio_mode 用户设置）原样保留，由下一次生成成功的写回整体替换。
+    """
+
+    mark_shot_media_stale(shot, reset_confirmed=False)
     if not reset_status:
         return
     if shot.storyboard_path or shot.image_path:
@@ -1462,6 +1618,12 @@ def _invalidate_downstream_media(
     scene_keys: set[str] | None = None,
     source: str = "manual_edit",
 ) -> None:
+    """上游镜头变更后，同场景下游镜头标记待重生成（旧素材保留）。
+
+    下游视频 / 续帧引用了上游产物，上游重新生成后它们需要跟进；版本号 +1
+    隔离在途生成任务（迟到任务写不回过期版本）。变更前先进版本历史，
+    保证下游旧素材随时可回滚。
+    """
     keys = {key for key in (scene_keys or {_shot_scene_key(shot)}) if key}
     if not keys:
         return
@@ -1473,7 +1635,6 @@ def _invalidate_downstream_media(
     )
     for item in downstream:
         if _shot_scene_key(item) in keys:
-            # 下游镜头的视频/续帧产物会被清空：清理前先进版本历史。
             if any(
                 (
                     item.audio_path,
@@ -1485,10 +1646,7 @@ def _invalidate_downstream_media(
                 )
             ):
                 create_version(db, item, source)
-            _invalidate_video_outputs(item)
-            # Fence an in-flight video worker for this downstream shot. The
-            # project-scope cancellation performed by callers then waits for it
-            # to unwind before returning.
+            mark_shot_media_stale(item)
             item.version = (getattr(item, "version", 1) or 1) + 1
 
 
@@ -1515,61 +1673,28 @@ def _shot_scene_keys(shot: Shot, db: Session | None = None) -> set[str]:
 
 
 def _materialize_control_references(project_id: str, shot_data: dict, skill_config: dict | None = None) -> None:
+    """连续性控制参考的如实归一化。
+
+    没有接入真实的 OpenPose / Depth 模型（``materialize_continuity_controls``
+    已停用，不再产出边缘图/灰度图冒充控制图），画像必须统一标记
+    ``unsupported``，且不允许出现 openpose/depth 类参考资产，避免任何
+    「控制已生效」的虚假声明。
+    """
     profile = shot_data.get("continuity_profile") or {}
-    # 源图回退链：前镜末帧 → 续帧参考 → 已审核分镜首帧。complex_motion 镜头在前镜
-    # 尚无视频（如重生成队列、首镜）时靠分镜首帧兜底，与画像 control_source 声明的
-    # current_scene_baseline 语义一致；视频生成预检要求分镜图必在，此链必能命中。
-    source_path = (
-        profile.get("previous_reference_path")
-        or shot_data.get("continuity_reference_path", "")
-        or shot_data.get("storyboard_path", "")
-        or shot_data.get("image_path", "")
-    )
-    controls = reference_asset_service.materialize_continuity_controls(
-        project_id=project_id,
-        shot_id=shot_data.get("shot_id", "shot"),
-        source_path=source_path,
-        enabled=bool(profile.get("complex_motion")) and should_materialize_openpose(skill_config),
-    )
-    if not controls:
-        # 未物化（无可用源图或技能配置关闭）：不允许画像声称 enabled 而参考图为空，
-        # 否则视频生成预检会以「缺少必需一致性参考素材」直接失败。
-        if not shot_data.get("pose_reference_path"):
-            profile["openpose_lock"] = "not_required"
-        if not shot_data.get("depth_reference_path"):
-            profile["depth_lock"] = "not_required"
-        shot_data["continuity_profile"] = profile
-        return
-
-    profile.update(controls)
-    profile["openpose_lock"] = "enabled"
-    profile["depth_lock"] = "enabled"
+    profile["openpose_lock"] = "unsupported"
+    profile["depth_lock"] = "unsupported"
+    profile["pose_control_model"] = "unsupported"
+    profile["depth_control_model"] = "unsupported"
+    profile.pop("pose_reference_path", None)
+    profile.pop("depth_reference_path", None)
     shot_data["continuity_profile"] = profile
-    shot_data["pose_reference_path"] = controls.get("pose_reference_path", "")
-    shot_data["depth_reference_path"] = controls.get("depth_reference_path", "")
-
-    weights = shot_data.get("reference_weights") or {}
-    assets = [asset for asset in (shot_data.get("reference_assets") or []) if isinstance(asset, dict)]
-    if controls.get("pose_reference_path"):
-        assets.append(
-            {
-                "type": "openpose_source_frame",
-                "path": controls["pose_reference_path"],
-                "role": "complex_motion_body_joint_lock",
-                "weight": weights.get("action", 0.30),
-                "required": True,
-            }
-        )
-    if controls.get("depth_reference_path"):
-        assets.append(
-            {
-                "type": "depth_source_frame",
-                "path": controls["depth_reference_path"],
-                "role": "perspective_depth_lock",
-                "weight": weights.get("environment", 0.45),
-                "required": True,
-            }
-        )
+    shot_data["pose_reference_path"] = ""
+    shot_data["depth_reference_path"] = ""
+    assets = [
+        asset
+        for asset in (shot_data.get("reference_assets") or [])
+        if isinstance(asset, dict) and str(asset.get("type") or "") not in {"openpose_source_frame", "depth_source_frame"}
+    ]
     shot_data["reference_assets"] = assets
 
 
@@ -1591,7 +1716,8 @@ def _storyboard_notes(shot: Shot, scenes: dict[str, dict]) -> str:
 
 
 def _storyboard_style_params(project: Project | None, skill_config: dict | None = None) -> dict:
-    style = agent_style_id(skill_config, "storyboard_agent", (project.style if project else "anime") or "anime")
+    requested = (project.style if project else "anime") or "anime"
+    style = resolve_effective_style(requested, skill_config, "storyboard_agent")["effective_style"]
     params = style_prompt_params(style)
     params["prompt_prefix"] = (
         f"{params.get('prompt_prefix', '')}, production-ready storyboard reference, "
@@ -1608,7 +1734,7 @@ async def _ensure_scene_baselines(
 ) -> None:
     if not project:
         return
-    style = agent_style_id(skill_config, "storyboard_agent", project.style or "anime")
+    style = resolve_effective_style(project.style or "anime", skill_config, "storyboard_agent")["effective_style"]
     asset_project_id = project.parent_project_id or project_id
     skill_append = ""
     if skill_config:

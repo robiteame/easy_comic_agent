@@ -1,8 +1,33 @@
+"""素材失效的唯一口径：标记过期待重生成，绝不清空媒体路径。
+
+镜头的旧素材（故事板 / 视频 / 配音 / 尾帧）必须一直保留到新素材生成成功
+并原子替换；参数编辑、资产换绑、画风切换等操作只把 ``media_stale`` 置为
+True 并撤销审核锁定，用户仍可预览、对比与回滚旧素材。
+"""
+
 import json
 
 from sqlalchemy.orm import Session
 
 from models import Project, Shot
+
+
+def mark_shot_media_stale(shot: Shot, *, reset_confirmed: bool = True) -> None:
+    """把镜头当前素材标记为「参数已变更，待重新生成」。
+
+    只做标记与审核解锁；媒体路径、一致性档案（含镜头级 audio_mode 覆盖）、
+    场景组等用户可见状态全部保留，由后续生成成功的写回原子替换。
+    """
+
+    shot.media_stale = True
+    if reset_confirmed:
+        shot.confirmed = False
+
+
+def clear_shot_media_stale(shot: Shot) -> None:
+    """素材已与当前参数重新一致（生成成功 / 版本恢复）时清除过期标记。"""
+
+    shot.media_stale = False
 
 
 def invalidate_asset_consumers(
@@ -35,17 +60,9 @@ def invalidate_asset_consumers(
     ]
     affected_projects = {shot.project_id for shot in affected}
     for shot in affected:
-        shot.confirmed = False
-        shot.storyboard_status = "pending"
-        shot.storyboard_path = ""
-        shot.image_path = ""
-        shot.audio_path = ""
-        shot.video_path = ""
-        shot.last_frame_path = ""
-        shot.continuity_reference_path = ""
-        shot.pose_reference_path = ""
-        shot.depth_reference_path = ""
-        shot.status = "pending"
+        # 资产描述变更后，消费该资产的镜头素材全部过期：保留旧素材可预览，
+        # 版本号 +1 隔离在途生成任务（迟到任务写不回过期版本）。
+        mark_shot_media_stale(shot)
         shot.version = (shot.version or 1) + 1
     if affected_projects:
         for project in db.query(Project).filter(Project.id.in_(affected_projects)).all():

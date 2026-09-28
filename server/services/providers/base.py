@@ -28,6 +28,11 @@ class VideoCapabilities:
     dialogue_in_prompt: bool = False  # 对白是否通过 prompt 文本驱动（Veo 3 风格）
     voice_consistent: bool = False  # 能否指定/锁定音色
     fixed_duration: int | None = None  # 协议固定时长（秒）；None 表示按镜头时长
+    reference_mode: str = "text_only"  # first_frame_only / text_only
+    # 该协议参考图内联（base64 data URL）时的编码字节预算；0 表示沿用全局
+    # settings.VIDEO_REFERENCE_INLINE_BUDGET_BYTES。按网关实际上限声明，
+    # 避免所有协议都被压到同一个保守值。
+    max_reference_inline_bytes: int = 0
 
 
 @dataclass

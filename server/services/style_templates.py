@@ -31,11 +31,11 @@ STYLE_TEMPLATES: dict[str, dict[str, str]] = {
     },
     "realistic": {
         "label": "电影写实",
-        "prompt_prefix": "semi-realistic cinematic drama, natural lens perspective, detailed practical lighting, believable costume texture",
-        "video_prompt": "semi-realistic cinematic short drama, natural lens movement, realistic lighting continuity, stable human proportions",
-        "character_reference_prompt": "semi-realistic cinematic character design sheet, realistic fabric and facial structure, full-body three-view reference",
-        "scene_baseline_prompt": "semi-realistic cinematic production background, practical light source, clear spatial perspective",
-        "negative_prompt": "anime eyes, doll skin, distorted hands, overprocessed HDR, text artifacts, watermark",
+        "prompt_prefix": "live-action cinematic realism, natural human anatomy, natural skin texture, live-action cinematic lighting, realistic fabric, real lens perspective, physically based materials, believable human proportions",
+        "video_prompt": "live-action cinematic short drama, natural human anatomy, natural skin texture, live-action cinematic lighting, realistic fabric, real lens perspective, physically based materials, stable human identity and motion",
+        "character_reference_prompt": "live-action cinematic human character reference sheet, natural human anatomy, natural skin texture, live-action cinematic lighting, realistic fabric, real lens perspective, physically based materials, full-body three-view reference",
+        "scene_baseline_prompt": "live-action cinematic production background, live-action cinematic lighting, real lens perspective, physically based materials, realistic materials, natural spatial depth",
+        "negative_prompt": "cartoon, anime, comic, chibi, cel shading, illustration, 3D render, plastic skin, deformed anatomy, text artifacts, watermark",
     },
     "watercolor": {
         "label": "水彩绘本",

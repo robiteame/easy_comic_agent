@@ -95,12 +95,9 @@ server/
 ├── db/                        # 数据库
 │   └── database.py            # SQLite 连接与初始化
 │
-├── prompts/                   # 提示词模板
-│   └── styles/                # 风格参数模板
-│       ├── anime.json         # 日系动漫
-│       ├── chinese.json       # 国漫古风
-│       ├── chibi.json         # Q版可爱
-│       └── realistic.json     # 写实风格
+│   （原 prompts/styles/*.json 风格参数模板已删除：运行时不加载，属于死配置。
+│     风格参数的唯一来源是 services/style_templates.py 的内置模板 +
+│     data/custom_style_templates.json 的自定义模板）
 │
 └── data/                      # 运行时数据 (gitignore)
     ├── chromadb/              # ChromaDB 持久化
@@ -220,7 +217,7 @@ class AgentState(TypedDict):
 | POST | `/api/script/upload` | 上传脚本文件（支持 `mode` 表单字段） |
 | GET | `/api/shot/{project_id}/shots` | 获取项目镜头列表 |
 | PUT | `/api/shot/{shot_id}` | 更新镜头（改动失效下游产物） |
-| POST | `/api/shot/{shot_id}/regenerate` | 重新生成单个镜头 |
+| POST | `/api/shot/{shot_id}/regenerate` | 重新生成单个镜头（`candidates=2` 一次生成 2 个候选，各占一版版本历史） |
 | POST | `/api/shot/batch-regenerate` | 批量重生成 |
 | POST | `/api/shot/{project_id}/generate-storyboard` | 逐镜头生成定稿故事板图 |
 | POST | `/api/shot/{project_id}/confirm-storyboard` | 批量确认故事板 |
@@ -232,6 +229,7 @@ class AgentState(TypedDict):
 | PUT | `/api/asset/shot/{shot_id}` | 重新绑定镜头的场景/角色资产 |
 | GET | `/api/character/{project_id}/characters` | 角色资产列表 |
 | PUT | `/api/character/{character_id}` | 更新角色资产 |
+| POST | `/api/project/{id}/assets/rebuild` | 画风切换后按当前生效画风重建 stale 的角色三视图 / 场景基准图 |
 | GET | `/api/graph/structure` | 自动模式流程图结构（由 build_graph 派生） |
 | POST | `/api/chat` | 自然语言交互 |
 | GET/PUT | `/api/budget/pricing` | 模型价格配置读取 / 保存 |
@@ -286,6 +284,9 @@ ws://localhost:8011/ws/{project_id}
 - **script**：主/备端点至少一个配置了 API Key（备端点需与主端点不同址）；
 - **video**：必须配置 API Key（视频没有本地回退）；
 - **image**：永不拦截 —— 缺 Key 自动回退占位图（既有约定）；
+- **video 预检明细**：除 API Key 外还校验协议已注册适配器、`model` 非空、适配器声明
+  `reference_image=True`（本流水线是首帧图生视频）。任一不满足即 409；启动日志由
+  `video_provider_preflight()` 如实打印协议 / 模型 / 参考图模式 / 固定时长 / 原生音频，不含密钥；
 - **voice 豁免**：视频适配器具备真正可用的原生音频能力
   （`native_audio` + `production_ready`，如接入 Veo 3 / Sora 2 厂商实现后）时
   不强制要求 TTS；镜头无台词、或镜头级 `audio_mode=native` 时同样豁免；
@@ -374,7 +375,7 @@ MIMO_API_KEY=                # 留空 = 未配置（不要填占位值, 否则�
 # OPENAI_BASE_URL=
 
 # 图像生成 —— 默认 local 占位 stub (无需 key 即可跑通)
-IMAGE_PROVIDER=local         # local(占位图) / stability / doubao-seedream-5.0-lite
+IMAGE_PROVIDER=local         # local(占位图) / stability / ark-seedream
 # 火山方舟 (Seedream 图像 + SeedDance 视频, 任一 ARK/SEEDDANCE/SEEDREAM key 均可)
 ARK_API_KEY=                 # 留空 = 未配置
 # STABILITY_API_KEY=         # 若用 Stability
@@ -529,3 +530,15 @@ uvicorn main:app --host 0.0.0.0 --port 8011 --reload
 6. **重复解析保护**: 项目已有已确认/已出片镜头时再次 `/parse` 会被拒绝，避免误删既有成果
 7. **角色一致性**: 图像生成时必须注入角色卡片 (Character Card)，不可省略 key_features
 8. **FFmpeg 中文字幕**: Windows 需指定 `font=Microsoft YaHei`，Linux 需安装中文字体
+9. **统一画风来源**：项目 / 本次请求的 `style` 是唯一权威来源；Skill 只有显式
+   `style_override_enabled=true` 才能覆盖。全链路（script→storyboard→image→video）
+   统一经 `skill_config_service.resolve_effective_style()` 解析，接口 / WebSocket / 日志
+   返回 `requested_style` / `effective_style` / `style_source`；`_persist_phase1` 不得把
+   anime 写回项目。
+10. **参考图能力如实上报**：`references_validated`（文件存在并已读取）与
+    `references_sent`（实际进入请求载荷）必须分开记录；没有真实姿态/深度模型时
+    `openpose_lock`/`depth_lock` 一律标 `unsupported`，不产出伪造控制图；
+    LoRA / IP-Adapter 未接入，字段保持空串，界面显示「未接入」。
+11. **结构检查 ≠ 质量认证**：`services/structural_validation.py` 只做图片/视频可读性、
+    尺寸、时长、首尾帧与空文件检查，不含人脸一致性 / 美学 / 闪烁检测；界面与日志
+    统一显示「结构检查（仅结构，非质量认证）」。

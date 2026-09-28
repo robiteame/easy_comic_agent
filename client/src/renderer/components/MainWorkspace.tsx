@@ -61,7 +61,7 @@ const STEP_LABELS: Record<string, string> = {
   generate_voice: '配音生成',
   generate_seedance_video: 'Seedance 视频',
   compose_video: '视频合成',
-  quality_check: '质量校验',
+  quality_check: '结构检查（仅结构，非质量认证）',
   rendering: '导出渲染',
 }
 
@@ -107,6 +107,7 @@ function normalizeShot(shot: any) {
     storyboard_status: shot.storyboard_status || 'pending',
     version: Number(shot.version || 1),
     confirmed: Boolean(shot.confirmed),
+    media_stale: Boolean(shot.media_stale),
     characters_in_scene: Array.isArray(shot.characters_in_scene) ? shot.characters_in_scene : [],
     scene_asset_id: shot.scene_asset_id || '',
     character_asset_ids: Array.isArray(shot.character_asset_ids) ? shot.character_asset_ids : [],
@@ -136,6 +137,7 @@ const MainWorkspace: React.FC = () => {
     setProgress,
     isGenerating,
     updateShot,
+    applyServerShotUpdate,
     awaitingStoryboardConfirm,
     setAwaitingStoryboardConfirm,
     videoPath,
@@ -187,6 +189,13 @@ const MainWorkspace: React.FC = () => {
   const [assetBoardReady, setAssetBoardReady] = useState(false)
   const [assetTab, setAssetTab] = useState<'characters' | 'scenes'>('characters')
   const [styleTemplates, setStyleTemplates] = useState<StyleOption[]>(STYLE_OPTIONS)
+  // 后端回传的实际生效风格（requested/effective/source），与选择器分离展示。
+  const [effectiveStyleMeta, setEffectiveStyleMeta] = useState<{
+    requested_style?: string
+    effective_style?: string
+    style_source?: string
+  } | null>(null)
+  const [rebuildingAssets, setRebuildingAssets] = useState(false)
   const [editingAssetId, setEditingAssetId] = useState<string | null>(null)
   const [assetDraft, setAssetDraft] = useState<Record<string, any>>({})
   const [savingAsset, setSavingAsset] = useState(false)
@@ -417,6 +426,13 @@ const MainWorkspace: React.FC = () => {
       platform: projectDetail.platform || platform,
     })
     setEpisodeTitleDraft(projectDetail.title || '')
+    if (projectDetail.effective_style || projectDetail.requested_style) {
+      setEffectiveStyleMeta({
+        requested_style: projectDetail.requested_style,
+        effective_style: projectDetail.effective_style,
+        style_source: projectDetail.style_source,
+      })
+    }
   }
 
   const activateProjectDetail = (projectDetail: any) => {
@@ -548,22 +564,12 @@ const MainWorkspace: React.FC = () => {
 
       if (data.type === 'shot_update' && data.shot_id) {
         appendLog(`[${ts}] 镜头已更新 | ${data.shot_id}`)
-        updateShot(data.shot_id, {
-          status: data.status || 'done',
-          image_path: data.image_path || '',
-          storyboard_path: data.storyboard_path || data.image_path || '',
-          video_path: data.video_path || '',
-          audio_path: data.audio_path || '',
-          storyboard_status: data.storyboard_status || 'done',
-          scene_group_id: data.scene_group_id || '',
-          reference_weights: data.reference_weights || {},
-          continuity_profile: data.continuity_profile || {},
-          continuity_reference_path: data.continuity_reference_path || '',
-          pose_reference_path: data.pose_reference_path || '',
-          depth_reference_path: data.depth_reference_path || '',
-          last_frame_path: data.last_frame_path || '',
-        })
-        if (data.video_path) {
+        // 字段级守卫：空媒体路径不覆盖已有有效路径；旧任务（版本号回退）
+        // 的迟到响应整体丢弃，防止覆盖新生成的素材。
+        applyServerShotUpdate(data.shot_id, data)
+        // 只有真正落到 store 里的新视频才切换预览（被守卫丢弃的旧任务不触发）。
+        const updated = useShotStore.getState().shots.find((item) => item.id === data.shot_id)
+        if (updated?.video_path) {
           if (autoMode) {
             void loadProjectShots(pid)
           } else {
@@ -579,6 +585,13 @@ const MainWorkspace: React.FC = () => {
       if (data.type === 'complete') {
         appendLog(`[${ts}] 流程执行完成`)
         applyServerProjectTitle(pid, data.title)
+        if (data.effective_style || data.requested_style) {
+          setEffectiveStyleMeta({
+            requested_style: data.requested_style,
+            effective_style: data.effective_style,
+            style_source: data.style_source,
+          })
+        }
 
         if (data.asset_board_ready) {
           if (autoMode) {
@@ -646,6 +659,13 @@ const MainWorkspace: React.FC = () => {
 
       if (data.type === 'storyboard_ready') {
         appendLog(`[${ts}] 故事板生成完成${autoMode ? '（全自动继续生成视频）' : '，等待审核'}`)
+        if (data.effective_style || data.requested_style) {
+          setEffectiveStyleMeta({
+            requested_style: data.requested_style,
+            effective_style: data.effective_style,
+            style_source: data.style_source,
+          })
+        }
         if (autoMode) {
           void loadProjectShots(pid)
           return
@@ -743,15 +763,48 @@ const MainWorkspace: React.FC = () => {
   }
 
   const updateProjectField = async (field: 'style' | 'resolution' | 'title', value: string) => {
+    const previousValue = ({ style, resolution, title } as Record<string, string>)[field]
     setProject({ [field]: value } as any)
     if (!projectId) return
     const operation = beginOperation(`project-field:${field}`, projectId)
-
+    if (!isCurrentOperation(operation)) return
     try {
-      await projectApi.update(projectId, { [field]: value })
+      const result = await projectApi.update(projectId, { [field]: value })
+      if (field === 'style') {
+        setEffectiveStyleMeta({
+          requested_style: result.requested_style || value,
+          effective_style: result.effective_style || value,
+          style_source: result.style_source || 'project_request',
+        })
+        if (result.assets_stale) {
+          message.warning('画风已切换：旧素材已保留并标记待重新生成，建议先重建资产，再批量重生成受影响镜头')
+        } else {
+          message.warning('画风已切换：旧分镜素材已保留并标记待重新生成，请在分镜中选择镜头重新生成')
+        }
+      }
+      if (field === 'style' || field === 'resolution') {
+        // 生成配置变化会把全部镜头标记待重生成（旧素材保留）：
+        // 刷新列表，让缩略图与预览立即显示「待重生成」状态。
+        void loadProjectShots(projectId)
+      }
     } catch (err: any) {
       if (!isCurrentOperation(operation)) return
+      setProject({ [field]: previousValue } as any)
       message.error('项目配置更新失败：' + (err.message || '未知错误'))
+    }
+  }
+
+  const handleRebuildAssets = async () => {
+    if (!projectId || rebuildingAssets) return
+    setRebuildingAssets(true)
+    try {
+      await projectApi.rebuildAssets(projectId)
+      message.success('已开始按当前画风重建角色板与场景板（旧文件保留，仅解除引用）')
+      void loadAssetBoard(projectId)
+    } catch (err: any) {
+      message.error('重建资产失败：' + (err.message || '未知错误'))
+    } finally {
+      setRebuildingAssets(false)
     }
   }
 
@@ -1518,6 +1571,35 @@ const MainWorkspace: React.FC = () => {
               <em className="toolbar-hint">
                 {STYLE_DESCRIPTIONS[style] || styleTemplates.find((item) => item.value === style)?.keywords || STYLE_DESCRIPTIONS.anime}
               </em>
+              {effectiveStyleMeta?.effective_style ? (
+                <Tooltip
+                  title={
+                    effectiveStyleMeta.style_source === 'skill_override'
+                      ? `Skill 方案覆盖了项目画风：请求 ${effectiveStyleMeta.requested_style}，实际生效 ${effectiveStyleMeta.effective_style}`
+                      : `全链路（剧本/分镜/图像/视频）实际生效画风：${effectiveStyleMeta.effective_style}（来源：${
+                          effectiveStyleMeta.style_source === 'skill_override' ? 'Skill 覆盖' : '项目/本次请求'
+                        }）`
+                  }
+                >
+                  <span className="toolbar-hint">
+                    实际生效：
+                    {styleTemplates.find((item) => item.value === effectiveStyleMeta.effective_style)?.label ||
+                      effectiveStyleMeta.effective_style}
+                    {effectiveStyleMeta.style_source === 'skill_override' ? '（Skill 覆盖）' : ''}
+                    {effectiveStyleMeta.effective_style !== style ? '（与当前选择不一致，注意重建资产）' : ''}
+                  </span>
+                </Tooltip>
+              ) : null}
+              <Button
+                size="small"
+                type="default"
+                loading={rebuildingAssets}
+                onClick={() => void handleRebuildAssets()}
+                disabled={!projectId}
+                title="切换画风后，旧的角色三视图/场景基准图会标记失效；点击按当前画风重新生成（旧文件保留）"
+              >
+                重建资产
+              </Button>
             </div>
             <div className="toolbar-field">
               <span className="toolbar-label">分辨率</span>
@@ -1854,6 +1936,13 @@ const MainWorkspace: React.FC = () => {
             </div>
           )}
 
+          {/* 参数已修改：旧素材保留预览，但给出明确的「待重新生成」提示。 */}
+          {!isGenerating && imageUrl && selectedShot?.media_stale && (
+            <div className="media-stale-overlay" role="status" aria-live="polite">
+              <span><ClockCircleOutlined /> 参数已修改，素材待重新生成（当前为旧素材）</span>
+            </div>
+          )}
+
           {currentVideoUrl && (
             <div className="preview-mode-switch" aria-label="预览模式">
               <button
@@ -1997,7 +2086,7 @@ const MainWorkspace: React.FC = () => {
               return (
                 <div
                   key={shot.id}
-                  className={`thumb-item${isSelected ? ' active' : ''}${shot.confirmed ? ' approved' : ''}${isQueuedSelected ? ' queue-selected' : ''}`}
+                  className={`thumb-item${isSelected ? ' active' : ''}${shot.confirmed ? ' approved' : ''}${isQueuedSelected ? ' queue-selected' : ''}${shot.media_stale ? ' media-stale' : ''}`}
                   onClick={() => openShotConfig(shot.id)}
                 >
                   <button
@@ -2009,6 +2098,9 @@ const MainWorkspace: React.FC = () => {
                   >
                     {isQueuedSelected ? '✓' : ''}
                   </button>
+                  {shot.media_stale && (
+                    <span className="thumb-stale-badge" title="参数已修改，素材待重新生成">待重生成</span>
+                  )}
                   {thumbUrl ? (
                     <img src={thumbUrl} alt={`镜头 ${i + 1}`} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   ) : (

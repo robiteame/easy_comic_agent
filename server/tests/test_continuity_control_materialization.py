@@ -1,9 +1,11 @@
-"""一致性控制图物化与视频参考预检的回归测试。
+"""连续性控制能力声明的回归测试。
 
-背景：complex_motion 镜头在前镜尚无末帧（重生成队列、每场首镜）时，一致性画像
-仍声明 openpose/depth 锁 enabled 而参考图为空，视频生成预检以
-「视频生成缺少必需一致性参考素材: openpose_control:<empty>」直接失败。
-物化需回退到已审核分镜首帧；确实无法物化时锁标志必须降级，不允许画像说谎。
+历史实现用 ``PIL.FIND_EDGES`` 生成边缘图冒充 OpenPose、用灰度高斯模糊冒充
+Depth，并把画像标记为 enabled——这些是虚假能力声明。新契约：
+
+- 没有接入真实姿态/深度模型时，画像统一标记 ``unsupported``；
+- 不产出 openpose/depth 类参考资产，也不把它们当作必需素材；
+- 视频参考预检只要求已审核分镜首帧（first_frame_only）。
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from PIL import Image  # noqa: E402
 
 from api.routes import shot as shot_route  # noqa: E402
 from config import settings  # noqa: E402
+from services.reference_asset_service import ReferenceAssetService  # noqa: E402
 from services.video_service import VideoService  # noqa: E402
 
 
@@ -37,15 +40,19 @@ def _shot_data(storyboard_path: str = "") -> dict:
         "storyboard_path": storyboard_path,
         "image_path": storyboard_path,
         "continuity_reference_path": "",
-        "pose_reference_path": "",
-        "depth_reference_path": "",
+        "pose_reference_path": "/old/openpose_ref.png",
+        "depth_reference_path": "/old/depth_ref.png",
         "reference_weights": {"action": 0.3, "environment": 0.45},
-        "reference_assets": [],
+        "reference_assets": [
+            {"type": "openpose_source_frame", "path": "/old/openpose_ref.png", "required": True},
+            {"type": "depth_source_frame", "path": "/old/depth_ref.png", "required": True},
+            {"type": "scene_baseline", "path": storyboard_path, "required": True},
+        ],
         "continuity_profile": {
             "complex_motion": True,
-            "openpose_lock": "enabled",
+            "openpose_lock": "enabled",  # 历史脏数据：必须被归一化为 unsupported
             "depth_lock": "enabled",
-            "previous_reference_path": "",  # 前镜尚无末帧
+            "previous_reference_path": "",
         },
     }
 
@@ -53,41 +60,65 @@ def _shot_data(storyboard_path: str = "") -> dict:
 class MaterializeControlReferenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.project_id = "regenfix_project"
-        # 参考图必须落在 OUTPUT_DIR 等允许根目录内，物化才会认。
         self.storyboard = _write_png(settings.OUTPUT_DIR / "regenfix" / "proj_shot_0001.png")
 
-    def test_storyboard_fallback_materializes_controls(self) -> None:
+    def test_controls_marked_unsupported_and_purged(self) -> None:
         shot_data = _shot_data(self.storyboard)
         shot_route._materialize_control_references(self.project_id, shot_data, None)
 
-        pose = shot_data["pose_reference_path"]
-        depth = shot_data["depth_reference_path"]
-        self.assertTrue(pose and Path(pose).exists())
-        self.assertTrue(depth and Path(depth).exists())
-        self.assertEqual(shot_data["continuity_profile"]["openpose_lock"], "enabled")
-        self.assertEqual(shot_data["continuity_profile"]["depth_lock"], "enabled")
-        asset_types = {asset["type"] for asset in shot_data["reference_assets"]}
-        self.assertIn("openpose_source_frame", asset_types)
-        self.assertIn("depth_source_frame", asset_types)
-
-    def test_skill_gate_off_downgrades_lock_flags(self) -> None:
-        shot_data = _shot_data(self.storyboard)
-        skill_config = {"storyboard_agent": {"openpose_lock_enabled": False}}
-        shot_route._materialize_control_references(self.project_id, shot_data, skill_config)
-
         profile = shot_data["continuity_profile"]
-        self.assertEqual(profile["openpose_lock"], "not_required")
-        self.assertEqual(profile["depth_lock"], "not_required")
+        self.assertEqual(profile["openpose_lock"], "unsupported")
+        self.assertEqual(profile["depth_lock"], "unsupported")
+        self.assertEqual(profile.get("pose_control_model"), "unsupported")
+        self.assertEqual(profile.get("depth_control_model"), "unsupported")
         self.assertEqual(shot_data["pose_reference_path"], "")
         self.assertEqual(shot_data["depth_reference_path"], "")
+        types = {asset["type"] for asset in shot_data["reference_assets"]}
+        self.assertNotIn("openpose_source_frame", types)
+        self.assertNotIn("depth_source_frame", types)
 
-    def test_no_source_downgrades_lock_flags(self) -> None:
-        shot_data = _shot_data("")  # 前镜末帧、续帧参考、分镜图全部缺失
-        shot_route._materialize_control_references(self.project_id, shot_data, None)
+    def test_materializer_never_produces_fake_control_images(self) -> None:
+        service = ReferenceAssetService()
+        controls = service.materialize_continuity_controls(
+            project_id=self.project_id,
+            shot_id="shot_x",
+            source_path=self.storyboard,
+            enabled=True,
+        )
+        self.assertEqual(controls, {})
+        controls_dir = settings.OUTPUT_DIR / "projects" / self.project_id / "controls"
+        self.assertFalse(controls_dir.exists())
 
-        profile = shot_data["continuity_profile"]
-        self.assertEqual(profile["openpose_lock"], "not_required")
-        self.assertEqual(profile["depth_lock"], "not_required")
+    def test_consistency_profile_always_unsupported(self) -> None:
+        from services.consistency_service import ConsistencyService
+
+        service = ConsistencyService()
+        context = service.build_generation_context(
+            shot={"shot_id": "s1", "character_action": "转身跑向门口", "camera_movement": "跟随"},
+            characters=[],
+            scenes={},
+            previous_reference_path="",
+            for_video=True,
+        )
+        profile = context["continuity_profile"]
+        self.assertEqual(profile["openpose_lock"], "unsupported")
+        self.assertEqual(profile["depth_lock"], "unsupported")
+        self.assertEqual(profile["pose_reference_path"], "")
+        self.assertEqual(profile["depth_reference_path"], "")
+        types = {asset["type"] for asset in context["reference_assets"]}
+        self.assertNotIn("openpose_source_frame", types)
+        self.assertNotIn("depth_source_frame", types)
+        sentence = service._continuity_sentence(profile)
+        self.assertIn("OpenPose control unsupported", sentence)
+        self.assertIn("Depth control unsupported", sentence)
+
+    def test_no_lora_or_ip_adapter_profiles_fabricated(self) -> None:
+        from services.consistency_service import ConsistencyService
+
+        service = ConsistencyService()
+        enriched = service.enrich_character({"name": "林晚", "appearance": {"hair": "黑长直"}}, 0)
+        self.assertEqual(enriched["lora_profile"], "")
+        self.assertEqual(enriched["ip_adapter_profile"], "")
 
 
 class VideoReferenceValidationTests(unittest.TestCase):
@@ -99,28 +130,20 @@ class VideoReferenceValidationTests(unittest.TestCase):
         shot_route._materialize_control_references(self.project_id, shot_data, None)
         self.shot = shot_data
 
-    def test_materialized_controls_pass_video_precheck(self) -> None:
-        manifest = self.service._validate_video_references(self.shot)
-        kinds = {item["type"] for item in manifest}
-        self.assertIn("approved_storyboard_first_frame", kinds)
-        self.assertIn("openpose_control", kinds)
-        self.assertIn("depth_control", kinds)
-
-    def test_enabled_lock_without_controls_still_fails_precheck(self) -> None:
-        # 契约：画像声明 enabled 而素材缺失仍必须硬失败——物化降级保证这不再发生。
-        lying = _shot_data(self.shot["storyboard_path"])
-        with self.assertRaisesRegex(RuntimeError, "openpose_control"):
-            self.service._validate_video_references(lying)
-
-    def test_downgraded_profile_passes_without_controls(self) -> None:
-        self.shot["continuity_profile"]["openpose_lock"] = "not_required"
-        self.shot["continuity_profile"]["depth_lock"] = "not_required"
-        self.shot["pose_reference_path"] = ""
-        self.shot["depth_reference_path"] = ""
+    def test_manifest_contains_only_first_frame_as_sent(self) -> None:
         manifest = self.service._validate_video_references(self.shot)
         kinds = {item["type"] for item in manifest}
         self.assertIn("approved_storyboard_first_frame", kinds)
         self.assertNotIn("openpose_control", kinds)
+        self.assertNotIn("depth_control", kinds)
+        for item in manifest:
+            expected_sent = item["type"] == "approved_storyboard_first_frame"
+            self.assertEqual(item["sent"], expected_sent)
+
+    def test_missing_storyboard_fails_precheck(self) -> None:
+        lying = _shot_data("")
+        with self.assertRaisesRegex(RuntimeError, "approved_storyboard_first_frame"):
+            self.service._validate_video_references(lying)
 
 
 if __name__ == "__main__":

@@ -79,6 +79,11 @@ class _FakeQuery:
     def all(self):
         return self.items
 
+    def first(self):
+        # 失效流程会在变更前做版本快照（create_version）：fake 只需让
+        # 「查最新版本」返回空，快照行由 add/flush 空实现吞掉。
+        return None
+
 
 class _FakeDB:
     def __init__(self, items):
@@ -86,6 +91,12 @@ class _FakeDB:
 
     def query(self, model):
         return _FakeQuery(self.items)
+
+    def add(self, obj):
+        pass
+
+    def flush(self):
+        pass
 
 
 def main() -> None:
@@ -201,17 +212,18 @@ def main() -> None:
         stale = _stale_shot()
         _invalidate_storyboard_outputs(stale)
         assert stale.confirmed is False
-        assert stale.status == "pending"
-        assert stale.storyboard_path == ""
-        assert stale.image_path == ""
-        assert stale.video_path == ""
-        assert stale.audio_path == ""
-        assert stale.last_frame_path == ""
-        assert stale.pose_reference_path == ""
-        assert stale.depth_reference_path == ""
-        assert stale.continuity_profile == "{}"
-        assert stale.reference_weights == "{}"
-        assert stale.consistency_context == ""
+        assert stale.media_stale is True
+        # 旧素材保留（仅标记过期），路径与用户设置不再被清空。
+        assert stale.storyboard_path == "story.png"
+        assert stale.image_path == "image.png"
+        assert stale.video_path == "video.mp4"
+        assert stale.audio_path == "audio.wav"
+        assert stale.last_frame_path == "last.png"
+        assert stale.pose_reference_path == "pose.png"
+        assert stale.depth_reference_path == "depth.png"
+        assert stale.continuity_profile == "{\"previous_reference_path\":\"prev.png\"}"
+        assert stale.reference_weights == "{\"environment\":0.45}"
+        assert stale.consistency_context == "old context"
 
         valid_video = TMP_ROOT / "video.mp4"
         valid_video.write_bytes(b"\x00" * 4096)
@@ -221,26 +233,37 @@ def main() -> None:
         video_stale.status = "storyboard_approved"
         assert not _can_reuse_existing_video(video_stale, force=False)
         video_stale.status = "video_done"
+        # stale 标记置位后，复用门必须拒绝旧视频。
+        video_stale.media_stale = True
+        assert not _can_reuse_existing_video(video_stale, force=False)
+        video_stale.media_stale = False
         _invalidate_video_outputs(video_stale)
         assert video_stale.confirmed is True
         assert video_stale.storyboard_path == "story.png"
-        assert video_stale.video_path == ""
+        assert video_stale.video_path == str(valid_video)
+        assert video_stale.media_stale is True
         assert video_stale.status == "storyboard_approved"
 
         same_scene_next = _stale_shot(sequence=3, scene_group_id="classroom-morning")
         other_scene_next = _stale_shot(sequence=4, scene_group_id="street-night")
+        same_scene_next.version = 2
         _invalidate_downstream_media(_FakeDB([same_scene_next, other_scene_next]), _stale_shot(sequence=1))
-        assert same_scene_next.video_path == ""
-        assert same_scene_next.last_frame_path == ""
-        assert same_scene_next.status == "storyboard_approved"
+        assert same_scene_next.video_path == "video.mp4"
+        assert same_scene_next.last_frame_path == "last.png"
+        assert same_scene_next.media_stale is True
+        assert same_scene_next.version == 3
         assert other_scene_next.video_path == "video.mp4"
+        assert not other_scene_next.media_stale
 
         base_regen = _stale_shot(sequence=1, scene_group_id="classroom-morning", scene_asset_id="scene1")
         base_previous_key = base_regen.scene_group_id
         _invalidate_storyboard_outputs(base_regen)
         later_same_group = _stale_shot(sequence=2, scene_group_id="classroom-morning", scene_asset_id="scene1")
+        later_same_group.version = 5
         _invalidate_downstream_media(_FakeDB([later_same_group]), base_regen, {base_previous_key, base_regen.scene_asset_id})
-        assert later_same_group.video_path == ""
+        assert later_same_group.video_path == "video.mp4"
+        assert later_same_group.media_stale is True
+        assert later_same_group.version == 6
 
         previous_same_group = _stale_shot(
             sequence=1,

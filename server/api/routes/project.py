@@ -11,12 +11,16 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api import schemas
+from api.websocket import ws_manager
 from config import settings
-from db import get_db
+from db import SessionLocal, get_db
 from models import Character, Project, SceneAsset, Shot, ShotVersion
+from services.image_service import ImageService
+from services.invalidation_service import mark_shot_media_stale
 from services.security import UploadLimitExceeded, safe_path, save_upload_stream, validate_identifier, validate_video_upload
+from services.skill_config_service import agent_prompt_append, resolve_effective_style, resolve_skill_config
 from services.storage_service import StorageQuotaExceeded, StorageService
-from services.task_registry import ScopeCancellation, cancel_scopes, release_scope_block
+from services.task_registry import ScopeCancellation, cancel_scopes, claim as claim_task, finish as finish_task, release_scope_block, start as start_task
 
 router = APIRouter(prefix="/api/project", tags=["project"])
 storage_service = StorageService()
@@ -107,7 +111,9 @@ async def get_project(project_id: str, db: Session = Depends(get_db)):
     if project.status == "deleting":
         raise HTTPException(status_code=409, detail="项目正在删除")
     _sync_completed_status(db, [project])
-    return _serialize_project(project, _parent_titles(db, [project]))
+    result = _serialize_project(project, _parent_titles(db, [project]))
+    result.update(resolve_effective_style(project.style or "anime", resolve_skill_config(project_id, db), "storyboard_agent"))
+    return result
 
 
 @router.put("/{project_id}")
@@ -148,11 +154,223 @@ async def update_project(project_id: str, data: ProjectUpdate, db: Session = Dep
         setattr(project, key, value)
     if generation_changed:
         _invalidate_project_generation(db, project)
+        if "style" in changed:
+            # 风格切换使旧的角色三视图/场景基准图全部失效（标记 stale、清空引用，
+            # 不删除文件），需要通过「重建资产」或重新解析按新风格重生成。
+            # 剧集项目例外：资产归父项目所有且多集共享，单集切换风格不得清空。
+            _invalidate_assets_for_style_change(db, project)
     project.updated_at = datetime.utcnow()
     db.commit()
     if generation_changed:
         await cancel_scopes({f"project:{project_id}"}, "project generation settings changed")
-    return {"id": project_id, "status": "updated"}
+    style_meta = resolve_effective_style(project.style or "anime", resolve_skill_config(project_id, db), "storyboard_agent")
+    assets_stale = bool("style" in changed) and not project.parent_project_id
+    return {
+        "id": project_id,
+        "status": "updated",
+        **style_meta,
+        "assets_stale": assets_stale,
+        "shots_media_stale": bool(generation_changed),
+        "asset_rebuild_endpoint": f"/api/project/{project_id}/assets/rebuild" if assets_stale else "",
+    }
+
+
+_asset_rebuild_tasks: set = set()
+
+
+@router.post("/{project_id}/assets/rebuild")
+async def rebuild_project_assets(project_id: str, db: Session = Depends(get_db)):
+    """按项目当前生效风格重建角色三视图与场景基准图。
+
+    风格切换后旧资产已标记 stale；本端点是明确的重建路径——逐个按当前
+    effective style 重新生成参考图并置回 active。旧文件不删除，仅解除引用。
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    task_key = f"project:{project_id}:assets-rebuild"
+    if not claim_task(
+        task_key,
+        f"project:{project_id}",
+        current_step="rebuild_assets",
+        message="已排队，准备按当前风格重建资产",
+    ):
+        return {"status": "assets_rebuilding", "project_id": project_id, "deduplicated": True}
+    try:
+        db.commit()
+        task = start_task(task_key, _run_asset_rebuild(project_id))
+    except BaseException as exc:
+        finish_task(task_key, "failed", f"asset rebuild scheduling failed: {exc}")
+        raise
+    _asset_rebuild_tasks.add(task)
+    task.add_done_callback(_asset_rebuild_tasks.discard)
+    return {"status": "assets_rebuild_started", "project_id": project_id}
+
+
+async def _run_asset_rebuild(project_id: str) -> None:
+    """后台重建 stale 资产：角色三视图并发(3)、场景基准图串行。"""
+    import asyncio
+    import hashlib
+
+    image_service = ImageService()
+
+    def _load():
+        db = SessionLocal()
+        try:
+            project = db.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                return None, None, [], []
+            skill_config = resolve_skill_config(project_id, db)
+            asset_project_id = project.parent_project_id or project.id
+            style = resolve_effective_style(project.style or "anime", skill_config, "storyboard_agent")["effective_style"]
+            characters = (
+                db.query(Character)
+                .filter(Character.project_id == asset_project_id, Character.asset_status == "stale")
+                .all()
+            )
+            scenes = (
+                db.query(SceneAsset)
+                .filter(SceneAsset.project_id == asset_project_id, SceneAsset.asset_status == "stale")
+                .all()
+            )
+            return (
+                style,
+                skill_config,
+                [{"id": c.id, "index": index, "name": c.name} for index, c in enumerate(characters)],
+                [{"id": s.id, "index": index, "name": s.name} for index, s in enumerate(scenes)],
+            )
+        finally:
+            db.close()
+
+    async def _fetch_character_payload(item: dict) -> dict | None:
+        db = SessionLocal()
+        try:
+            character = db.query(Character).filter(Character.id == item["id"]).first()
+            if not character:
+                return None
+            return {
+                "id": character.id,
+                "name": character.name,
+                "visual_prompt": character.visual_prompt or "",
+                "personality": character.personality or "",
+                "negative_prompt": character.negative_prompt or "",
+                "appearance": json.loads(character.appearance) if character.appearance else {},
+                "key_features": json.loads(character.key_features) if character.key_features else [],
+                "seed": int(character.seed) if character.seed and character.seed.isdigit() else 42,
+            }
+        finally:
+            db.close()
+
+    style, skill_config, characters, scenes = _load()
+    if style is None:
+        finish_task(f"project:{project_id}:assets-rebuild", "failed", "项目不存在")
+        return
+    await ws_manager.send_to_project(
+        project_id,
+        {"type": "progress", "step": "rebuild_assets", "progress": 5, "message": "开始按当前风格重建资产"},
+    )
+    skill_append = agent_prompt_append(skill_config, "storyboard_agent")
+    fingerprint = hashlib.sha256(str(style).encode()).hexdigest()[:16]
+    failures: list[str] = []
+    rebuilt_characters = 0
+    rebuilt_scenes = 0
+    semaphore = asyncio.Semaphore(3)
+
+    async def rebuild_character(item: dict) -> bool:
+        async with semaphore:
+            payload = await _fetch_character_payload(item)
+            if payload is None:
+                return False
+            if skill_append:
+                payload["visual_prompt"] = ", ".join(
+                    part for part in [payload["visual_prompt"], skill_append] if part
+                )
+            ref_path = await image_service.generate_character_reference(
+                character=payload,
+                style=style,
+                project_id=project_id,
+                seed=int(payload["seed"]) + 7000 + int(item["index"]),
+            )
+            db = SessionLocal()
+            try:
+                row = db.query(Character).filter(Character.id == item["id"]).first()
+                if row:
+                    row.reference_images = json.dumps([ref_path], ensure_ascii=False)
+                    row.asset_status = "active"
+                    row.style_fingerprint = fingerprint
+                    db.commit()
+                return True
+            finally:
+                db.close()
+
+    results = await asyncio.gather(
+        *(rebuild_character(item) for item in characters), return_exceptions=True
+    )
+    for item, result in zip(characters, results):
+        if isinstance(result, BaseException):
+            failures.append(f"角色 {item['name']}: {result}")
+        elif result:
+            rebuilt_characters += 1
+
+    for item in scenes:
+        try:
+            db = SessionLocal()
+            try:
+                scene_row = db.query(SceneAsset).filter(SceneAsset.id == item["id"]).first()
+                if not scene_row:
+                    continue
+                scene_payload = {
+                    "id": scene_row.id,
+                    "name": scene_row.name,
+                    "location": scene_row.name,
+                    "visual_prompt": scene_row.visual_prompt or "",
+                    "actions": scene_row.description or "",
+                    "seed": scene_row.seed or 1200,
+                }
+            finally:
+                db.close()
+            if skill_append:
+                scene_payload["visual_prompt"] = ", ".join(
+                    part for part in [scene_payload["visual_prompt"], skill_append] if part
+                )
+            ref_path = await image_service.generate_scene_baseline_reference(
+                scene=scene_payload,
+                style=style,
+                project_id=project_id,
+                seed=int(scene_payload["seed"]) + int(item["index"]),
+            )
+            db = SessionLocal()
+            try:
+                row = db.query(SceneAsset).filter(SceneAsset.id == item["id"]).first()
+                if row:
+                    row.baseline_image_path = ref_path
+                    row.reference_images = json.dumps([ref_path], ensure_ascii=False)
+                    row.asset_status = "active"
+                    row.style_fingerprint = fingerprint
+                    db.commit()
+            finally:
+                db.close()
+            rebuilt_scenes += 1
+        except Exception as exc:
+            failures.append(f"场景 {item['name']}: {exc}")
+
+    status = "failed" if failures else "completed"
+    finish_task(
+        f"project:{project_id}:assets-rebuild",
+        status,
+        "；".join(failures)[:500] or "资产重建完成",
+    )
+    await ws_manager.send_to_project(
+        project_id,
+        {
+            "type": "assets_rebuilt",
+            "project_id": project_id,
+            "style": style,
+            "rebuilt_characters": rebuilt_characters,
+            "rebuilt_scenes": rebuilt_scenes,
+            "failures": failures,
+        },
+    )
 
 
 @router.delete("/{project_id}")
@@ -713,14 +931,36 @@ def _sync_completed_status(db: Session, projects: list[Project]) -> None:
 
 
 def _invalidate_project_generation(db: Session, project: Project) -> None:
+    """生成配置（画风 / 画幅 / 分辨率）变更：全部镜头标记待重生成，素材保留。
+
+    旧故事板、视频、配音与尾帧继续保留引用，用户可预览、对比并通过版本
+    历史回滚；新素材生成成功后由写回原子替换。版本号 +1 隔离在途任务。
+    """
     project.status = "assets_ready"
     for shot in db.query(Shot).filter(Shot.project_id == project.id).all():
-        shot.confirmed = False
-        shot.storyboard_status = "pending"
-        shot.storyboard_path = ""
-        shot.image_path = ""
-        shot.audio_path = ""
-        shot.video_path = ""
-        shot.last_frame_path = ""
-        shot.status = "pending"
+        mark_shot_media_stale(shot)
         shot.version = (shot.version or 1) + 1
+
+
+def _invalidate_assets_for_style_change(db: Session, project: Project) -> None:
+    """风格切换后旧参考资产标记 stale：清空引用、保留文件。
+
+    不猜测旧资产原本是哪种风格：指纹与切换后的风格必然不一致，直接失效，
+    等待用户走「重建资产」或重新解析按当前风格重生成。
+
+    只处理项目自有资产；剧集（有父项目）的资产由父项目持有、多集共享，
+    单集风格切换不得清空共享资产（其它剧集仍在使用），本集镜头的 stale
+    标记已由 ``_invalidate_project_generation`` 完成。
+    """
+    if project.parent_project_id:
+        return
+    asset_project_id = project.id
+    for character in db.query(Character).filter(Character.project_id == asset_project_id).all():
+        character.asset_status = "stale"
+        character.reference_images = "[]"
+        character.lora_profile = ""
+        character.ip_adapter_profile = ""
+    for scene in db.query(SceneAsset).filter(SceneAsset.project_id == asset_project_id).all():
+        scene.asset_status = "stale"
+        scene.baseline_image_path = ""
+        scene.reference_images = "[]"

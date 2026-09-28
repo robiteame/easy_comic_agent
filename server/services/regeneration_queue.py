@@ -22,11 +22,13 @@ from models import BackgroundJob, Project, Shot, ShotVersion
 from services.job_dto import job_dto
 from services.job_types import (
     ACTIVE_STATUSES,
+    ERROR_CODE_DEPENDENCY_FAILED,
     TERMINAL_STATUSES,
     STATUS_CANCELLED,
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_INTERRUPTED,
+    error_code_for_status,
     parse_job_key,
 )
 from services.security import existing_file
@@ -59,6 +61,9 @@ def _json_ids(value: str | None) -> list[str]:
 
 
 def _artifact_ok(shot: Shot, stage: str) -> bool:
+    if shot.media_stale:
+        # 参数已变更：旧产物虽存在但已过期，续跑不允许跳过重生成。
+        return False
     path = {
         STAGE_STORYBOARD: shot.storyboard_path or shot.image_path,
         STAGE_AUDIO: shot.audio_path,
@@ -273,6 +278,7 @@ async def _run_batch(batch_id: str) -> None:
                     dep_rows.update({item.id: item for item in dependency_rows})
                 if any(dep_rows.get(dep_id) and dep_rows[dep_id].status in {STATUS_FAILED, STATUS_CANCELLED} for dep_id in dependencies):
                     job.status = STATUS_FAILED
+                    job.error_code = ERROR_CODE_DEPENDENCY_FAILED
                     job.error_message = "前置阶段失败，当前镜头未执行"
                     job.queue_blocked_reason = "前置阶段失败"
                     job.finished_at = datetime.utcnow()
@@ -414,9 +420,10 @@ async def _run_item(queue_job_id: str) -> None:
             running = final.query(BackgroundJob).filter(BackgroundJob.id == active_id).first()
             status = running.status if running else STATUS_FAILED
             message = running.error_message or running.message if running else "任务未找到"
+            error_code = str(running.error_code or "") if running else ""
         finally:
             final.close()
-        _mark_queue_job(queue_job_id, status, message)
+        _mark_queue_job(queue_job_id, status, message, error_code=error_code)
     except asyncio.CancelledError:
         _mark_queue_job(queue_job_id, STATUS_CANCELLED, "队列任务已取消")
         raise
@@ -438,7 +445,9 @@ async def _wait_for_job(job_id: str) -> None:
         await asyncio.sleep(0.25)
 
 
-def _mark_queue_job(job_id: str, status: str, message: str) -> None:
+def _mark_queue_job(job_id: str, status: str, message: str, *, error_code: str = "") -> None:
+    from services.error_analysis_service import schedule_failure_analysis
+
     db = SessionLocal()
     try:
         job = db.query(BackgroundJob).filter(BackgroundJob.id == job_id).first()
@@ -450,11 +459,15 @@ def _mark_queue_job(job_id: str, status: str, message: str) -> None:
         job.progress = 100 if status == STATUS_COMPLETED else job.progress
         job.message = message[:240]
         job.error_message = "" if status == STATUS_COMPLETED else message[:240]
+        # 队列占位行此前不写 error_code；真实任务的错误码优先，缺省按状态/文本推导。
+        job.error_code = error_code or error_code_for_status(status, message)[:64]
         job.finished_at = datetime.utcnow()
         job.updated_at = datetime.utcnow()
         db.commit()
     finally:
         db.close()
+    if status == STATUS_FAILED:
+        schedule_failure_analysis(job_id)
 
 
 def _mark_queue_waiting(job_id: str, reason: str) -> None:

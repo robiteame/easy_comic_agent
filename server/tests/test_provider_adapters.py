@@ -116,12 +116,13 @@ class ImageRouteTests(unittest.TestCase):
             patch("services.image_service.get_endpoint", return_value=_endpoint("placeholder")),
             patch("services.image_service.get_adapter", return_value=_make_adapter(supports_refs=False)),
         ):
-            asyncio.run(
-                self.service._generate(
-                    prompt="p", negative_prompt="", seed=1, reference_images=refs, preferred_size="64x64", label="X"
+            with self.assertRaisesRegex(RuntimeError, "不支持参考图"):
+                asyncio.run(
+                    self.service._generate(
+                        prompt="p", negative_prompt="", seed=1, reference_images=refs, preferred_size="64x64", label="X"
+                    )
                 )
-            )
-        self.assertEqual(captured["reference_images"], [])
+        self.assertNotIn("reference_images", captured)
 
         with (
             patch("services.image_service.get_endpoint", return_value=_endpoint("ark-seedream")),

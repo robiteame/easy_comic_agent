@@ -892,7 +892,8 @@ def websocket_payload_keys(job: dict) -> None:
 
     allowed = {
         "id", "scope", "project_id", "job_type", "job_type_label", "display_name", "status", "status_label",
-        "progress", "current_step", "message", "error_code", "error_message", "attempt", "retry_of", "version",
+        "progress", "current_step", "message", "error_code", "error_code_label", "error_message", "error_detail",
+        "attempt", "retry_of", "version",
         "created_at", "started_at", "updated_at", "finished_at", "cancel_requested_at", "duration_seconds",
         "eta_seconds", "is_active", "is_terminal", "has_active_successor", "can_cancel", "can_retry",
         "can_resume", "can_delete", "retry_blocked_reason", "resume_blocked_reason",

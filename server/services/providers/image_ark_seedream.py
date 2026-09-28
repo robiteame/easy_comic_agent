@@ -1,7 +1,11 @@
 """火山方舟 Seedream 图像适配器（原 ImageService._call_seedream 迁入）。
 
 支持多参考图输入（capabilities.reference_images=True）；model 只来自端点配置，
-不再把 provider 字符串当模型名兜底。
+不再把 provider 字符串当模型名兜底。按官方图片生成 API（/images/generations）：
+- Seedream 5.0 系列（pro/lite）支持 ``output_format=png``；4.5/4.0 仅输出 jpeg
+  且不支持自定义该参数，强校验下显式传 png 会报错，故按模型族选择性携带；
+- 参考图最多 14 张（5.0/4.5/4.0）；
+- ``guidance_scale`` 对 5.0/4.5/4.0 不支持，不发送。
 """
 
 from __future__ import annotations
@@ -88,12 +92,20 @@ class ArkSeedreamImageAdapter(BaseAdapter):
             "n": 1,
             "seed": request.seed,
             "watermark": False,
-            "output_format": "png",
             "sequential_image_generation": "disabled",
         }
+        if self._supports_png(model):
+            payload["output_format"] = "png"
         if request.reference_images:
-            payload["image"] = request.reference_images[:8]
+            # 官方上限：5.0/4.5/4.0 支持最多 14 张参考图。
+            payload["image"] = request.reference_images[:14]
         return payload
+
+    @staticmethod
+    def _supports_png(model: str) -> bool:
+        """仅 Seedream 5.0 系列支持自定义 output_format（png）；其余保持默认 jpeg。"""
+
+        return "seedream-5" in model.replace(".", "-").lower()
 
     def _model_candidates(self) -> list[str]:
         raw = self.endpoint.model

@@ -11,7 +11,12 @@ from config import settings
 from services import usage_service
 from services.consistency_service import ConsistencyService
 from services.providers.base import ImageRequest
-from services.providers.endpoint import EndpointConfig, get_endpoint
+from services.providers.endpoint import (
+    KNOWN_PROTOCOLS,
+    EndpointConfig,
+    get_endpoint,
+    image_protocol_defaults,
+)
 from services.providers.image_placeholder import PlaceholderImageAdapter
 from services.providers.registry import UnknownProtocolError, get_adapter
 from services.providers.usage import (
@@ -20,6 +25,7 @@ from services.providers.usage import (
     adapter_usage_for_request,
 )
 from services.reference_asset_service import ReferenceAssetService
+from services.prompt_budget import assemble_prompt, dedupe_terms, ensure_critical_fields, remove_conflicting_terms
 from services.security import atomic_write_bytes, safe_path, validate_identifier
 from services.storage_service import StorageQuotaExceeded, StorageService
 from services.style_templates import style_prompt_params
@@ -35,12 +41,50 @@ class ImageService:
         self.consistency = ConsistencyService()
         self.reference_assets = ReferenceAssetService()
         self.storage = StorageService()
+        self.last_prompt_trimmed_fields: list[str] = []
+        self.last_prompt_readded_fields: list[str] = []
+        self.last_prompt_conflicts: list[str] = []
+        self.last_generation_metadata: dict[str, object] = {}
 
     # ------------------------------------------------------------------
     # 适配器路由：protocol 显式决定代码路径；协议非法或缺 key 回退占位图。
     # ------------------------------------------------------------------
 
+    def _reference_enforcement(self) -> str:
+        """参考图能力策略：prefer（默认，明确告警后继续）/ strict（阻止生成）。"""
+
+        value = str(getattr(settings, "IMAGE_REFERENCE_ENFORCEMENT", "prefer") or "prefer").strip().lower()
+        return value if value in {"prefer", "strict"} else "prefer"
+
+    def _adapter_capabilities(self, protocol: str):
+        try:
+            adapter_cls = get_adapter("image", protocol)
+        except UnknownProtocolError:
+            return None
+        return getattr(adapter_cls, "capabilities", None)
+
+    def _preferred_reference_endpoint(self, primary: EndpointConfig) -> EndpointConfig | None:
+        """找「账号已配置 + 适配器声明支持参考图」的替代图像端点。
+
+        当前 Provider 不支持参考图时，优先改用这样的端点，避免角色/场景/故事板
+        阶段的参考资产被丢弃。只使用 settings/.env 里确实配了密钥的协议，
+        不会去调用未配置的厂商。
+        """
+        for protocol in KNOWN_PROTOCOLS.get("image", ()):
+            if protocol == primary.protocol:
+                continue
+            capabilities = self._adapter_capabilities(protocol)
+            if capabilities is None or not capabilities.reference_images:
+                continue
+            endpoint = image_protocol_defaults(protocol)
+            if not str(endpoint.api_key or '').strip():
+                continue
+            return endpoint
+        return None
+
     def _resolve_route(self) -> tuple[object, EndpointConfig]:
+        """按配置的 image 端点解析适配器（协议非法或缺 key 回退占位图）。"""
+
         endpoint = get_endpoint("image")
         try:
             adapter_cls = get_adapter("image", endpoint.protocol)
@@ -54,7 +98,41 @@ class ImageService:
                 endpoint.protocol,
             )
             return PlaceholderImageAdapter(EndpointConfig(protocol="placeholder")), endpoint
-        return adapter_cls(endpoint), endpoint
+        return self._build_adapter(adapter_cls, endpoint), endpoint
+
+    @staticmethod
+    def _build_adapter(adapter_cls, endpoint: EndpointConfig):
+        try:
+            return adapter_cls(endpoint)
+        except TypeError:
+            # Lightweight plugin/test adapters may not require endpoint state.
+            return adapter_cls()
+
+    def _upgrade_to_reference_provider(
+        self, adapter, endpoint: EndpointConfig
+    ) -> tuple[object, EndpointConfig, str]:
+        """当前 Provider 不支持参考图时，优先切换到已配置的参考图 Provider。
+
+        返回 (adapter, endpoint, provider_source)。找不到可用替代时原样返回，
+        由调用方按 IMAGE_REFERENCE_ENFORCEMENT 决定告警后继续还是阻止生成。
+        """
+        if getattr(adapter.capabilities, "reference_images", False):
+            return adapter, endpoint, "configured"
+        alternate = self._preferred_reference_endpoint(endpoint)
+        if alternate is None:
+            return adapter, endpoint, "configured"
+        logger.warning(
+            "图像 Provider %s（model=%s）不支持参考图，本次改用已配置且支持参考图的 %s（model=%s）",
+            endpoint.protocol,
+            endpoint.model or "default",
+            alternate.protocol,
+            alternate.model or "default",
+        )
+        return (
+            self._build_adapter(get_adapter("image", alternate.protocol), alternate),
+            alternate,
+            "preferred_reference_provider",
+        )
 
     async def _generate(
         self,
@@ -66,8 +144,32 @@ class ImageService:
         preferred_size: str,
         label: str,
         shot_id: str = "",
+        allow_text_only_references: bool = False,
     ) -> bytes:
+        """生成一张图。
+
+        ``allow_text_only_references`` 由调用方按产品策略传入：默认 False 时，
+        参考图不可用会直接报错（低层原语的严格契约）；服务入口在 prefer 策略下
+        传 True，此时会明确告警、如实记录 references_sent=0 后继续生成，
+        但绝不假装参考图已生效。
+        """
+        requires_references = bool(reference_images)
         adapter, endpoint = self._resolve_route()
+        provider_source = "configured"
+        if requires_references:
+            adapter, endpoint, provider_source = self._upgrade_to_reference_provider(adapter, endpoint)
+        references_unsupported = requires_references and not adapter.capabilities.reference_images
+        reference_warning = ''
+        if references_unsupported:
+            reference_warning = (
+                f"图像 Provider {endpoint.protocol}/{endpoint.model or 'default'} 声明不支持参考图，"
+                f"本次 {len(reference_images)} 张参考图（角色三视图/场景基准图/续帧）不会发送给模型；"
+                "请在「系统设置 → 模型服务」切换到支持参考图的图像 Provider（如 ark-seedream）。"
+            )
+            if not allow_text_only_references:
+                logger.warning(reference_warning)
+                raise RuntimeError(reference_warning)
+            logger.warning("参考图未生效（已如实降级为纯文本生成）: %s", reference_warning)
         size = preferred_size or str(endpoint.param("image_size") or "")
         request = ImageRequest(
             prompt=prompt,
@@ -77,6 +179,28 @@ class ImageService:
             reference_images=list(reference_images) if adapter.capabilities.reference_images else [],
             size=size,
             label=label,
+        )
+        self.last_generation_metadata = {
+            "provider": endpoint.protocol,
+            "model": endpoint.model,
+            "provider_source": provider_source,
+            "reference_mode": ("multi_reference" if adapter.capabilities.reference_images else "text_only") if reference_images else "text_only",
+            "references_validated": len(reference_images),
+            "references_sent": len(request.reference_images),
+            "references_unsupported": bool(references_unsupported),
+            "reference_capability_warning": reference_warning,
+        }
+        logger.info(
+            "图像生成请求: provider=%s model=%s provider_source=%s reference_mode=%s "
+            "references_validated=%s references_sent=%s references_unsupported=%s label=%s",
+            endpoint.protocol,
+            endpoint.model or "default",
+            provider_source,
+            self.last_generation_metadata["reference_mode"],
+            self.last_generation_metadata["references_validated"],
+            self.last_generation_metadata["references_sent"],
+            self.last_generation_metadata["references_unsupported"],
+            label,
         )
         # 用量按「实际调用的适配器」记账：回退到占位图时 provider 记为 placeholder，
         # 不会被误记成已配置但未真正调用的云端 provider。
@@ -144,6 +268,7 @@ class ImageService:
             preferred_size=preferred_size,
             label="SHOT PLACEHOLDER",
             shot_id=safe_shot_id,
+            allow_text_only_references=self._reference_enforcement() != "strict",
         )
 
         self._validate_image(image_data)
@@ -181,6 +306,7 @@ class ImageService:
             reference_images=[],
             preferred_size=preferred_size,
             label="SCENE BASELINE",
+            allow_text_only_references=self._reference_enforcement() != "strict",
         )
 
         self._validate_image(image_data)
@@ -215,6 +341,7 @@ class ImageService:
             reference_images=[],
             preferred_size=preferred_size,
             label="CHARACTER REF",
+            allow_text_only_references=self._reference_enforcement() != "strict",
         )
 
         self._validate_image(image_data)
@@ -237,12 +364,14 @@ class ImageService:
     def _size_for_ratio(self, output_format: str | None) -> str:
         # 画面比例 -> Seedream 出图尺寸。未识别的比例回退到配置的默认尺寸，
         # 保证用户在前端切换 9:16 / 16:9 / 1:1 等比例后，定稿故事板真实按比例出图。
+        # 尺寸需满足 Seedream 系列官方总像素范围 [2560x1440, 4096x4096]，
+        # 且不能超过 5.0 pro 的上限（约 2048x2048×1.1），故按比例就近放大。
         ratio = str(output_format or "").strip()
         ratio_size_map = {
             "9:16": "1440x2560",
-            "3:4": "1536x2048",
+            "3:4": "1728x2304",
             "1:1": "2048x2048",
-            "4:3": "2048x1536",
+            "4:3": "2304x1728",
             "16:9": "2560x1440",
         }
         return ratio_size_map.get(ratio, str(get_endpoint("image").param("image_size") or "1440x2560"))
@@ -258,101 +387,138 @@ class ImageService:
         atomic_write_bytes(image_path, image_data, minimum_size=1024)
 
     def _validate_image(self, image_data: bytes) -> None:
+        """结构检查（非质量认证）：图片可打开且尺寸达到可用下限。"""
         try:
             with Image.open(BytesIO(image_data)) as image:
                 image.verify()
         except Exception as exc:
             raise RuntimeError(f"图像数据无法打开: {exc}") from exc
+        try:
+            with Image.open(BytesIO(image_data)) as image:
+                width, height = image.size
+        except Exception as exc:
+            raise RuntimeError(f"图像尺寸无法读取: {exc}") from exc
+        if min(width, height) < 64:
+            raise RuntimeError(f"图像尺寸过小（{width}x{height}），判定为生成失败")
 
     def _build_prompt(self, shot: dict, characters: list, style_params: dict) -> tuple[str, str]:
-        prompt_parts: list[str] = []
+        """按预算优先级组装图像 Prompt。
+
+        字段顺序即裁剪优先级（从高到低）：
+        1. 风格与负向约束；2. 人物身份/脸型/发型/服装/关键特征；
+        3. 场景、构图与首帧参考说明；4. 动作/情绪/景别/机位；
+        5. 连续性规则与低优先级 SOP。超预算时从末尾整字段丢弃，
+        绝不从字段中间硬截断。
+        """
+        fields: list[tuple[str, str]] = []
         negative_parts: list[str] = []
 
+        # --- 1. 风格与负向约束 ---
         if style_params.get("prompt_prefix"):
-            prompt_parts.append(style_params["prompt_prefix"])
+            fields.append(("effective_style", style_params["prompt_prefix"]))
         if style_params.get("style_label"):
-            prompt_parts.append(f"locked visual style preset: {style_params['style_label']}")
-        if style_params.get("consistency_prefix"):
-            prompt_parts.append(style_params["consistency_prefix"])
+            fields.append(("style_label", f"locked visual style preset: {style_params['style_label']}"))
         if style_params.get("negative_prompt"):
             negative_parts.append(style_params["negative_prompt"])
-        prompt_parts.append("NON-NEGOTIABLE AGENT CONSISTENCY SOP overrides any single-shot custom prompt")
+
+        # --- 2. 人物身份、年龄、脸型、发型、服装和关键特征 ---
+        selected_cards = self._select_character_cards(shot, characters)
+        for char_card in selected_cards:
+            fields.append(("character_identity", char_card.get("visual_prompt", "")))
+            fields.append(("character_features", ", ".join(char_card.get("key_features", []))))
+            appearance = char_card.get("appearance") or {}
+            if isinstance(appearance, dict):
+                fields.append(("character_appearance", ", ".join(str(value) for value in appearance.values() if value)))
+            if char_card.get("reference_images"):
+                fields.append(("character_identity_lock", "preserve identity from the approved character three-view reference sheet"))
+            if char_card.get("wardrobe_lock"):
+                fields.append(("wardrobe", char_card["wardrobe_lock"]))
+            emotion = shot.get("emotion", "neutral")
+            if char_card.get("emotion_variants", {}).get(emotion):
+                fields.append(("emotion", char_card["emotion_variants"][emotion]))
+            if char_card.get("negative_prompt"):
+                negative_parts.append(char_card["negative_prompt"])
+
+        # --- 3. 场景、构图和首帧参考说明 ---
         if shot.get("scene_reference_images"):
-            prompt_parts.append("scene baseline/reference assets are loaded and mandatory for environment, props, lighting and perspective")
+            fields.append(("scene_reference", "scene baseline/reference assets are loaded for environment, props, lighting and perspective"))
         if shot.get("character_reference_images"):
-            prompt_parts.append("character three-view reference assets are loaded and mandatory for identity, outfit, face and hairstyle")
+            fields.append(("character_reference", "character three-view reference assets are loaded for identity, outfit, face and hairstyle"))
         if shot.get("continuity_reference_path"):
-            prompt_parts.append("previous shot final frame reference is loaded and mandatory for eye-line, pose, axis and depth continuity")
+            fields.append(("continuity_reference", "previous shot final frame reference anchors eye-line, pose, axis and depth continuity"))
+        fields.extend([
+            ("scene", shot.get("scene_description", "")),
+            ("approved_storyboard", shot.get("storyboard_prompt", "")),
+        ])
+
+        # --- 4. 动作、情绪与镜头语言 ---
+        fields.extend([
+            ("character_action", shot.get("character_action", "")),
+            ("shot_type", self._camera_prompt(shot.get("shot_type", "medium"))),
+            ("camera_angle", self._angle_prompt(shot.get("camera_angle", "正面"))),
+            ("camera_movement", f"camera movement: {shot.get('camera_movement', '静止')}"),
+            ("visual_notes", shot.get("visual_notes", "")),
+            ("finish", "finished production keyframe, expressive human acting, clean composition, high detail"),
+        ])
+
+        # --- 5. 连续性规则和低优先级 SOP ---
+        fields.append(("identity_policy", "NON-NEGOTIABLE identity and style consistency policy"))
         if shot.get("reference_weights"):
             weights = shot.get("reference_weights") or {}
-            prompt_parts.append(
+            fields.append(("reference_weights",
                 f"apply locked reference weights: environment/style {float(weights.get('environment') or 0.45):.2f}, character/action {float(weights.get('action') or 0.30):.2f}"
-            )
+            ))
         if shot.get("reference_assets"):
             roles = ", ".join(str(item.get("role", "")) for item in shot.get("reference_assets", []) if isinstance(item, dict))
-            prompt_parts.append(f"mandatory persisted reference assets drive these roles: {roles}")
+            fields.append(("reference_roles", f"mandatory persisted reference assets drive these roles: {roles}"))
         if shot.get("continuity_profile"):
             profile = shot.get("continuity_profile") or {}
-            prompt_parts.append(
+            fields.append(("continuity_rules",
                 "locked continuity controls: "
                 f"{', '.join(profile.get('editing_logic', []))}; "
-                f"OpenPose {profile.get('openpose_lock', 'not_required')}; "
-                f"Depth {profile.get('depth_lock', 'not_required')}; "
+                f"OpenPose {profile.get('openpose_lock', 'unsupported')}; "
+                f"Depth {profile.get('depth_lock', 'unsupported')}; "
                 f"LUT {profile.get('lut', 'project_scene_lut_locked')}; "
                 f"{profile.get('ambient_audio_policy', '')}"
-            )
+            ))
             blocking = profile.get("character_blocking") or {}
             if blocking:
                 order = blocking.get("character_order_left_to_right") or []
-                prompt_parts.append(
+                fields.append(("blocking",
                     "locked character blocking: "
                     f"left-to-right order {', '.join(order) if order else 'single subject'}; "
                     f"{blocking.get('axis_line', '180-degree axis locked')}; "
                     f"eye-line {blocking.get('eye_line_target', 'locked')}; "
                     f"{blocking.get('camera_movement_limit', '')}; "
                     f"{blocking.get('skin_light_integration', '')}"
-                )
+                ))
         if shot.get("consistency_context"):
-            prompt_parts.append(shot["consistency_context"])
+            fields.append(("consistency_context", shot["consistency_context"]))
         if shot.get("skill_prompt_append"):
-            prompt_parts.append(shot["skill_prompt_append"])
+            fields.append(("skill_sop", shot["skill_prompt_append"]))
 
-        for char_card in self._select_character_cards(shot, characters):
-            prompt_parts.append(char_card.get("visual_prompt", ""))
-            prompt_parts.extend(char_card.get("key_features", []))
-            appearance = char_card.get("appearance") or {}
-            if isinstance(appearance, dict):
-                prompt_parts.extend(str(value) for value in appearance.values() if value)
-            if char_card.get("reference_images"):
-                prompt_parts.append("strictly preserve identity from the approved character three-view reference sheet")
-            if char_card.get("lora_profile"):
-                prompt_parts.append(f"fixed LoRA profile {char_card['lora_profile']}")
-            if char_card.get("ip_adapter_profile"):
-                prompt_parts.append(f"fixed IP-Adapter identity profile {char_card['ip_adapter_profile']}")
-            if char_card.get("wardrobe_lock"):
-                prompt_parts.append(char_card["wardrobe_lock"])
-            emotion = shot.get("emotion", "neutral")
-            if char_card.get("emotion_variants", {}).get(emotion):
-                prompt_parts.append(char_card["emotion_variants"][emotion])
-            if char_card.get("negative_prompt"):
-                negative_parts.append(char_card["negative_prompt"])
-
-        prompt_parts.extend(
-            [
-                shot.get("scene_description", ""),
-                shot.get("character_action", ""),
-                shot.get("visual_notes", ""),
-                shot.get("storyboard_prompt", ""),
-                self._camera_prompt(shot.get("shot_type", "medium")),
-                self._angle_prompt(shot.get("camera_angle", "正面")),
-                "finished color keyframe, approved storyboard standard, consistent character design, consistent scene style",
-                "vertical cinematic comic frame, expressive characters, clean composition, high detail",
-                "do not override Agent consistency SOP with any single-shot custom setting",
-            ]
-        )
         negative_parts.extend(["low quality", "blurry", "watermark", "text artifacts", "bad anatomy"])
-        prompt = ", ".join(part for part in (self._clean_prompt_part(part) for part in prompt_parts) if part)
-        return prompt[:6000], ", ".join(part for part in negative_parts if part)
+        cleaned = [(name, self._clean_prompt_part(value)) for name, value in fields]
+        prompt, dropped = assemble_prompt(cleaned)
+        self.last_prompt_trimmed_fields = dropped
+        critical = [
+            ("character_identity", str(card.get("visual_prompt", "") or card.get("name", "")))
+            for card in selected_cards[:2]
+        ]
+        critical.append(("character_action", str(shot.get("character_action", "") or "")))
+        prompt, readded = ensure_critical_fields(prompt, critical)
+        self.last_prompt_readded_fields = readded
+        if dropped or readded:
+            logger.info(
+                "图像 Prompt 预算裁剪: dropped_fields=%s readded_critical_fields=%s",
+                dropped,
+                readded,
+            )
+        prompt, conflicts = remove_conflicting_terms(prompt, negative_parts)
+        self.last_prompt_conflicts = conflicts
+        if conflicts:
+            logger.info("图像 Prompt 正负向冲突词已移除: %s", conflicts)
+        return prompt, ", ".join(dedupe_terms(negative_parts))
 
     def _select_character_cards(self, shot: dict, characters: list) -> list[dict]:
         selected_ids = {str(item) for item in shot.get("character_asset_ids", []) if item}
@@ -398,10 +564,8 @@ class ImageService:
             refs.extend(value for value in values if value)
         if shot.get("continuity_reference_path"):
             refs.append(shot["continuity_reference_path"])
-        if shot.get("pose_reference_path"):
-            refs.append(shot["pose_reference_path"])
-        if shot.get("depth_reference_path"):
-            refs.append(shot["depth_reference_path"])
+        # pose/depth paths from older projects were diagnostic PIL images, not
+        # real OpenPose/Depth controls. Never send them to an image Provider.
 
         image_urls: list[str] = []
         seen: set[str] = set()
@@ -452,7 +616,10 @@ class ImageService:
             style_params.get("negative_prompt", ""),
             "different outfits between views, inconsistent face, extra characters, watermark, text artifacts, low quality",
         ]
-        return ", ".join(part for part in prompt_parts if part), ", ".join(part for part in negative_parts if part)
+        prompt, dropped = assemble_prompt([(f"character_{index}", part) for index, part in enumerate(prompt_parts)])
+        self.last_prompt_trimmed_fields = dropped
+        prompt, _ = remove_conflicting_terms(prompt, negative_parts)
+        return prompt, ", ".join(dedupe_terms(negative_parts))
 
     def _camera_prompt(self, shot_type: str) -> str:
         return {

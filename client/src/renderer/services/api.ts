@@ -165,6 +165,8 @@ export const projectApi = {
 
   delete: (id: string) => api.delete(`/api/project/${id}`).then((r) => r.data),
 
+  rebuildAssets: (id: string) => api.post(`/api/project/${id}/assets/rebuild`, {}).then((r) => r.data),
+
   importVideo: (id: string, formData: FormData) =>
     api
       .post(`/api/project/${id}/import-video`, formData, {

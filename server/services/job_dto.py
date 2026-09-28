@@ -23,6 +23,7 @@ from services.job_types import (
     RETRYABLE_STATUSES,
     TERMINAL_STATUSES,
     error_code_for_status,
+    error_code_label,
     job_type_label,
     status_label,
 )
@@ -72,6 +73,32 @@ def _json_list(value: Any) -> list[str]:
         return [str(item) for item in parsed] if isinstance(parsed, list) else []
     except (TypeError, ValueError):
         return []
+
+
+def _error_detail(value: Any) -> dict[str, Any] | None:
+    """解析落库的失败分析 JSON；无效或为空返回 None（字段白名单 + 长度兜底）。"""
+
+    import json
+
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    summary = _short_message(str(parsed.get("summary") or ""))
+    suggestion = _short_message(str(parsed.get("suggestion") or ""))
+    if not summary and not suggestion:
+        return None
+    source = str(parsed.get("source") or "")
+    return {
+        "summary": summary,
+        "suggestion": suggestion,
+        "source": source if source in {"rule", "llm"} else "",
+        "model": _short_message(str(parsed.get("model") or "")),
+    }
 
 
 def job_duration_seconds(job: Any, *, now: datetime | None = None) -> int:
@@ -206,7 +233,9 @@ def job_dto(
         "current_step": str(job.current_step or ""),
         "message": _short_message(job.message),
         "error_code": error_code,
+        "error_code_label": error_code_label(error_code),
         "error_message": error_message,
+        "error_detail": _error_detail(getattr(job, "error_detail", "")),
         "attempt": max(1, int(job.attempt or 1)),
         "retry_of": str(job.retry_of) if job.retry_of else None,
         "version": int(job.version or 0),

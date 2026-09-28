@@ -107,6 +107,8 @@ def _ensure_sqlite_columns() -> None:
                 "pose_reference_path": "VARCHAR DEFAULT ''",
                 "depth_reference_path": "VARCHAR DEFAULT ''",
                 "last_frame_path": "VARCHAR DEFAULT ''",
+                "style_fingerprint": "VARCHAR DEFAULT ''",
+                "media_stale": "BOOLEAN DEFAULT 0",
             },
         )
     if "projects" in inspector.get_table_names():
@@ -134,6 +136,8 @@ def _ensure_sqlite_columns() -> None:
                 "lora_profile": "TEXT DEFAULT ''",
                 "ip_adapter_profile": "TEXT DEFAULT ''",
                 "wardrobe_lock": "TEXT DEFAULT ''",
+                "style_fingerprint": "VARCHAR DEFAULT ''",
+                "asset_status": "VARCHAR DEFAULT 'active'",
             },
         )
     if "scene_assets" in inspector.get_table_names():
@@ -145,6 +149,8 @@ def _ensure_sqlite_columns() -> None:
                 "baseline_image_path": "VARCHAR DEFAULT ''",
                 "consistency_profile": "TEXT DEFAULT '{}'",
                 "prop_lock": "TEXT DEFAULT ''",
+                "style_fingerprint": "VARCHAR DEFAULT ''",
+                "asset_status": "VARCHAR DEFAULT 'active'",
             },
         )
     if "background_jobs" in inspector.get_table_names():
@@ -160,6 +166,7 @@ def _ensure_sqlite_columns() -> None:
                 "message": "VARCHAR DEFAULT '' NOT NULL",
                 "error_code": "VARCHAR DEFAULT '' NOT NULL",
                 "error_message": "VARCHAR DEFAULT '' NOT NULL",
+                "error_detail": "TEXT DEFAULT '' NOT NULL",
                 "attempt": "INTEGER DEFAULT 1 NOT NULL",
                 "retry_of": "VARCHAR",
                 "cancel_requested_at": "DATETIME",

@@ -9,7 +9,6 @@ class Settings(BaseSettings):
     DATA_DIR: Path = Path(__file__).parent / "data"
     OUTPUT_DIR: Path = Path(__file__).parent.parent / "output"
     ASSETS_DIR: Path = Path(__file__).parent.parent / "assets"
-    PROMPTS_DIR: Path = Path(__file__).parent / "prompts"
 
     # LLM 配置
     LLM_PROVIDER: str = "openai"  # openai / deepseek / mimo / seeddance
@@ -17,6 +16,8 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = ""
     OPENAI_MODEL: str = "gpt-4o"
     LLM_MAX_TOKENS: int = 4096
+    # 任务失败原因的 LLM 自动识别：关闭后只保留规则分类（离线/测试环境用）。
+    ERROR_ANALYSIS_LLM_ENABLED: bool = True
 
     # Mimo (小米 MiMo, 通过硅基流动 SiliconFlow 调用)
     MIMO_API_KEY: str = ""
@@ -32,20 +33,20 @@ class Settings(BaseSettings):
     SEEDDANCE_API_KEY: str = ""
     SEEDREAM_API_KEY: str = ""
     SEEDDANCE_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/v3"
-    SEEDDANCE_MODEL: str = "doubao-seedance-1-5-pro-251215"
-    VIDEO_PROVIDER: str = "Doubao-Seedance-1.5-pro"
-    SEEDREAM_MODEL: str = "doubao-seedream-5.0-lite"
+    SEEDDANCE_MODEL: str = "doubao-seedance-2-0-260128"
+    VIDEO_PROVIDER: str = "Doubao-Seedance-2.0"
+    SEEDREAM_MODEL: str = "doubao-seedream-5-0-lite-260128"
     SEEDREAM_IMAGE_SIZE: str = "1440x2560"
 
     # 阿里云百炼 DashScope (通义万相视频; VIDEO_PROVIDER 填 wanx/dashscope 时启用)
     DASHSCOPE_API_KEY: str = ""
     DASHSCOPE_BASE_URL: str = "https://dashscope.aliyuncs.com/api/v1"
-    DASHSCOPE_VIDEO_MODEL: str = "wan2.5-i2v-plus"
+    DASHSCOPE_VIDEO_MODEL: str = "wan2.7-i2v"
 
     # 阿里云百炼 Qwen-Image（IMAGE_PROVIDER=qwen-image 时启用）
     QWEN_IMAGE_API_KEY: str = ""
     QWEN_IMAGE_BASE_URL: str = "https://dashscope.aliyuncs.com/api/v1"
-    QWEN_IMAGE_MODEL: str = "qwen-image-plus"
+    QWEN_IMAGE_MODEL: str = "qwen-image-3.0"
     QWEN_IMAGE_SIZE: str = "1440x2560"
 
     # 阿里云百炼语音合成 CosyVoice（TTS_PROVIDER 填 dashscope/bailian/cosyvoice 时启用）
@@ -63,7 +64,7 @@ class Settings(BaseSettings):
     TENCENT_TTS_FORMAT: str = "wav"
 
     # 图像生成配置
-    # local = 无密钥占位图 stub(PIL 生成,使全流程可离线跑通); stability / doubao-seedream-5.0-lite / qwen-image = 真实云端服务
+    # local = 无密钥占位图 stub(PIL 生成,使全流程可离线跑通); stability / ark-seedream / qwen-image = 真实云端服务
     # 配置真实 provider 但缺少对应 API Key 时,会自动回退到占位图,不再报错中断
     IMAGE_PROVIDER: str = "local"
     STABILITY_API_KEY: str = ""
@@ -93,6 +94,23 @@ class Settings(BaseSettings):
     MAX_REMOTE_MEDIA_BYTES: int = 512 * 1024 * 1024
     MAX_IMAGE_GENERATION_BYTES: int = 32 * 1024 * 1024
     MAX_INLINE_REFERENCE_BYTES: int = 12 * 1024 * 1024
+    # 参考图内联（base64）的全局兜底预算（编码后字节数）。协议有已知的更高
+    # 网关上限时由适配器 capabilities.max_reference_inline_bytes 覆盖
+    # （如 ark-seedance 8MB）；未声明的协议沿用此值，超预算图片走 JPEG
+    # 压缩阶梯降级，压不进预算则明确报错而不是把超限请求发出去。
+    VIDEO_REFERENCE_INLINE_BUDGET_BYTES: int = 128 * 1024
+    # 需要参考图的阶段（角色三视图 / 场景基准图 / 绑定资产的定稿故事板）在
+    # 「当前图像 Provider 声明不支持参考图」且「没有其它已配置的参考图 Provider」
+    # 时的行为：
+    #   prefer（默认）—— 明确告警并如实记录 references_sent=0 后继续生成，
+    #                    绝不假装参考图已生效；界面与日志都会标注能力限制。
+    #   strict        —— 直接阻止生成，要求先切换到支持参考图的 Provider。
+    # 两种取值都不会静默丢弃参考图。
+    IMAGE_REFERENCE_ENFORCEMENT: str = "prefer"
+    # provider 出站请求是否继承系统/环境代理（httpx trust_env）。
+    # 全部端点都在国内直连可达的部署建议在 .env 里关闭，避免本机代理
+    # 把 API 请求绕到不稳定链路上。
+    PROVIDER_HTTP_TRUST_ENV: bool = True
     MAX_TTS_AUDIO_BYTES: int = 64 * 1024 * 1024
     # 字幕与音频混音工作台的上限（同样属于服务端安全边界）。
     MAX_AUDIO_UPLOAD_BYTES: int = 128 * 1024 * 1024

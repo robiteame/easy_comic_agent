@@ -2072,6 +2072,64 @@ button {
   font-weight: 600;
 }
 
+/* 参数已修改、素材待重新生成：旧素材保留展示，但必须给出明确提示。 */
+.thumb-item.media-stale::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border: 2px dashed var(--amber);
+  border-radius: inherit;
+}
+
+.thumb-stale-badge {
+  position: absolute;
+  left: 5px;
+  top: 5px;
+  z-index: 2;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(184, 146, 102, 0.92);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.media-stale-overlay {
+  position: absolute;
+  inset-inline: 0;
+  top: 10px;
+  z-index: 5;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.media-stale-overlay span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(184, 146, 102, 0.94);
+  color: #fff;
+  font-size: var(--font-label);
+  font-weight: 700;
+  box-shadow: 0 8px 18px rgba(120, 92, 60, 0.24);
+}
+
+.media-stale-note {
+  padding: var(--space-2);
+  border: 1px dashed var(--amber);
+  border-radius: var(--radius-sm);
+  background: rgba(217, 170, 112, 0.12);
+  color: var(--text-secondary);
+  font-size: var(--font-label);
+}
+
 .thumb-index {
   color: var(--text-tertiary);
   font-size: var(--font-meta);
@@ -3711,6 +3769,151 @@ html[data-theme='black'] .thumb-item img {
 
 .task-error {
   color: var(--red);
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.task-error > .anticon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.task-error-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 失败类别徽标：额度/限流类为琥珀色（可自查账户），配置/调用类为红色。 */
+.task-error-code {
+  flex: 0 0 auto;
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: var(--font-meta);
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.task-error-code-danger {
+  background: rgba(178, 105, 105, 0.16);
+  color: var(--red);
+}
+
+.task-error-code-warn {
+  background: rgba(184, 146, 102, 0.18);
+  color: var(--amber);
+}
+
+.task-error-code-muted {
+  background: var(--line-soft);
+  color: var(--text-tertiary);
+}
+
+/* 详情列的结构化失败信息：类别 + 摘要 + 修复建议 + 可展开的原始错误。 */
+.task-error-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid rgba(178, 105, 105, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(178, 105, 105, 0.06);
+}
+
+.task-error-block-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.task-error-block .task-error-code {
+  line-height: 20px;
+}
+
+.task-error-code-id {
+  color: var(--text-tertiary);
+  font-size: var(--font-meta);
+  overflow-wrap: anywhere;
+}
+
+.task-error-block .task-error-text {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-label);
+  line-height: 1.6;
+}
+
+.task-error-advice {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--amber);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: rgba(184, 146, 102, 0.1);
+  color: var(--text-secondary);
+  font-size: var(--font-label);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.task-error-raw summary {
+  cursor: pointer;
+  color: var(--text-tertiary);
+  font-size: var(--font-meta);
+  user-select: none;
+}
+
+.task-error-raw pre {
+  margin: 6px 0 0;
+  padding: var(--space-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--text-secondary);
+  font-size: var(--font-meta);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.task-error-source {
+  margin: 0;
+  color: var(--text-quaternary);
+  font-size: var(--font-meta);
+}
+
+/* 失败分组标题下的共性原因计数：点击切换该类别的筛选。 */
+.task-cat-chip {
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: var(--font-meta);
+  font-weight: 500;
+  cursor: pointer;
+  line-height: 18px;
+  background: transparent;
+}
+
+.task-cat-chip-danger {
+  border-color: rgba(178, 105, 105, 0.32);
+  color: var(--red);
+}
+
+.task-cat-chip-warn {
+  border-color: rgba(184, 146, 102, 0.36);
+  color: var(--amber);
+}
+
+.task-cat-chip-muted {
+  border-color: var(--line);
+  color: var(--text-tertiary);
+}
+
+.task-cat-chip-active {
+  background: rgba(79, 127, 216, 0.12);
+  border-color: rgba(79, 127, 216, 0.4);
+  color: var(--green-deep);
 }
 
 .task-message {

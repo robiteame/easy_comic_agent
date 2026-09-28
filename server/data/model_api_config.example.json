@@ -21,7 +21,7 @@
     "protocol": "ark-seedream",
     "api_key": "",
     "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-    "model": "doubao-seedream-5.0-lite",
+    "model": "doubao-seedream-5-0-lite-260128",
     "params": {
       "image_size": "1440x2560"
     }
@@ -30,7 +30,7 @@
     "protocol": "ark-seedance",
     "api_key": "",
     "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-    "model": "doubao-seedance-1-5-pro-251215",
+    "model": "doubao-seedance-2-0-260128",
     "params": {
       "audio_mode": "tts"
     }

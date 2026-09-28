@@ -51,6 +51,22 @@ async def lifespan(app: FastAPI):
         print("模型与 API 自定义配置已加载")
     except Exception as exc:  # noqa: BLE001
         print(f"模型与 API 自定义配置加载失败（沿用默认配置）: {exc}")
+    # 启动前 Provider 预检：把视频端点的协议/模型/能力如实打进日志，
+    # 不打印任何密钥内容；配置缺失时任务入口会给出结构化报错。
+    try:
+        from services.provider_readiness import video_provider_preflight
+
+        preflight = video_provider_preflight()
+        print(
+            "视频 Provider 预检: protocol={protocol} model={model} base_url={base_url_host} "
+            "api_key_configured={api_key_configured} reference_image={reference_image} "
+            "reference_mode={reference_mode} native_audio={native_audio} "
+            "fixed_duration={fixed_duration}".format(**preflight)
+        )
+        if preflight["issues"]:
+            print("视频 Provider 预检未通过: " + "；".join(preflight["issues"]))
+    except Exception as exc:  # noqa: BLE001
+        print(f"视频 Provider 预检失败: {exc}")
     yield
     print("服务关闭")
 
@@ -212,14 +228,14 @@ async def root():
     return {"name": "AI 漫剧 Agent", "version": "0.1.0", "status": "running"}
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     # The desktop shell uses this marker to distinguish ComicAgent from an
     # unrelated process that happens to occupy the fixed local API port.
     return {"status": "ok", "service": "comic-agent", "version": app.version}
 
 
-@app.get("/livez")
+@app.api_route("/livez", methods=["GET", "HEAD"])
 async def livez():
     return {"status": "ok", "service": "comic-agent", "version": app.version}
 

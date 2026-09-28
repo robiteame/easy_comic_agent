@@ -43,6 +43,7 @@ ShotStatus = Literal[
     "video_done",
     "failed",
     "needs_review",
+    "structural_check_passed",
 ]
 ScriptStatus = Literal["started", "already_running", "updated", "deleted"]
 
@@ -164,6 +165,8 @@ ReasonText = Annotated[
 ]
 
 EpisodeNumber = Annotated[int, Field(ge=0, le=settings.MAX_EPISODE_NUMBER)]
+# 关键镜头故事板候选数：至少 1 个，最多 2 个（每个候选各占一版版本历史）。
+CandidateCount = Annotated[int, Field(ge=1, le=2, allow_inf_nan=False)]
 ShotDuration = Annotated[
     float,
     BeforeValidator(_finite_float),

@@ -27,6 +27,19 @@ export type JobType =
   | 'render'
   | 'unknown'
 
+/**
+ * 失败原因分析结果（后端规则 + LLM 异步生成）。
+ *
+ * `source` 为 "llm" 时 summary/suggestion 由模型生成；分析未完成或被跳过时
+ * 整个字段为 null，界面回退到 error_code_label + error_message。
+ */
+export interface JobErrorDetail {
+  summary: string
+  suggestion: string
+  source: string
+  model: string
+}
+
 export interface JobDto {
   id: string
   scope: string
@@ -40,7 +53,10 @@ export interface JobDto {
   current_step: string
   message: string
   error_code: string
+  /** 失败类别的中文标签（服务端 error_code_label；历史行可能为空）。 */
+  error_code_label: string
   error_message: string
+  error_detail: JobErrorDetail | null
   attempt: number
   retry_of: string | null
   version: number
@@ -88,6 +104,7 @@ export interface JobAttemptDto {
   attempt: number
   status: JobStatus
   error_code: string
+  error_code_label: string
   error_message: string
   started_at: string | null
   finished_at: string | null

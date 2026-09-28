@@ -17,7 +17,10 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from services.providers.endpoint import endpoint_identity, get_endpoint
+from services.providers.registry import UnknownProtocolError, get_adapter
 
 CODE_PROVIDER_NOT_CONFIGURED = "provider_not_configured"
 
@@ -73,16 +76,14 @@ def missing_providers(
         if not _script_ready():
             issues.append(_issue("script"))
         if str(mode or "").strip().lower() == "auto":
-            if not _video_ready():
-                issues.append(_issue("video"))
+            issues.extend(_video_issues())
             voice = _voice_issue(has_dialogue=True, audio_mode_override="")
             if voice:
                 issues.append(voice)
         return issues
     if job_type == "shot_video":
         issues = []
-        if not _video_ready():
-            issues.append(_issue("video"))
+        issues.extend(_video_issues())
         voice = _voice_issue(has_dialogue=has_dialogue, audio_mode_override=audio_mode_override)
         if voice:
             issues.append(voice)
@@ -124,7 +125,94 @@ def _script_ready() -> bool:
 
 
 def _video_ready() -> bool:
-    return bool(str(get_endpoint("video").api_key or "").strip())
+    endpoint = get_endpoint("video")
+    if not str(endpoint.api_key or "").strip():
+        return False
+    return not _video_preflight_issues()
+
+
+def _video_issues() -> list[dict]:
+    """视频端点的启动前问题列表（API key + 预检明细）。"""
+    endpoint = get_endpoint("video")
+    if not str(endpoint.api_key or "").strip():
+        return [_issue("video")]
+    detail = _video_preflight_issues()
+    if not detail:
+        return []
+    return [
+        {
+            "capability": "video",
+            "label": CAPABILITY_LABELS.get("video", "video"),
+            "message": "视频 Provider 预检未通过: " + "；".join(detail),
+        }
+    ]
+
+
+def video_provider_preflight() -> dict:
+    """视频 Provider 启动前预检报告（不含任何密钥内容）。
+
+    验证 endpoint、model、API key、首帧参考图能力与固定时长能力；
+    本流水线要求视频 Provider 支持 ``reference_image``（first_frame_only 的
+    图生视频），不支持时预检失败并给出明确原因。
+    """
+    endpoint = get_endpoint("video")
+    report: dict = {
+        "capability": "video",
+        "protocol": endpoint.protocol,
+        "base_url": endpoint.base_url,
+        "base_url_host": urlparse(endpoint.base_url or "").hostname or "",
+        "model": endpoint.model,
+        "api_key_configured": bool(str(endpoint.api_key or "").strip()),
+        "adapter_registered": True,
+        "reference_image": False,
+        "reference_mode": "text_only",
+        "native_audio": False,
+        "fixed_duration": None,
+        "issues": [],
+    }
+    try:
+        adapter_cls = get_adapter("video", endpoint.protocol)
+    except UnknownProtocolError as exc:
+        report["adapter_registered"] = False
+        report["issues"].append(f"视频协议未注册适配器: {exc}")
+        return report
+
+    capabilities = getattr(adapter_cls, "capabilities", None)
+    if capabilities is not None:
+        report["reference_image"] = bool(capabilities.reference_image)
+        report["reference_mode"] = str(getattr(capabilities, "reference_mode", "text_only"))
+        report["native_audio"] = bool(capabilities.native_audio)
+        report["fixed_duration"] = getattr(capabilities, "fixed_duration", None)
+    if not report["api_key_configured"]:
+        report["issues"].append("视频端点未配置 API Key（视频没有本地回退，任务会被拒绝启动）")
+    report["issues"].extend(_video_preflight_issues())
+    return report
+
+
+def _video_preflight_issues() -> list[str]:
+    """视频端点的配置级问题（不触网、不读取密钥值）。"""
+    endpoint = get_endpoint("video")
+    issues: list[str] = []
+    if not str(endpoint.protocol or "").strip():
+        issues.append("视频协议为空")
+        return issues
+    try:
+        adapter_cls = get_adapter("video", endpoint.protocol)
+    except UnknownProtocolError as exc:
+        issues.append(f"视频协议未注册适配器: {exc}")
+        return issues
+    if not str(endpoint.model or "").strip():
+        issues.append(
+            f"视频协议 {endpoint.protocol} 未配置模型名（model），"
+            "请在「系统设置 → 模型服务」选择账号实际可用的模型"
+        )
+    capabilities = getattr(adapter_cls, "capabilities", None)
+    if capabilities is not None and not capabilities.reference_image:
+        issues.append(
+            f"视频协议 {endpoint.protocol} 不支持首帧参考图（first_frame_only 图生视频），"
+            "无法满足「已审核故事板首帧驱动」的生成流程"
+        )
+    return issues
 
 
 def _voice_issue(*, has_dialogue: bool | None, audio_mode_override: str) -> dict | None:
@@ -157,5 +245,6 @@ __all__ = [
     "format_message",
     "missing_providers",
     "native_video_audio_ready",
+    "video_provider_preflight",
     "voice_endpoint_configured",
 ]

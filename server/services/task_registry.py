@@ -47,6 +47,7 @@ from services.job_types import (
     STATUS_CANCELLED,
     STATUS_CANCELLING,
     STATUS_COMPLETED,
+    STATUS_FAILED,
     STATUS_INTERRUPTED,
     TERMINAL_STATUSES,
     JobKey,
@@ -533,6 +534,12 @@ def finish(
             _claim_tokens.pop(key, None)
         _settle(key, target, job_id=job_id)
         publish_job_event(terminal_event_for(target), payload)
+        if target == STATUS_FAILED:
+            # 失败归因在后台异步进行（规则 + LLM），完成后再推 job.updated；
+            # 惰性 import 避免 task_registry 与分析服务在启动期互相依赖。
+            from services.error_analysis_service import schedule_failure_analysis
+
+            schedule_failure_analysis(job_id)
         return True
     finally:
         db.close()

@@ -22,7 +22,7 @@ async def run(state: AgentState) -> dict:
             _build_task_prompt(
                 script_scenes=state.get("script_scenes", []),
                 characters=state.get("characters", []),
-                style=state.get("style", "anime"),
+                style=state.get("effective_style") or state.get("style", "anime"),
                 platform=state.get("platform", "douyin"),
                 target_duration=state.get("target_duration", 30),
             ),
@@ -99,7 +99,7 @@ def _build_task_prompt(script_scenes: list, characters: list, style: str, platfo
 角色：
 {json.dumps(characters, ensure_ascii=False, indent=2)}
 
-风格：{style}
+项目实际生效画风（必须严格遵守）：{style}
 平台：{platform}
 目标时长：{target_duration} 秒
 输出 JSON：
@@ -122,5 +122,11 @@ def _build_task_prompt(script_scenes: list, characters: list, style: str, platfo
   ]
 }}
 
-硬性一致性规则：同一 scene_number 属于同场景组。不得让同场景镜头出现昼夜、冷暖、光源方向、道具位置、人物站位和180度轴线跳变；Agent 会在后续生成阶段强制以场景组基准图、角色三视图和上一镜头末尾帧覆盖单镜头自定义参数。
+镜头设计硬性规则：
+1. 每个镜头只包含一个主体、一个主要动作和一个镜头运动；不要在一个镜头里堆叠多个动作节拍。
+2. 复杂动作（追逐、打斗、转身走位等）必须拆成多个短镜头，靠剪辑衔接。
+3. 每个镜头时长控制在 2 到 5 秒之间；视频模型按约 5 秒固定档出片，超出时长的镜头会被拒绝生成。
+4. 关键情绪/反转镜头可以标记 visual_notes 建议"生成 2 个候选供挑选"。
+
+风格与一致性规则：同一 scene_number 属于同场景组。不得让同场景镜头出现昼夜、冷暖、光源方向、道具位置、人物站位和180度轴线跳变；Agent 会在后续生成阶段强制以场景组基准图、角色三视图和上一镜头末尾帧覆盖单镜头自定义参数。
 """

@@ -222,17 +222,72 @@ ERROR_CODE_UNSUPPORTED = "job_type_unsupported"
 # 预算相关：硬预算超限会直接阻止任务启动，因此必须是稳定且可被前端分支的错误码。
 ERROR_CODE_BUDGET_EXCEEDED = "budget_exceeded"
 ERROR_CODE_BUDGET_SOFT_EXCEEDED = "budget_soft_exceeded"
+# 供应商侧细分：额度/限流/参数/依赖，任务中心据此展示具体失败原因。
+ERROR_CODE_QUOTA_EXCEEDED = "provider_quota_exceeded"
+ERROR_CODE_RATE_LIMITED = "provider_rate_limited"
+ERROR_CODE_INVALID_REQUEST = "provider_invalid_request"
+ERROR_CODE_DEPENDENCY_FAILED = "dependency_failed"
 
+# 规则按顺序匹配、先命中先赢：预算与取消等业务语义优先于供应商细分，
+# 供应商细分（额度/限流/参数）又必须排在泛化的 provider/config 之前。
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (ERROR_CODE_BUDGET_EXCEEDED, ("budget_exceeded", "超出项目硬预算", "硬预算", "预算不足")),
     (ERROR_CODE_BUDGET_SOFT_EXCEEDED, ("budget_soft_exceeded", "软预算")),
     (ERROR_CODE_SERVER_RESTART, ("server restarted", "restart")),
     (ERROR_CODE_JOB_CANCELLED, ("cancel", "取消", "版本已变化")),
+    (ERROR_CODE_DEPENDENCY_FAILED, ("前置阶段失败", "dependency failed")),
     (ERROR_CODE_TIMEOUT, ("timeout", "timed out", "超时")),
-    (ERROR_CODE_CONFIG, ("api key", "未配置", "unauthorized", "401", "403", "缺少")),
-    (ERROR_CODE_PROVIDER, ("provider", "供应商", "connection", "connect", "http")),
+    (
+        ERROR_CODE_QUOTA_EXCEEDED,
+        (
+            "quota",
+            "arrears",
+            "insufficient balance",
+            "resourceinsufficient",
+            "allocationquota",
+            "欠费",
+            "余额不足",
+            "额度不足",
+            "账户已被禁用",
+        ),
+    ),
+    (
+        ERROR_CODE_RATE_LIMITED,
+        ("429", "rate limit", "too many requests", "throttl", "RequestsThrottled", "限流", "流控"),
+    ),
+    (ERROR_CODE_CONFIG, ("api key", "未配置", "unauthorized", "401", "403", "缺少", "鉴权失败")),
+    (
+        ERROR_CODE_INVALID_REQUEST,
+        ("400", "invalid parameter", "invalidparameter", "badrequest", "参数错误", "参数无效", "参数不合法"),
+    ),
+    (ERROR_CODE_PROVIDER, ("provider", "供应商", "connection", "connect", "http", "500", "502", "503", "504", "404", "internal server", "服务端错误")),
     (ERROR_CODE_STORAGE, ("disk", "storage", "no space", "磁盘", "存储")),
 )
+
+# 全部错误码的中文展示标签；error_code 是稳定标识，标签只用于界面展示。
+ERROR_CODE_LABELS = {
+    ERROR_CODE_JOB_FAILED: "任务失败",
+    ERROR_CODE_JOB_CANCELLED: "任务已取消",
+    ERROR_CODE_JOB_INTERRUPTED: "任务被中断",
+    ERROR_CODE_SERVER_RESTART: "服务重启中断",
+    ERROR_CODE_TIMEOUT: "调用超时",
+    ERROR_CODE_PROVIDER: "API 调用失败",
+    ERROR_CODE_CONFIG: "鉴权失败或未配置",
+    ERROR_CODE_QUOTA_EXCEEDED: "额度不足",
+    ERROR_CODE_RATE_LIMITED: "触发限流",
+    ERROR_CODE_INVALID_REQUEST: "API 参数错误",
+    ERROR_CODE_DEPENDENCY_FAILED: "前置阶段失败",
+    ERROR_CODE_STORAGE: "存储异常",
+    ERROR_CODE_VALIDATION: "请求不合法",
+    ERROR_CODE_NOT_FOUND: "任务不存在",
+    ERROR_CODE_NOT_RETRYABLE: "任务不可重试",
+    ERROR_CODE_NOT_RESUMABLE: "任务不可续跑",
+    ERROR_CODE_SCOPE_CONFLICT: "任务作用域冲突",
+    ERROR_CODE_ALREADY_RUNNING: "任务已在运行",
+    ERROR_CODE_UNSUPPORTED: "任务类型不支持",
+    ERROR_CODE_BUDGET_EXCEEDED: "超出项目预算",
+    ERROR_CODE_BUDGET_SOFT_EXCEEDED: "接近预算上限",
+}
 
 
 def classify_error_code(text: str) -> str:
@@ -257,6 +312,14 @@ def error_code_for_status(status: str, text: str = "") -> str:
     return classify_error_code(text)
 
 
+def error_code_label(code: str) -> str:
+    """错误码的中文展示标签；未知或空码回退到通用失败描述。"""
+
+    if not code:
+        return ""
+    return ERROR_CODE_LABELS.get(code, ERROR_CODE_LABELS[ERROR_CODE_JOB_FAILED])
+
+
 __all__ = [
     "ACTIVE_STATUSES",
     "ALLOWED_TRANSITIONS",
@@ -265,6 +328,8 @@ __all__ = [
     "ERROR_CODE_BUDGET_EXCEEDED",
     "ERROR_CODE_BUDGET_SOFT_EXCEEDED",
     "ERROR_CODE_CONFIG",
+    "ERROR_CODE_DEPENDENCY_FAILED",
+    "ERROR_CODE_INVALID_REQUEST",
     "ERROR_CODE_JOB_CANCELLED",
     "ERROR_CODE_JOB_FAILED",
     "ERROR_CODE_JOB_INTERRUPTED",
@@ -272,12 +337,15 @@ __all__ = [
     "ERROR_CODE_NOT_RESUMABLE",
     "ERROR_CODE_NOT_RETRYABLE",
     "ERROR_CODE_PROVIDER",
+    "ERROR_CODE_QUOTA_EXCEEDED",
+    "ERROR_CODE_RATE_LIMITED",
     "ERROR_CODE_SCOPE_CONFLICT",
     "ERROR_CODE_SERVER_RESTART",
     "ERROR_CODE_STORAGE",
     "ERROR_CODE_TIMEOUT",
     "ERROR_CODE_UNSUPPORTED",
     "ERROR_CODE_VALIDATION",
+    "ERROR_CODE_LABELS",
     "JOB_STATUSES",
     "JOB_TYPES",
     "JOB_TYPE_ASSET_GENERATION",
@@ -306,6 +374,7 @@ __all__ = [
     "can_transition",
     "classify_error_code",
     "error_code_for_status",
+    "error_code_label",
     "job_type_label",
     "parse_job_key",
     "status_label",

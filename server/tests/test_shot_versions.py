@@ -146,7 +146,11 @@ class EditVersionChainTests(ShotVersionTestCase):
         self.assertEqual(snapshot["video_path"], "clip.mp4")
         self.assertEqual(snapshot["audio_path"], "voice.wav")
         self.db.expire_all()
-        self.assertEqual(self.db.get(Shot, downstream.id).video_path, "")
+        refreshed = self.db.get(Shot, downstream.id)
+        # 素材只标记过期（media_stale），媒体路径必须保留供预览与回滚。
+        self.assertEqual(refreshed.video_path, "clip.mp4")
+        self.assertEqual(refreshed.audio_path, "voice.wav")
+        self.assertTrue(refreshed.media_stale)
 
 
 class RegenerationVersionTests(ShotVersionTestCase):

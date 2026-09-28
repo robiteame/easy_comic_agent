@@ -56,7 +56,7 @@ async def run(state: AgentState) -> dict:
     try:
         result = await llm_service.call_json(
             _load_system_prompt(),
-            _build_task_prompt(user_input, rag_context),
+            _build_task_prompt(user_input, rag_context, state.get("effective_style") or state.get("style", "anime")),
             temperature=0.25,
         )
     except Exception as exc:
@@ -69,7 +69,8 @@ async def run(state: AgentState) -> dict:
     except LLMOutputError as exc:
         raise RuntimeError(f"Mimo 剧本解析结果无法使用: {exc}") from exc
 
-    characters = _build_characters(parsed.characters)
+    effective_style = state.get("effective_style") or state.get("style") or "anime"
+    characters = _build_characters(parsed.characters, effective_style)
     if not characters:
         raise RuntimeError("Mimo 剧本解析结果缺少可用角色")
     script_scenes = _build_scenes(parsed.script_scenes, characters)
@@ -82,14 +83,17 @@ async def run(state: AgentState) -> dict:
         {
             "script_scenes": script_scenes,
             "genre": parsed.genre or "原创短剧",
-            "style_suggestion": parsed.style_suggestion,
+            "style_suggestion": effective_style,
         },
     )
 
     return {
         "script_title": parsed.title or _guess_title(user_input),
         "genre": parsed.genre or "原创短剧",
-        "style_suggestion": parsed.style_suggestion,
+        "style_suggestion": effective_style,
+        "requested_style": state.get("requested_style") or effective_style,
+        "effective_style": effective_style,
+        "style_source": state.get("style_source") or "project_request",
         "characters": characters,
         "raw_script": json.dumps(script_scenes, ensure_ascii=False),
         "script_scenes": script_scenes,
@@ -99,7 +103,7 @@ async def run(state: AgentState) -> dict:
     }
 
 
-def _build_characters(items: list[CharacterOutput]) -> list[dict]:
+def _build_characters(items: list[CharacterOutput], effective_style: str = "anime") -> list[dict]:
     """把已校验的角色输出补全为角色卡片（音色、情绪变体、固定 seed）。"""
 
     characters: list[dict] = []
@@ -112,7 +116,7 @@ def _build_characters(items: list[CharacterOutput]) -> list[dict]:
                 "name": name,
                 "appearance": dict(item.appearance),
                 "personality": item.personality or "性格鲜明，行动目标清晰",
-                "visual_prompt": item.visual_prompt or f"{name}, expressive finished color comic character design",
+                "visual_prompt": item.visual_prompt or _default_visual_prompt(name, effective_style),
                 "negative_prompt": item.negative_prompt or "low quality, blurry, watermark",
                 "voice_id": normalize_mimo_voice(item.voice_type or "少女"),
                 "key_features": item.key_features or _split_features(item.appearance.get("features", "")),
@@ -162,9 +166,17 @@ def _load_system_prompt() -> str:
     )
 
 
-def _build_task_prompt(user_input: str, rag_context: list[str]) -> str:
+def _default_visual_prompt(name: str, effective_style: str) -> str:
+    if effective_style == "realistic":
+        return f"{name}, expressive live-action human portrait, natural skin texture, realistic wardrobe and anatomy"
+    return f"{name}, expressive {effective_style} character reference, finished production design"
+
+
+def _build_task_prompt(user_input: str, rag_context: list[str], effective_style: str = "anime") -> str:
     context = "\n\n参考内容：\n" + "\n---\n".join(rag_context) if rag_context else ""
     return f"""
+项目实际生效画风（必须严格遵守，不要自行猜测或改写）：{effective_style}
+
 请解析以下剧本或故事，输出 JSON：
 {user_input}{context}
 
@@ -172,7 +184,7 @@ JSON 结构：
 {{
   "title": "剧名",
   "genre": "类型",
-  "style_suggestion": "anime/chinese/chibi/realistic",
+  "style_suggestion": "{effective_style}",
   "characters": [
     {{
       "name": "角色名",

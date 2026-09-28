@@ -1,0 +1,127 @@
+# ============================================
+# AI漫剧Agent - Global .gitignore
+# ============================================
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.lnk
+
+# ---- IDE ----
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.so
+
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python type checking
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# ---- Node / Electron ----
+node_modules/
+dist/
+out/
+release/
+*.tgz
+
+# Desktop bundle staging: bundled Python runtime + static ffmpeg produced by
+# client/scripts/build-python-runtime.mjs (client/release/ output likewise).
+client/build/
+client/release/
+
+# Electron
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+*.snap
+*.exe
+*.msi
+
+# pnpm
+pnpm-debug.yaml
+# pnpm 内容寻址缓存:全局 store 与项目不在同一卷时会在项目根目录生成
+.pnpm-store/
+
+# ---- Environment & Secrets ----
+.env
+.env.local
+.env.*.local
+# Runtime model/API configuration may contain credentials. Keep only the
+# sanitized example in version control.
+server/data/model_api_config.json
+
+# ---- Project Runtime Data ----
+# Server output (generated images, audio, video)
+output/
+server/output/
+# Uploaded scripts and imported media
+server/data/uploads/
+# ChromaDB vector store
+server/data/chromadb/
+# LangGraph checkpoints
+server/data/checkpoints/
+# SQLite database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# ---- Build Artifacts ----
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---- Misc ----
+*.tmp
+*.bak
+*.cache
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

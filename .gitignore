@@ -97,3 +97,6 @@ yarn-error.log*
 *.tmp
 *.bak
 *.cache
+
+# ZCode 会话数据
+.zcode/

@@ -6,7 +6,11 @@ import {
   EMPTY_FILTERED_TEXT,
   applyJobEvent,
   emptyStateText,
+  errorCategoryLabel,
+  errorHeadline,
   errorSummary,
+  effectiveErrorCode,
+  errorCodeTone,
   filterJobs,
   formatClock,
   matchesFilters,
@@ -207,7 +211,60 @@ assert.equal(formatRelativeTime('2024-12-30T12:00:00', now), '12-30')
 assert.equal(progressText(makeJob({ progress: 37 })), '37%')
 assert.equal(progressText(makeJob({ status: 'completed', progress: 0 })), '100%')
 assert.equal(errorSummary(failed).startsWith('job_failed'), false)
-assert.equal(errorSummary(makeJob({ error_code: 'provider_error', error_message: '模型不可用' })), 'provider_error：模型不可用')
+assert.equal(errorSummary(makeJob({ error_code: 'provider_error', error_message: '模型不可用' })), 'API 调用失败：模型不可用')
+assert.equal(
+  errorSummary(makeJob({ error_code: 'provider_quota_exceeded', error_code_label: '额度不足', error_message: 'AccountHasArrears' })),
+  '额度不足：AccountHasArrears',
+  '服务端标签优先于前端兜底映射',
+)
+
+// --- 失败类别：标签 / 色调 / 归一化 / 筛选 / 统计 --------------------------
+
+assert.equal(errorCategoryLabel(makeJob({ error_code: 'provider_rate_limited', error_message: '429' })), '触发限流', '缺服务端标签时用前端兜底映射')
+assert.equal(errorCodeTone('provider_quota_exceeded'), 'warn', '额度/限流类用警示色调')
+assert.equal(errorCodeTone('provider_invalid_request'), 'danger', '参数/鉴权/调用失败用错误色调')
+assert.equal(errorCodeTone('dependency_failed'), 'muted', '环境/业务类用弱化色调')
+assert.equal(effectiveErrorCode(makeJob({ status: 'failed', error_code: '' })), 'job_failed', '历史空错误码按 job_failed 参与筛选统计')
+
+const withDetail = makeJob({
+  error_code: 'provider_quota_exceeded',
+  error_code_label: '额度不足',
+  error_message: 'Volcano Ark: AccountHasArrears',
+  error_detail: { summary: '火山方舟账户欠费，余额不足', suggestion: '前往火山方舟控制台充值后重试', source: 'llm', model: 'mimo' },
+})
+assert.equal(errorHeadline(withDetail), '火山方舟账户欠费，余额不足', 'LLM 摘要优先作为失败原因首行')
+assert.equal(errorHeadline(makeJob({ error_message: '原始错误' })), '原始错误', '无分析结果时回落原始短消息')
+const badDetail = makeJob({ error_detail: 'not-an-object' })
+assert.equal(badDetail?.error_detail, null, '非法分析结果必须归一化为 null')
+
+assert.equal(
+  filterJobs(all, { ...DEFAULT_FILTERS, errorCodes: ['provider_quota_exceeded'] }).length,
+  0,
+  '按失败类别筛选：不匹配的类别被过滤',
+)
+assert.equal(
+  filterJobs([failed, withDetail], { ...DEFAULT_FILTERS, errorCodes: ['provider_quota_exceeded'] }).length,
+  1,
+  '按失败类别筛选：命中类别保留',
+)
+assert.equal(
+  filterJobs([makeJob({ id: 'legacy', status: 'failed', error_code: '' })], { ...DEFAULT_FILTERS, errorCodes: ['job_failed'] }).length,
+  1,
+  '空错误码的失败任务按 job_failed 命中「其他失败」筛选',
+)
+
+const quotaA = makeJob({ id: 'q1', status: 'failed', error_code: 'provider_quota_exceeded' })
+const quotaB = makeJob({ id: 'q2', status: 'failed', error_code: 'provider_quota_exceeded' })
+const rateLimited = makeJob({ id: 'q3', status: 'failed', error_code: 'provider_rate_limited' })
+const counted = summarizeJobs([quotaA, quotaB, rateLimited, completed])
+assert.deepEqual(
+  counted.failedByCategory,
+  [
+    { code: 'provider_quota_exceeded', label: '额度不足', count: 2 },
+    { code: 'provider_rate_limited', label: '触发限流', count: 1 },
+  ],
+  '失败统计按类别计数并按数量降序',
+)
 
 // --- 查询参数 / 重连 / ARIA / 跳转 ---------------------------------------
 
