@@ -11,6 +11,13 @@ capabilities.native_audio=False 供音频路由识别。图生视频模型（wan
   Wan 3.0 默认生成有声视频，显式 ``audio=false`` 维持无声契约；
 - Wan 2.6 及更早（旧代）：``input.img_url`` 携带首帧；``parameters.resolution``
   同为档位取值（像素级 size 已从文档移除）。
+
+r2v（参考生视频，如 wan2.7-r2v）的 media 契约：参考图像/参考视频至少传入
+1 个，仅传首帧会被服务商判 InvalidParameter（任务创建成功但调度即失败）。
+已审核故事板首帧会同时以 first_frame + reference_image 重复传入——官方推荐
+「首帧已含主体时搭配主体参考强化一致性」的用法，首帧驱动契约保持不变。
+wan2.7 默认生成有声视频且无 audio 参数可关，视频自带音轨由成片混音阶段
+按「无声视频 + 独立 TTS」契约丢弃（对白轨优先，无对白补静音）。
 """
 
 from __future__ import annotations
@@ -119,7 +126,7 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
         if self._uses_media_input():
             # Wan 2.7 / 3.0：首帧放 input.media 数组。
             if img_url:
-                task_input["media"] = [{"type": "first_frame", "url": img_url}]
+                task_input["media"] = self._media_entries(img_url)
         elif img_url:
             # Wan 2.6 及更早：首帧放 input.img_url。
             task_input["img_url"] = img_url
@@ -179,13 +186,41 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
         raise TimeoutError(f"百炼视频任务超时: {task_id}")
 
     def _resolve_resolution(self, resolution: str) -> str:
-        """把请求分辨率归一化为万相档位（480P/720P/1080P）。"""
+        """把请求分辨率归一化为万相档位。
+
+        全系覆盖 480P/720P/1080P，但 Wan 2.6 / 2.7 仅提供 720P/1080P 档位
+        （r2v / i2v 官方文档一致），480P 直传会被判 InvalidParameter，
+        统一降 720P；2K/4K 等更高档位或未知值回落到 1080P（万相最高档）。
+        """
 
         value = str(resolution or "").strip().upper()
-        if value in _RESOLUTION_TIERS:
-            return value
-        # 2K/4K 等更高档位或未知值统一回落到 1080P（万相最高档）。
-        return "1080P"
+        if value not in _RESOLUTION_TIERS:
+            return "1080P"
+        if value == "480P" and self._limited_resolution_model():
+            return "720P"
+        return value
+
+    def _limited_resolution_model(self) -> bool:
+        """Wan 2.6 / 2.7 系列仅提供 720P/1080P 档位（Wan 2.5/3.0 支持 480P）。"""
+
+        model = (self.endpoint.model or "").strip().lower()
+        return model.startswith("wan2.6") or model.startswith("wan2.7")
+
+    def _media_entries(self, img_url: str) -> list[dict[str, str]]:
+        """构造 input.media 素材数组（首帧驱动 + r2v 参考素材契约）。"""
+
+        media: list[dict[str, str]] = [{"type": "first_frame", "url": img_url}]
+        if self._is_reference_to_video_model():
+            # r2v 要求参考图像/参考视频至少 1 个，仅传 first_frame 会在任务
+            # 调度阶段被判 InvalidParameter；故事板首帧已含主体，同一张图
+            # 以主体参考身份重复传入即可满足契约。
+            media.append({"type": "reference_image", "url": img_url})
+        return media
+
+    def _is_reference_to_video_model(self) -> bool:
+        """r2v（参考生视频）模型，含带日期后缀的变体（wan2.7-r2v-2026-06-12）。"""
+
+        return "-r2v" in (self.endpoint.model or "").strip().lower()
 
     def _uses_media_input(self) -> bool:
         """Wan 2.7 / 3.0 新一代接口以 input.media 数组承载参考素材。"""
@@ -194,7 +229,11 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
         return model.startswith("wan2.7") or model.startswith("wan3")
 
     def _generates_audio_by_default(self) -> bool:
-        """Wan 3.0 默认输出有声视频（audio=true），需显式关闭。"""
+        """Wan 3.0 默认输出有声视频（audio=true），需显式关闭。
+
+        wan2.7 同样默认有声，但已移除 audio 参数无法关闭；其自带音轨由成片
+        混音按「无声视频 + 独立 TTS」契约丢弃，无需在此处理。
+        """
 
         return (self.endpoint.model or "").strip().lower().startswith("wan3")
 

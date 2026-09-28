@@ -126,12 +126,17 @@ class DashscopeWanxAdapterTests(unittest.TestCase):
         self.adapter = DashscopeWanxVideoAdapter(_wanx_endpoint())
 
     def test_resolve_resolution(self) -> None:
+        # 默认端点模型 wan2.6-i2v 仅提供 720P/1080P 档位，480P 自动降档。
         self.assertEqual(self.adapter._resolve_resolution("720p"), "720P")
         self.assertEqual(self.adapter._resolve_resolution("1080p"), "1080P")
-        self.assertEqual(self.adapter._resolve_resolution("480p"), "480P")
+        self.assertEqual(self.adapter._resolve_resolution("480p"), "720P")
         # 2K/4K/未知值统一回落到万相最高档 1080P。
         self.assertEqual(self.adapter._resolve_resolution("4k"), "1080P")
         self.assertEqual(self.adapter._resolve_resolution(""), "1080P")
+        # Wan 2.5 / 3.0 支持全部档位，480P 原样通过。
+        for model in ("wan2.5-i2v-preview", "wan3.0-video"):
+            adapter = DashscopeWanxVideoAdapter(_wanx_endpoint(model=model))
+            self.assertEqual(adapter._resolve_resolution("480p"), "480P")
 
     def test_create_task_payload_and_headers(self) -> None:
         client = _FakeAsyncClient(
@@ -203,6 +208,49 @@ class DashscopeWanxAdapterTests(unittest.TestCase):
         self.assertNotIn("img_url", payload["input"])
         self.assertEqual(payload["input"]["media"][0]["type"], "first_frame")
         self.assertNotIn("audio", payload["parameters"])
+
+    def test_create_task_r2v_pairs_reference_image_with_first_frame(self) -> None:
+        # r2v 契约：参考图像/参考视频至少 1 个，仅传 first_frame 会被服务商判
+        # InvalidParameter；已审核故事板首帧同时以主体参考身份重复传入。
+        adapter = DashscopeWanxVideoAdapter(_wanx_endpoint(model="wan2.7-r2v"))
+        client = _FakeAsyncClient(
+            [_FakeResponse({"output": {"task_id": "tid-r", "task_status": "PENDING"}})]
+        )
+        from services.providers.base import VideoRequest
+
+        request = VideoRequest(
+            prompt="少女在雨中奔跑",
+            reference_image="data:image/png;base64,AAAA",
+            duration=5,
+            resolution="480p",
+        )
+        with patch("services.providers.video_dashscope_wanx.httpx.AsyncClient", return_value=client):
+            asyncio.run(adapter._create_task(request))
+        payload = client.requests[0]["json"]
+        self.assertNotIn("img_url", payload["input"])
+        self.assertEqual(
+            payload["input"]["media"],
+            [
+                {"type": "first_frame", "url": "data:image/png;base64,AAAA"},
+                {"type": "reference_image", "url": "data:image/png;base64,AAAA"},
+            ],
+        )
+        # r2v 仅提供 720P/1080P 档位，480P 请求自动降档。
+        self.assertEqual(payload["parameters"]["resolution"], "720P")
+
+    def test_r2v_detection_covers_dated_model_variants(self) -> None:
+        adapter = DashscopeWanxVideoAdapter(_wanx_endpoint(model="wan2.7-r2v-2026-06-12"))
+        self.assertTrue(adapter._is_reference_to_video_model())
+        media = adapter._media_entries("data:image/png;base64,AAAA")
+        self.assertEqual([item["type"] for item in media], ["first_frame", "reference_image"])
+        # 非 r2v 的 media 输入模型（i2v / All-in-One）仅传首帧。
+        for model in ("wan2.7-i2v", "wan3.0-video"):
+            adapter = DashscopeWanxVideoAdapter(_wanx_endpoint(model=model))
+            self.assertFalse(adapter._is_reference_to_video_model())
+            self.assertEqual(
+                adapter._media_entries("data:image/png;base64,AAAA"),
+                [{"type": "first_frame", "url": "data:image/png;base64,AAAA"}],
+            )
 
     def test_create_task_text_only_omits_reference_fields(self) -> None:
         client = _FakeAsyncClient(
