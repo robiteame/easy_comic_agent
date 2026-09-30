@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Iterable, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Sequence
+
+from services.shot_dialogue import parse_shot_dialogue
 
 from config import settings
 
@@ -241,30 +243,132 @@ MIN_CUE_MS = 800
 
 
 @dataclass
+class DialogueLineInput:
+    """镜头内单句对白（结构化）：时间轴为相对镜头起点的毫秒偏移。"""
+
+    speaker: str = ""
+    line: str = ""
+    start_ms: int | None = None
+    end_ms: int | None = None
+
+
+@dataclass
 class ShotDialogueInput:
-    """生成字幕所需的镜头信息（由路由层从 Shot ORM 构建）。"""
+    """生成字幕所需的镜头信息（由路由层从 Shot ORM 构建）。
+
+    ``lines`` 为结构化对白（新口径，逐句生成 cue）；为空时回落到旧口径——
+    整镜一条 ``dialogue`` 文本 + 单一 ``character_name``。
+    """
 
     shot_id: str
     sequence: int
     start_ms: int  # 该镜头在时间线上的起点（按镜头时长累积）
     duration_ms: int
-    dialogue: str
+    dialogue: Any
     character_name: str = ""
     tts_duration_ms: int = 0  # TTS 音频实际时长；0 表示未知
+    lines: list[DialogueLineInput] = field(default_factory=list)
+
+
+def _cue_text_safe(text: str) -> str:
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    try:
+        return validate_cue_text(text)
+    except SubtitleValidationError:
+        return text[: settings.MAX_SUBTITLE_CUE_CHARS].strip()
+
+
+def _cues_from_lines(shot: ShotDialogueInput, lines: Sequence[DialogueLineInput]) -> list[SubtitleCueData]:
+    """逐句字幕：优先使用结构化对白的实测时间轴，缺失时按句均分镜头预算。"""
+
+    shot_start = max(0, int(shot.start_ms))
+    shot_end = shot_start + max(0, int(shot.duration_ms))
+    usable = [line for line in lines if str(line.line or "").strip()]
+    if not usable:
+        return []
+    explicit = all(
+        line.start_ms is not None and line.end_ms is not None and int(line.end_ms) > int(line.start_ms)
+        for line in usable
+    )
+    cues: list[SubtitleCueData] = []
+    if explicit:
+        for line in usable:
+            rel_start = max(0, int(line.start_ms or 0))
+            rel_end = max(rel_start, int(line.end_ms or 0))
+            start = min(shot_start + rel_start, shot_end)
+            end = min(shot_start + rel_end, shot_end)
+            if end <= start:
+                end = min(start + MIN_CUE_MS, shot_end)
+            text = _cue_text_safe(line.line)
+            if text and end > start:
+                cues.append(
+                    SubtitleCueData(
+                        start_ms=start,
+                        end_ms=end,
+                        text=text,
+                        character_name=str(line.speaker or "").strip(),
+                    )
+                )
+        return cues
+
+    # 时间轴不完整（原生音视频镜头 / 旧数据）：TTS 总时长（不越出镜头）按句
+    # 均分，保证多句对白严格按顺序错开。
+    budget = max(0, int(shot.duration_ms))
+    if shot.tts_duration_ms > 0:
+        budget = max(min(int(shot.tts_duration_ms), budget), min(MIN_CUE_MS, budget))
+    share = max(50, budget // max(1, len(usable)))
+    for index, line in enumerate(usable):
+        start = min(shot_start + index * share, shot_end)
+        end = min(start + share, shot_end)
+        text = _cue_text_safe(line.line)
+        if text and end > start:
+            cues.append(
+                SubtitleCueData(
+                    start_ms=start,
+                    end_ms=end,
+                    text=text,
+                    character_name=str(line.speaker or "").strip(),
+                )
+            )
+    return cues
+
+
+def _shot_lines(shot: ShotDialogueInput) -> list[DialogueLineInput]:
+    """镜头的逐句对白：优先取显式 ``lines``；否则尝试把 ``dialogue`` 解析为
+    结构化列表（列表 / JSON 数组文本）。旧版纯文本返回空，走整镜单条口径。"""
+
+    lines = list(getattr(shot, "lines", None) or [])
+    if lines:
+        return lines
+    raw = shot.dialogue
+    if isinstance(raw, (list, tuple)) or (isinstance(raw, str) and raw.strip().startswith("[")):
+        from services.shot_dialogue import parse_shot_dialogue
+
+        parsed = parse_shot_dialogue(raw, warn_key=f"subtitle shot {shot.shot_id}")
+        return [
+            DialogueLineInput(speaker=line.speaker, line=line.line, start_ms=line.start_ms, end_ms=line.end_ms)
+            for line in parsed
+        ]
+    return []
 
 
 def cues_from_shots(shots: Sequence[ShotDialogueInput]) -> list[SubtitleCueData]:
-    """按镜头区间生成字幕：时长优先取 TTS 实际时长，且不超出镜头边界。"""
+    """按镜头区间生成字幕：结构化对白逐句出 cue，旧口径整镜一条。
+
+    时长优先取 TTS 实际时长，且不超出镜头边界；逐句 cue 严格按说话顺序排列。
+    """
 
     cues: list[SubtitleCueData] = []
     for shot in shots:
-        text = str(shot.dialogue or "").strip()
+        lines = _shot_lines(shot)
+        if lines:
+            cues.extend(_cues_from_lines(shot, lines))
+            continue
+        text = _cue_text_safe(shot.dialogue)
         if not text:
             continue
-        try:
-            text = validate_cue_text(text)
-        except SubtitleValidationError:
-            text = text[: settings.MAX_SUBTITLE_CUE_CHARS].strip()
         start = max(0, int(shot.start_ms))
         available = max(0, int(shot.duration_ms))
         duration = available
@@ -414,6 +518,7 @@ def detect_cue_overlaps(cues: Sequence[SubtitleCueData]) -> list[SubtitleOverlap
 
 __all__ = [
     "MIN_CUE_MS",
+    "DialogueLineInput",
     "ShotDialogueInput",
     "SubtitleCueData",
     "SubtitleOverlapWarning",

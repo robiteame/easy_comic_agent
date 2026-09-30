@@ -18,7 +18,13 @@ from services.providers.usage import CAPABILITY_IMAGE, UsageMetadata
 
 
 class ArkSeedreamImageAdapter(BaseAdapter):
-    capabilities = ImageCapabilities(reference_images=True, requires_credentials=True)
+    capabilities = ImageCapabilities(
+        reference_images=True,
+        max_reference_images=14,
+        reference_parameter="image",
+        reference_weight_policy="text_only_policy",
+        requires_credentials=True,
+    )
 
     def usage_for_request(
         self,

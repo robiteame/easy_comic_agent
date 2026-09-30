@@ -6,6 +6,7 @@
  * 「调用纯函数 + 渲染 / 发送请求」，业务判断不散落在 JSX 里。
  */
 
+import { formatDialogueForEditor } from '../services/dialogueTimeline.ts'
 import type {
   ShotVersionDiffRow,
   ShotVersionSnapshot,
@@ -105,10 +106,18 @@ export function formatVersionTime(iso: string | null): string {
   return date.toLocaleString('zh-CN', { hour12: false })
 }
 
-/** 字段取值的展示文案：对象/数组紧凑 JSON，空值显示占位符。 */
-export function formatSnapshotValue(value: unknown): string {
+/** 字段取值的展示文案：对象/数组紧凑 JSON，空值显示占位符。
+ *
+ * 对白字段（结构化列表）按「说话人 | 情绪 | 时间轴 | 台词」逐行展示，
+ * 让版本对比能直接看出说话人差异，而不是一串难读的 JSON。
+ */
+export function formatSnapshotValue(value: unknown, field = ''): string {
   if (value === null || value === undefined || value === '') return EMPTY_VALUE_TEXT
   if (typeof value === 'boolean') return value ? '是' : '否'
+  if (field === 'dialogue' && Array.isArray(value)) {
+    const text = formatDialogueForEditor(value)
+    return text || EMPTY_VALUE_TEXT
+  }
   if (typeof value === 'object') {
     const text = JSON.stringify(value)
     return text === '{}' || text === '[]' ? EMPTY_VALUE_TEXT : text

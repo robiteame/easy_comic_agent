@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -16,11 +16,18 @@ from api.schemas import (
     ShortKey,
     ShotText,
     VisualNotes,
+    ReasonText,
 )
 from db import get_db
 from models import Character, Project, SceneAsset, Shot
 from services.image_service import ImageService
 from services.invalidation_service import invalidate_asset_consumers, mark_shot_media_stale
+from services.reference_readiness_service import (
+    accept_degraded_reference,
+    mark_reference_failure,
+    mark_reference_success,
+    refresh_project_reference_state,
+)
 from services.security import validate_identifier
 from services.shot_version_service import create_version
 from services.task_registry import cancel_scopes
@@ -55,6 +62,14 @@ class CharacterAssetUpdate(BaseModel):
     regenerate: bool = False
 
 
+class ReferenceActionRequest(BaseModel):
+    project_id: OptionalIdentifier | None = None
+    action: Literal["retry", "replace_prompt", "regenerate", "skip"] = "retry"
+    visual_prompt: VisualNotes | None = None
+    reason: ReasonText = ""
+    confirm_degraded: bool = False
+
+
 class SceneAssetUpdate(BaseModel):
     project_id: OptionalIdentifier | None = None
     name: CharacterName | None = None
@@ -71,12 +86,101 @@ class SceneAssetUpdate(BaseModel):
     regenerate: bool = False
 
 
+@router.post("/reference/{kind}/{asset_id}/action")
+async def reference_action(
+    kind: Literal["character", "scene"],
+    asset_id: str,
+    data: ReferenceActionRequest,
+    db: Session = Depends(get_db),
+):
+    """显式处理单项一致性参考：重试、替换 Prompt、重新生成或确认跳过。"""
+
+    owner_id = _required_asset_project_id(db, data.project_id)
+    model = Character if kind == "character" else SceneAsset
+    item = db.query(model).filter(model.id == asset_id, model.project_id == owner_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="参考素材不存在")
+    if data.action == "replace_prompt":
+        if not (data.visual_prompt or "").strip():
+            raise HTTPException(status_code=400, detail="替换 Prompt 不能为空")
+        item.visual_prompt = data.visual_prompt
+        item.reference_status = "stale"
+        item.reference_failure_reason = "Prompt 已替换，参考素材需重新生成"
+        invalidate_asset_consumers(db, owner_id, **({"character_id": asset_id} if kind == "character" else {"scene_id": asset_id}))
+        db.commit()
+        refresh_project_reference_state(db, item.project_id)
+        return {"id": asset_id, "kind": kind, "status": "stale", "report": refresh_project_reference_state(db, item.project_id)}
+
+    if data.action == "skip":
+        if not data.confirm_degraded:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "跳过参考素材会将受影响镜头标记为 degraded，必须明确确认",
+                    "requires_confirmation": True,
+                    "asset_id": asset_id,
+                    "kind": kind,
+                },
+            )
+        result = accept_degraded_reference(db, kind, asset_id, reason=data.reason or "用户明确跳过本次参考")
+        return {"id": asset_id, "kind": kind, "status": "degraded", "item": result, "report": result.get("project_report", {})}
+
+    if data.action == "retry" and data.visual_prompt:
+        item.visual_prompt = data.visual_prompt
+    mutation_requested = True
+    invalidate_asset_consumers(db, owner_id, **({"character_id": asset_id} if kind == "character" else {"scene_id": asset_id}))
+    payload = _serialize_character(item) if kind == "character" else _serialize_scene(item)
+    generation_project_id = item.project_id
+    style = _project_style(db, generation_project_id)
+    seed = _int_seed(item.seed, 42 if kind == "character" else 1200)
+    db.commit()
+    try:
+        if kind == "character":
+            path = await image_service.generate_character_reference(
+                character=payload,
+                style=style,
+                project_id=generation_project_id,
+                seed=seed + 7000,
+            )
+        else:
+            path = await image_service.generate_scene_baseline_reference(
+                scene=payload,
+                style=style,
+                project_id=generation_project_id,
+                seed=seed,
+            )
+        current = db.query(model).filter(model.id == asset_id, model.project_id == owner_id).first()
+        if not current:
+            raise HTTPException(status_code=404, detail="参考素材不存在")
+        mark_reference_success(db, kind, current, path, capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")))
+        db.commit()
+        report = refresh_project_reference_state(db, generation_project_id)
+        return {"id": asset_id, "kind": kind, "status": "ready", "reference_version": current.reference_version, "report": report}
+    except Exception as exc:
+        current = db.query(model).filter(model.id == asset_id, model.project_id == owner_id).first()
+        if current:
+            mark_reference_failure(db, kind, current, exc, capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")))
+            db.commit()
+        report = refresh_project_reference_state(db, generation_project_id)
+        return {
+            "id": asset_id,
+            "kind": kind,
+            "status": current.reference_status if current else "failed",
+            "failure_reason": current.reference_failure_reason if current else str(exc),
+            "error_id": current.reference_error_id if current else "",
+            "report": report,
+        }
+
+
 @router.get("/{project_id}/board")
 async def get_asset_board(project_id: str, db: Session = Depends(get_db)):
     asset_project_id = _asset_project_id(db, project_id)
+    report = refresh_project_reference_state(db, project_id)
     return {
         "project_id": project_id,
         "asset_project_id": asset_project_id,
+        "consistency_report": report,
+        "consistency_status": report.get("status", "ready"),
         "characters": [_serialize_character(item) for item in db.query(Character).filter(Character.project_id == asset_project_id).all()],
         "scenes": [_serialize_scene(item) for item in db.query(SceneAsset).filter(SceneAsset.project_id == asset_project_id).all()],
     }
@@ -178,24 +282,33 @@ async def update_character_asset(
     generation_seed = _int_seed(item.seed, 42)
     style = _project_style(db, generation_project_id) if regenerate else ""
     db.commit()
-    db.close()
     if affected_scopes:
         await cancel_scopes(affected_scopes, "character asset was edited")
 
     if regenerate:
-        ref_path = await image_service.generate_character_reference(
-            character=character_payload,
-            style=style,
-            project_id=generation_project_id,
-            seed=generation_seed,
-        )
+        try:
+            ref_path = await image_service.generate_character_reference(
+                character=character_payload,
+                style=style,
+                project_id=generation_project_id,
+                seed=generation_seed,
+            )
+        except Exception as exc:
+            current = db.query(Character).filter(Character.id == character_id, Character.project_id == owner_id).first()
+            if current:
+                mark_reference_failure(db, "character", current, exc, capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")))
+                db.commit()
+                refresh_project_reference_state(db, generation_project_id)
+                return _serialize_character(current)
+            raise
         current = db.query(Character).filter(Character.id == character_id, Character.project_id == owner_id).first()
         if not current:
             raise HTTPException(status_code=404, detail="角色资产不存在")
         if current.updated_at == mutation_time:
-            current.reference_images = json.dumps([ref_path], ensure_ascii=False)
+            mark_reference_success(db, "character", current, ref_path, capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")))
             current.updated_at = datetime.utcnow()
             db.commit()
+            refresh_project_reference_state(db, generation_project_id)
         return _serialize_character(current)
     return character_payload
 
@@ -229,25 +342,33 @@ async def update_scene_asset(
     generation_seed = int(item.seed or 1200)
     style = _project_style(db, generation_project_id) if regenerate else ""
     db.commit()
-    db.close()
     if affected_scopes:
         await cancel_scopes(affected_scopes, "scene asset was edited")
 
     if regenerate:
-        ref_path = await image_service.generate_scene_baseline_reference(
-            scene=scene_payload,
-            style=style,
-            project_id=generation_project_id,
-            seed=generation_seed,
-        )
+        try:
+            ref_path = await image_service.generate_scene_baseline_reference(
+                scene=scene_payload,
+                style=style,
+                project_id=generation_project_id,
+                seed=generation_seed,
+            )
+        except Exception as exc:
+            current = db.query(SceneAsset).filter(SceneAsset.id == scene_id, SceneAsset.project_id == owner_id).first()
+            if current:
+                mark_reference_failure(db, "scene", current, exc, capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")))
+                db.commit()
+                refresh_project_reference_state(db, generation_project_id)
+                return _serialize_scene(current)
+            raise
         current = db.query(SceneAsset).filter(SceneAsset.id == scene_id, SceneAsset.project_id == owner_id).first()
         if not current:
             raise HTTPException(status_code=404, detail="场景资产不存在")
         if current.updated_at == mutation_time:
-            current.baseline_image_path = ref_path
-            current.reference_images = json.dumps([ref_path], ensure_ascii=False)
+            mark_reference_success(db, "scene", current, ref_path, capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")))
             current.updated_at = datetime.utcnow()
             db.commit()
+            refresh_project_reference_state(db, generation_project_id)
         return _serialize_scene(current)
     return scene_payload
 
@@ -342,3 +463,11 @@ def _serialize_scene(item: SceneAsset) -> dict:
         "seed": item.seed,
         "asset_status": str(item.asset_status or "active"),
     }
+
+
+def _json_dict(raw: str | None) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+        return value if isinstance(value, dict) else {}
+    except (TypeError, ValueError):
+        return {}

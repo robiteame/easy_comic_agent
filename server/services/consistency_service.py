@@ -5,33 +5,30 @@ from copy import deepcopy
 from typing import Any
 
 from services.style_templates import style_template
+from services.shot_dialogue import dialogue_plain_text, parse_shot_dialogue
 
 
 class ConsistencyService:
     """Agent-level visual consistency SOP shared by image and video generation."""
 
     SCENE_SOP = (
-        "NON-NEGOTIABLE AGENT CONSISTENCY SOP. These rules override any single-shot custom prompt. "
-        "Lock the scene group baseline: color temperature, light direction, light intensity, weather, "
-        "ambient mood, spatial perspective, props, LUT, saturation and sharpness. Do not add, remove, "
-        "move, resize, deform or recolor set dressing unless the script explicitly says the prop changes. "
-        "Day and night scenes must stay isolated; no automatic warm/cool or brightness jumps inside one scene group."
+        "Prompt preference only, not a model hard constraint: keep the scene group visually coherent in color temperature, "
+        "light direction, light intensity, weather, ambient mood, spatial perspective, props, LUT, saturation and sharpness. "
+        "Prefer no unrequested set-dressing changes and keep day/night scene groups visually separate."
     )
     CHARACTER_SOP = (
-        "Lock every character identity with the project character reference: face, body, hairstyle, skin tone, "
-        "base outfit, makeup and accessories must remain unchanged unless the script explicitly requests a costume change. "
-        "Use scene lighting to shade the character naturally, never separate character light from background light."
+        "Prompt preference only, not a model hard constraint: keep character face, body, hairstyle, skin tone, base outfit, "
+        "makeup and accessories coherent with the supplied character references unless the script requests a costume change. "
+        "Use scene lighting for natural character shading."
     )
     CONTINUITY_SOP = (
-        "Apply continuity editing rules: eye-line continuity, match-on-action cuts, and 180-degree axis lock. "
-        "Inside the same scene only use small camera zoom or position changes; do not cross the axis without explicit direction. "
-        "Use previous shot final frame as continuity reference when available. "
-        "No external pose or depth control model is integrated in this pipeline; motion continuity relies on the "
-        "approved storyboard first frame, character reference sheets and these text rules only."
+        "Prompt preference only, not a model hard constraint: favor eye-line continuity, match-on-action cuts, and a stable "
+        "180-degree axis. Use a previous shot final frame as continuity reference when available. No external pose or depth "
+        "control model is integrated; such controls remain unsupported unless the Capability Matrix reports otherwise."
     )
     POST_SOP = (
-        "Same-scene transition must be hard cut or 0.2s fade. Cross-scene transition must be 0.3-0.5s white flash or push-pull. "
-        "Keep ambient room tone continuous; do not cut off background ambience between adjacent shots."
+        "Editing preference only, not a model hard constraint: favor a hard cut or 0.2s fade inside a scene, and a 0.3-0.5s "
+        "transition between scenes. Keep ambient room tone continuous when possible."
     )
 
     def enrich_character(self, character: dict[str, Any], index: int = 0) -> dict[str, Any]:
@@ -41,7 +38,7 @@ class ConsistencyService:
         default_outfit = item.get("default_outfit") or appearance.get("default_outfit") or appearance.get("outfit") or "locked default outfit"
         item["default_outfit"] = default_outfit
         item["wardrobe_lock"] = item.get("wardrobe_lock") or (
-            f"LOCKED wardrobe for {name}: {default_outfit}; makeup and accessories unchanged unless script marks costume_change."
+            f"Prompt preference for {name}: keep wardrobe near {default_outfit}; this is not a model hard constraint."
         )
         # LoRA / IP-Adapter 均未接入：不生成看似已绑定的档案名，避免任何
         # 「已启用」的虚假声明。字段保留为空串以兼容存储结构。
@@ -118,17 +115,17 @@ class ConsistencyService:
             f"Scene group: {scene.get('scene_group_key') or shot.get('scene_group_id') or 'locked-current-scene'}; time: {scene.get('time_of_day') or 'locked'}; baseline: {scene.get('name') or 'scene baseline'}.",
             self._scene_profile_sentence(scene_profile),
             scene.get("prop_lock", ""),
-            f"Reference weight policy: style/environment {weights['environment']:.2f}, character action {weights['action']:.2f}; Agent chooses by shot type and cannot be overridden by the single shot prompt.",
+            "Reference weight policy: text_only_policy. Numeric reference weights are not sent unless the Provider Capability Matrix declares a real provider parameter.",
             self._continuity_sentence(continuity_profile),
         ]
         if scene_refs:
-            parts.append("Mandatory scene baseline/reference asset is available and must drive environment, props, lighting and perspective.")
+            parts.append("Scene baseline/reference assets are available for Provider input when the Capability Matrix reports multi-reference support; otherwise the request report will mark them not sent.")
         if char_refs:
-            parts.append("Mandatory character three-view references are available and must drive identity, outfit, face, body and hairstyle.")
+            parts.append("Character three-view references are available for Provider input when the Capability Matrix reports multi-reference support; otherwise the request report will mark them not sent.")
         if previous_reference_path:
-            parts.append("Previous shot final frame is available; use it as the continuity frame for pose, eye-line, axis, depth and motion carry-over.")
+            parts.append("Previous shot final frame is available as a continuity reference when the Provider supports it; no pose/depth control is implied.")
         if for_video:
-            parts.append("Seedance video must match the approved storyboard frame first, then animate only within the locked scene and character constraints.")
+            parts.append("Video prompt preference: begin from the approved storyboard frame when supported, then keep scene and character cues visually coherent.")
 
         for char in selected_characters:
             wardrobe = char.get("wardrobe_lock", "")
@@ -141,7 +138,7 @@ class ConsistencyService:
             "scene_group_id": scene.get("scene_group_key") or shot.get("scene_group_id", ""),
             "scene_reference_images": scene_refs,
             "character_reference_images": char_refs,
-            "reference_weights": weights,
+            "reference_weights": {"policy": "text_only_policy", "preferences": weights},
             "reference_assets": reference_assets,
             "continuity_profile": continuity_profile,
             "continuity_reference_path": previous_reference_path,
@@ -187,8 +184,8 @@ class ConsistencyService:
             "depth_lock_for_complex_motion": False,
             "pose_control_model": "unsupported",
             "depth_control_model": "unsupported",
-            "reference_weight_ranges": {"environment": [0.4, 0.5], "action": [0.25, 0.35]},
-            "rules_override_single_shot_customization": True,
+            "reference_weight_policy": "text_only_policy",
+            "prompt_rules_are_preferences": True,
             "manual_storyboard_approval_required_before_video": True,
         }
 
@@ -233,7 +230,7 @@ class ConsistencyService:
         if not profile:
             return ""
         return (
-            f"Locked scene lighting: {profile.get('color_temperature')}; source {profile.get('light_source_direction')}; "
+            f"Preferred scene lighting: {profile.get('color_temperature')}; source {profile.get('light_source_direction')}; "
             f"intensity {profile.get('light_intensity')}; weather {profile.get('weather')}; "
             f"perspective {profile.get('spatial_perspective')}; LUT {profile.get('lut')}; {profile.get('axis_rule')}."
         )
@@ -280,7 +277,7 @@ class ConsistencyService:
             return ""
         blocking = profile.get("character_blocking") or {}
         parts = [
-            "Continuity profile is locked:",
+            "Continuity prompt preference (not a model hard constraint):",
             ", ".join(profile.get("editing_logic", [])),
             f"same-scene transition {profile.get('same_scene_transition')}",
             f"cross-scene transition {profile.get('cross_scene_transition')}",
@@ -338,7 +335,8 @@ class ConsistencyService:
         )
 
     def _eye_line_target(self, shot: dict[str, Any], character_order: list[str]) -> str:
-        text = " ".join(str(shot.get(key, "")) for key in ("dialogue", "character_action", "scene_description"))
+        dialogue_text = dialogue_plain_text(parse_shot_dialogue(shot.get("dialogue")))
+        text = " ".join([dialogue_text, str(shot.get("character_action", "")), str(shot.get("scene_description", ""))])
         for name in character_order[1:] + character_order[:1]:
             if name and re.search(rf"\b(?:toward|to|looks at|faces|watching|gazes at)\s+{re.escape(name)}\b", text, re.I):
                 return f"maintain gaze toward {name} when they are the spoken-to or acted-on subject"
@@ -363,11 +361,11 @@ class ConsistencyService:
     ) -> list[dict[str, Any]]:
         assets: list[dict[str, Any]] = []
         for path in scene_refs:
-            assets.append({"type": "scene_baseline", "path": path, "role": "environment_props_lighting_perspective", "weight": weights["environment"], "required": True})
+            assets.append({"type": "scene_baseline", "path": path, "role": "environment_props_lighting_perspective", "weight_policy": "text_only_policy", "required": True})
         for path in char_refs:
-            assets.append({"type": "character_three_view", "path": path, "role": "identity_outfit_face_body_hair", "weight": weights["action"], "required": True})
+            assets.append({"type": "character_three_view", "path": path, "role": "identity_outfit_face_body_hair", "weight_policy": "text_only_policy", "required": True})
         if previous_reference_path:
-            assets.append({"type": "continuity_frame", "path": previous_reference_path, "role": "eye_line_axis_pose_depth_motion", "weight": weights["action"], "required": True})
+            assets.append({"type": "continuity_frame", "path": previous_reference_path, "role": "eye_line_axis_motion", "weight_policy": "text_only_policy", "required": True})
         # 没有姿态/深度控制模型，不产出 openpose/depth 类参考资产；
         # 伪造这两类图只会误导下游与展示层。
         return assets

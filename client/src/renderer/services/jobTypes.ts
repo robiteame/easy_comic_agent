@@ -40,6 +40,35 @@ export interface JobErrorDetail {
   model: string
 }
 
+export interface JobDebugEvent {
+  id: string
+  request_id: string
+  timestamp: string
+  kind: 'lifecycle' | 'progress' | 'api_request' | 'api_result' | string
+  level: 'info' | 'progress' | 'request' | 'success' | 'error' | 'cancelled' | string
+  step: string
+  progress: number | null
+  message: string
+  api: string
+  provider: string
+  model: string
+  params: Record<string, any> | string
+  prompt: Record<string, any> | string
+  detail: Record<string, any> | string
+}
+
+export interface JobDebugLog {
+  job_id: string
+  project_id: string
+  status: JobStatus
+  progress: number
+  current_step: string
+  message: string
+  debug_revision: number
+  events: JobDebugEvent[]
+  generated_at: string
+}
+
 export interface JobDto {
   id: string
   scope: string
@@ -57,6 +86,10 @@ export interface JobDto {
   error_code_label: string
   error_message: string
   error_detail: JobErrorDetail | null
+  /** 结果报告：一致性降级时包含影响镜头范围与参考素材状态。 */
+  report?: Record<string, any> | null
+  /** 调试日志版本号：WebSocket 增量事件按它去重。 */
+  debug_revision?: number
   attempt: number
   retry_of: string | null
   version: number
@@ -165,10 +198,13 @@ export type JobEventType =
   | 'job.cancelled'
   | 'job.interrupted'
   | 'job.retry_started'
+  | 'job.debug'
 
 export interface JobEvent {
   type: JobEventType | 'job_snapshot' | 'pong'
   job?: JobDto
+  event?: JobDebugEvent
+  debug_revision?: number
   job_id?: string
   project_id?: string
   sent_at?: string

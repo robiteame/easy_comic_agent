@@ -28,7 +28,7 @@ from config import settings  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
 from models import Project, Shot  # noqa: E402
 from api.routes import shot as shot_route  # noqa: E402
-from services import audio_routing  # noqa: E402
+from services import audio_routing, dialogue_audio  # noqa: E402
 from services.audio_routing import native_audio_capable, resolve_audio_mode  # noqa: E402
 from services.ffmpeg_service import FFmpegService  # noqa: E402
 from services.providers.base import VideoCapabilities, VideoResult  # noqa: E402
@@ -234,7 +234,7 @@ class NativeModeSkipsVoiceTests(_PipelineTestCase):
             patch.object(audio_routing, "get_endpoint", return_value=_endpoint(audio_mode="native")),
             patch.object(audio_routing, "get_adapter", return_value=_RecordingNativeAdapter),
             patch("services.video_service.get_adapter", return_value=_RecordingNativeAdapter),
-            patch.object(shot_route.tts_service, "generate_dialogue", side_effect=fake_tts),
+            patch.object(dialogue_audio.tts_service, "generate_dialogue", side_effect=fake_tts),
         ):
             asyncio.run(shot_route._run_single_shot_video(self.shot.id, force=True))
 
@@ -288,7 +288,7 @@ class NativeModeSkipsVoiceTests(_PipelineTestCase):
         with (
             patch.object(audio_routing, "get_endpoint", return_value=_endpoint(audio_mode="native")),
             patch.object(audio_routing, "get_adapter", return_value=_FakeNativeAdapter),
-            patch.object(shot_route.tts_service, "generate_dialogue", side_effect=fake_tts),
+            patch.object(dialogue_audio.tts_service, "generate_dialogue", side_effect=fake_tts),
             patch.object(shot_route.seedance_service, "generate_shot_video", side_effect=fake_video),
         ):
             asyncio.run(shot_route._run_single_shot_video(self.shot.id, force=True))
@@ -318,7 +318,7 @@ class TtsModeUnchangedTests(_PipelineTestCase):
 
         # 全局默认（真实端点默认 tts），不打任何补丁于路由配置。
         with (
-            patch.object(shot_route.tts_service, "generate_dialogue", side_effect=fake_tts),
+            patch.object(dialogue_audio.tts_service, "generate_dialogue", side_effect=fake_tts),
             patch.object(shot_route.seedance_service, "generate_shot_video", side_effect=fake_video),
         ):
             asyncio.run(shot_route._run_single_shot_video(self.shot.id, force=True))

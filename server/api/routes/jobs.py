@@ -117,6 +117,16 @@ async def get_job_detail(job_id: str, db: Session = Depends(get_db)):
     return job_center.job_detail(db, job)
 
 
+@router.get("/{job_id}/debug")
+async def get_job_debug_log(job_id: str, db: Session = Depends(get_db)):
+    """任务调试日志：进度、当前步骤、API 请求参数与脱敏提示词。"""
+
+    job = _load_job(db, job_id)
+    if job is None:
+        return _missing()
+    return job_center.job_debug_log(db, job)
+
+
 @router.post("/{job_id}/cancel")
 async def cancel_job(job_id: str, db: Session = Depends(get_db)):
     """取消任务：queued / running / cancelling 均可处理，重复调用幂等。"""

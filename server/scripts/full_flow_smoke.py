@@ -161,11 +161,19 @@ def main() -> None:
     print(f"ASSETS {len(shots)} shots")
 
     first_shot = shots[0]
+    # 对白为结构化列表；编辑时保持原说话人，仅追加文本。
+    dialogue_lines = first_shot.get("dialogue") or []
+    first_line = dialogue_lines[0] if dialogue_lines else {"speaker": "", "line": "我看见故事成形了"}
     edit_result = put(
         f"/api/shot/{first_shot['id']}",
         {
             "duration": 1.0,
-            "dialogue": (first_shot.get("dialogue") or "我看见故事成形了") + "，这句来自冒烟测试。",
+            "dialogue": [
+                {
+                    "speaker": first_line.get("speaker", ""),
+                    "line": (first_line.get("line") or "我看见故事成形了") + "，这句来自冒烟测试。",
+                }
+            ],
         },
     )
     assert edit_result["needs_render"] is True, edit_result

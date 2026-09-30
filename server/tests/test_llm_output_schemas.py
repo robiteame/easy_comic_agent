@@ -133,7 +133,10 @@ class FieldNormalizationTests(unittest.TestCase):
         )
         shot = parsed.shots[0]
         self.assertEqual(shot.scene_description, "")
-        self.assertEqual(shot.dialogue, "数组形式")
+        # 对白为结构化列表：字符串数组形态迁移为逐句对象（speaker 为空）。
+        self.assertEqual(len(shot.dialogue), 1)
+        self.assertEqual(shot.dialogue[0].line, "数组形式")
+        self.assertEqual(shot.dialogue[0].speaker, "")
         self.assertEqual(shot.duration, 3.0)
         self.assertEqual(shot.scene_number, 1)
 

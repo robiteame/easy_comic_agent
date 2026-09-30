@@ -18,9 +18,10 @@ import logging
 import math
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, BeforeValidator, Field, ValidationError, ValidationInfo
+from pydantic import BaseModel, ConfigDict, BeforeValidator, Field, ValidationError, ValidationInfo, AliasChoices
 
 from config import settings
+from services.shot_dialogue import MAX_DIALOGUE_LINES_PER_SHOT, MAX_TIMELINE_MS
 from services.style_templates import STYLE_TEMPLATES
 
 logger = logging.getLogger(__name__)
@@ -248,25 +249,47 @@ def _text(limit: int):
     return BeforeValidator(validate)
 
 
-def _first_line(limit: int):
-    """对白字段：模型可能给出字符串、数组或对象，统一取第一句可用台词。"""
+def _optional_emotion(value: Any, info: ValidationInfo) -> str:
+    """情绪字段：空值保持为空（由镜头级情绪兜底），非空归一化到合法枚举。"""
 
-    def validate(value: Any, info: ValidationInfo) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, dict):
-            value = str(value.get("line") or value.get("dialogue") or "").strip()
-            return value[:limit]
-        if isinstance(value, (list, tuple)):
-            for item in value:
-                if isinstance(item, dict):
-                    text = str(item.get("line") or item.get("dialogue") or "").strip()
-                else:
-                    text = "" if isinstance(item, (dict, list, tuple, set)) else str(item).strip()
-                if text:
-                    return text[:limit]
-            return ""
-        return str(value).strip()[:limit]
+    del info
+    if value in (None, ""):
+        return ""
+    return normalize_emotion(value)
+
+
+def _shot_dialogue_list(limit: int = MAX_DIALOGUE_LINES_PER_SHOT):
+    """镜头对白：接受结构化数组、旧版字符串或数组字符串，统一为逐句对象列表。
+
+    每句对白必须有机会携带 speaker（speaker/character/role 均可）；旧版字符串
+    形态迁移为 speaker 为空的单句，由配音阶段给出可追踪警告而不是冒名顶替。
+    """
+
+    def validate(value: Any, info: ValidationInfo) -> list:
+        del info
+        if value in (None, ""):
+            return []
+        if isinstance(value, (str, dict)):
+            value = [value]
+        if not isinstance(value, (list, tuple)):
+            logger.warning("LLM 输出对白字段类型不可用,已置空: field=dialogue type=%s", type(value).__name__)
+            return []
+        items = list(value)
+        if len(items) > limit:
+            logger.warning("LLM 输出对白句数超长已截断: path=dialogue limit=%d actual=%d", limit, len(items))
+            items = items[:limit]
+        parsed: list[ShotDialogueLineOutput] = []
+        for index, item in enumerate(items):
+            if isinstance(item, str):
+                item = {"line": item}
+            if not isinstance(item, dict):
+                logger.warning("LLM 输出对白条目被丢弃: path=dialogue[%d] 原因=应为对象", index)
+                continue
+            try:
+                parsed.append(ShotDialogueLineOutput.model_validate(item))
+            except ValidationError as exc:
+                logger.warning("LLM 输出对白条目被丢弃: path=dialogue[%d] 原因=%s", index, describe_error(exc))
+        return [line for line in parsed if line.line.strip()]
 
     return BeforeValidator(validate)
 
@@ -396,10 +419,35 @@ class DialogueOutput(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    character: Annotated[str, _text(MAX_CHARACTER_NAME)] = ""
+    character: Annotated[
+        str,
+        _text(MAX_CHARACTER_NAME),
+        Field(validation_alias=AliasChoices("character", "speaker", "role")),
+    ] = ""
     line: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
     emotion: Annotated[str, _choice(normalize_emotion, "neutral")] = "neutral"
     action: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
+
+
+class ShotDialogueLineOutput(BaseModel):
+    """镜头内单句结构化对白：说话人是配音音色的唯一依据，必须显式保留。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    speaker: Annotated[
+        str,
+        _text(MAX_CHARACTER_NAME),
+        Field(validation_alias=AliasChoices("speaker", "character", "role")),
+    ] = ""
+    line: Annotated[
+        str,
+        _text(settings.LLM_MAX_TEXT_CHARS),
+        Field(validation_alias=AliasChoices("line", "text", "dialogue")),
+    ] = ""
+    emotion: Annotated[str, BeforeValidator(_optional_emotion)] = ""
+    action: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
+    start_ms: Annotated[int | None, _clamped_number(0, MAX_TIMELINE_MS, None, label="对白开始时间")] = None
+    end_ms: Annotated[int | None, _clamped_number(0, MAX_TIMELINE_MS, None, label="对白结束时间")] = None
 
 
 class CharacterOutput(BaseModel):
@@ -445,11 +493,15 @@ class ShotOutput(BaseModel):
     scene_description: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
     characters_in_scene: Annotated[list[str], _bounded_list(MAX_CHARACTERS_IN_SCENE, MAX_CHARACTER_NAME)] = Field(default_factory=list)
     character_action: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
-    dialogue: Annotated[str, _first_line(settings.LLM_MAX_TEXT_CHARS)] = ""
+    dialogue: Annotated[
+        list[ShotDialogueLineOutput],
+        _shot_dialogue_list(),
+    ] = Field(default_factory=list)
     camera_angle: Annotated[str, _choice(normalize_camera_angle, "正面")] = "正面"
     camera_movement: Annotated[str, _choice(normalize_camera_movement, "静止")] = "静止"
     emotion: Annotated[str, _choice(normalize_emotion, "neutral")] = "neutral"
     duration: Annotated[float, _clamped_number(settings.MIN_SHOT_DURATION_SECONDS, settings.MAX_SHOT_DURATION_SECONDS, 3.0, cast=float, label="时长")] = 3.0
+    estimated_speech_ms: Annotated[int, _clamped_number(0, 600_000, 0, cast=int, label="对白预计时长")] = 0
     transition: Annotated[str, _choice(normalize_transition, "cut")] = "cut"
     image_path: Annotated[str, _text(500)] = ""
     audio_path: Annotated[str, _text(500)] = ""

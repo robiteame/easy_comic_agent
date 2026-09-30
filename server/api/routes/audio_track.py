@@ -25,6 +25,7 @@ from models import AudioTrack, Project, Shot
 from services.av_config_service import bump_av_config_version, collect_render_config
 from services.error_reporter import ERROR_RENDER, error_payload, log_failure
 from services.ffmpeg_service import FFmpegService
+from services.shot_dialogue import dialogue_display_text, parse_shot_dialogue
 from services.security import (
     UploadLimitExceeded,
     existing_file,
@@ -171,12 +172,18 @@ def _shot_infos(db: Session, project_id: str) -> tuple[list[dict], dict[str, tup
             profile = json.loads(shot.continuity_profile) if shot.continuity_profile else {}
         except (TypeError, ValueError):
             profile = {}
+        lines = parse_shot_dialogue(
+            shot.dialogue,
+            fallback_speaker=speakers[0] if speakers and isinstance(speakers[0], str) else "",
+            default_emotion=shot.emotion or "neutral",
+            warn_key=f"audio_track shot {shot.id}",
+        )
         infos.append(
             {
                 "id": shot.id,
                 "sequence": int(shot.sequence or 0),
-                "dialogue": shot.dialogue or "",
-                "character_name": speakers[0] if speakers and isinstance(speakers[0], str) else "",
+                "dialogue": dialogue_display_text(lines),
+                "character_name": lines[0].speaker if lines else "",
                 "has_tts": bool(shot.audio_path),
                 "native_audio": profile.get("audio_source") == "native",
                 "start_ms": cursor,

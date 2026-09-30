@@ -4,6 +4,7 @@ import os
 import uuid
 import hashlib
 from pathlib import Path
+from typing import Literal
 
 import aiofiles
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -18,7 +19,12 @@ from models import Character as CharacterModel
 from models import Project, SceneAsset, Shot as ShotModel
 from models import ShotVersion
 from services.consistency_service import ConsistencyService
-from services.error_reporter import ERROR_PIPELINE, report_failure
+from services.reference_readiness_service import (
+    mark_reference_failure,
+    mark_reference_success,
+    refresh_project_reference_state,
+)
+from services.error_reporter import ERROR_PIPELINE, log_failure, redact, report_failure
 from services.image_service import ImageService
 from services.llm_service import LLMService
 from services.shot_version_service import create_version
@@ -57,6 +63,7 @@ class ScriptParseRequest(BaseModel):
     platform: schemas.Platform = "douyin"
     target_duration: schemas.TargetDuration = 45
     mode: schemas.PipelineMode = "manual"
+    quality_profile: Literal["draft", "standard", "finishing"] = "standard"
 
 
 @router.post("/generate")
@@ -99,6 +106,7 @@ async def parse_script(data: ScriptParseRequest):
         "status": "started",
         "project_id": data.project_id,
         "mode": data.mode,
+        "quality_profile": data.quality_profile,
         **style_meta,
         **getattr(task, "budget_notice", {}),
     }
@@ -112,7 +120,9 @@ async def upload_script(
     output_format: schemas.OutputFormat = Form("9:16"),
     resolution: schemas.Resolution = Form("1080p"),
     platform: schemas.Platform = Form("douyin"),
+    target_duration: schemas.TargetDuration = Form(45),
     mode: schemas.PipelineMode = Form("manual"),
+    quality_profile: Literal["draft", "standard", "finishing"] = Form("standard"),
 ):
     try:
         safe_project_id = validate_identifier(project_id, "项目 ID")
@@ -162,7 +172,8 @@ async def upload_script(
         "output_format": output_format,
         "resolution": resolution,
         "platform": platform,
-        "target_duration": 45,
+        "target_duration": target_duration,
+        "quality_profile": quality_profile,
     }
     # 与 /parse 同口径的启动预检：缺 Provider 配置时拒绝排队，删除临时上传文件。
     try:
@@ -179,6 +190,7 @@ async def upload_script(
         "status": "started",
         "project_id": safe_project_id,
         "mode": mode,
+        "quality_profile": quality_profile,
         "file": file.filename,
         "script": user_input,
         **style_meta,
@@ -241,6 +253,8 @@ def _initial_state(data: dict, skill_config: dict | None = None) -> dict:
         "resolution": data.get("resolution", "1080p"),
         "platform": data.get("platform", "douyin"),
         "target_duration": data.get("target_duration", 45),
+        "quality_profile": data.get("quality_profile") or "standard",
+        "timing_plan": {},
         "video_path": "",
         "current_step": "",
         "errors": [],
@@ -292,7 +306,13 @@ def _spawn_pipeline(project_id: str, initial_state: dict, mode: str, output_form
         return None
     _pending_budget_notice = budget_notice(claim)
     if mode == "auto":
-        coro = _run_auto_pipeline(project_id, initial_state, output_format, resolution)
+        coro = _run_auto_pipeline(
+            project_id,
+            initial_state,
+            output_format,
+            resolution,
+            quality_profile=str(initial_state.get("quality_profile") or "standard"),
+        )
     else:
         coro = _run_storyboard_phase(project_id, initial_state)
     task = start_task(task_key, coro)
@@ -303,7 +323,14 @@ def _spawn_pipeline(project_id: str, initial_state: dict, mode: str, output_form
     return task
 
 
-async def _run_auto_pipeline(project_id: str, initial_state: dict, output_format: str, resolution: str):
+async def _run_auto_pipeline(
+    project_id: str,
+    initial_state: dict,
+    output_format: str,
+    resolution: str,
+    *,
+    quality_profile: str = "standard",
+):
     """自动模式:经 LangGraph 一次 ainvoke 从解析跑到成片,节点复用 route 步骤函数。"""
     from agent.graph import get_graph
 
@@ -315,6 +342,8 @@ async def _run_auto_pipeline(project_id: str, initial_state: dict, output_format
                 "initial_state": initial_state,
                 "output_format": output_format,
                 "resolution": resolution,
+                "quality_profile": quality_profile,
+                "run_id": "auto",
                 "current_step": "",
                 "errors": [],
             }
@@ -344,7 +373,7 @@ async def _run_auto_pipeline(project_id: str, initial_state: dict, output_format
         raise
 
 
-async def _run_storyboard_phase(project_id: str, state: dict):
+async def _run_storyboard_phase(project_id: str, state: dict, mode: str = "manual"):
     try:
         await _progress(project_id, "parse_script", 10, "正在解析剧本")
         state.update(await script_parser.run(state))
@@ -372,9 +401,36 @@ async def _run_storyboard_phase(project_id: str, state: dict):
         db = SessionLocal()
         try:
             project_title = _persist_phase1(db, project_id, state, status="assets_ready")
+            consistency_report = refresh_project_reference_state(db, project_id)
         finally:
             db.close()
-        await _progress(project_id, "wait_asset_confirm", 45, "角色板、场景板与分镜已生成，请确认素材后生成故事板")
+        if mode == "auto" and consistency_report.get("blocking"):
+            await _progress(
+                project_id,
+                "needs_reference_review",
+                45,
+                "一致性参考素材未达到自动成片要求，已转人工审核",
+                report=consistency_report,
+            )
+            await ws_manager.send_to_project(
+                project_id,
+                {
+                    "type": "reference_review_required",
+                    "project_id": project_id,
+                    "consistency_report": consistency_report,
+                    "affected_shot_ids": consistency_report.get("affected_shot_ids", []),
+                    "shot_range": consistency_report.get("shot_range", ""),
+                    "message": "自动模式已阻止生成：请补齐或明确降级一致性参考素材后重试。",
+                },
+            )
+            return
+        await _progress(
+            project_id,
+            "wait_asset_confirm",
+            45,
+            "角色板、场景板与分镜已生成，请确认素材后生成故事板",
+            report=consistency_report,
+        )
         await ws_manager.send_to_project(
             project_id,
             {
@@ -388,6 +444,10 @@ async def _run_storyboard_phase(project_id: str, state: dict):
                 "requested_style": state.get("requested_style", state.get("style")),
                 "effective_style": state.get("effective_style", state.get("style")),
                 "style_source": state.get("style_source", "project_request"),
+                "consistency_report": consistency_report,
+                "consistency_status": consistency_report.get("status", "ready"),
+                "affected_shot_ids": consistency_report.get("affected_shot_ids", []),
+                "shot_range": consistency_report.get("shot_range", ""),
             },
         )
     except Exception as exc:
@@ -426,6 +486,8 @@ def _persist_phase1(db, project_id: str, state: dict, status: str = "assets_read
     project.output_format = state.get("output_format", project.output_format)
     project.resolution = state.get("resolution", project.resolution)
     project.platform = state.get("platform", project.platform)
+    project.target_duration = int(state.get("target_duration") or project.target_duration or 0)
+    project.timing_plan = json.dumps(state.get("timing_plan") or {}, ensure_ascii=False)
     project.consistency_config = json.dumps(consistency_service.project_config(), ensure_ascii=False)
     project.status = status
 
@@ -450,6 +512,7 @@ def _persist_phase1(db, project_id: str, state: dict, status: str = "assets_read
 
 
 async def _ensure_character_reference_images(asset_project_id: str, state: dict) -> None:
+    """生成角色三视图，并把成功/失败状态写回 state，绝不静默吞掉异常。"""
     style = state.get("effective_style") or state.get("style") or state.get("style_suggestion") or "anime"
     skill_append = agent_prompt_append(state.get("skill_config"), "script_agent")
     characters = state.get("characters", [])
@@ -459,7 +522,9 @@ async def _ensure_character_reference_images(asset_project_id: str, state: dict)
         character.setdefault("id", _character_asset_id(asset_project_id, index))
         refs = character.get("reference_images")
         if isinstance(refs, list) and refs:
+            character["reference_status"] = "ready"
             return
+        character["reference_retry_count"] = int(character.get("reference_retry_count") or 0) + 1
         try:
             async with semaphore:
                 character_payload = dict(character)
@@ -474,16 +539,22 @@ async def _ensure_character_reference_images(asset_project_id: str, state: dict)
                     seed=int(character.get("seed") or 42) + 7000 + index,
                 )
             character["reference_images"] = [ref_path]
+            character["reference_status"] = "ready"
+            character["reference_version"] = int(character.get("reference_version") or 1)
+            character["reference_failure_reason"] = ""
+            character["reference_error_id"] = ""
         except Exception as exc:
-            character["reference_images"] = []
-            character["visual_prompt"] = ", ".join(
-                part for part in [character.get("visual_prompt", ""), f"three-view reference generation pending: {exc}"] if part
-            )
+            error_id = log_failure(exc, error_type=ERROR_PIPELINE, context={"asset_type": "character", "asset_id": character.get("id")})
+            character["reference_images"] = list(refs or [])
+            character["reference_status"] = "stale" if refs else "failed"
+            character["reference_failure_reason"] = redact(str(exc), limit=500)
+            character["reference_error_id"] = error_id
 
     await asyncio.gather(*(ensure_one(index, character) for index, character in enumerate(characters)))
 
 
 async def _ensure_scene_baseline_images(asset_project_id: str, state: dict) -> None:
+    """生成场景基准图，并把成功/失败状态写回 state，绝不静默吞掉异常。"""
     style = state.get("effective_style") or state.get("style") or state.get("style_suggestion") or "anime"
     skill_append = agent_prompt_append(state.get("skill_config"), "script_agent")
     for index, scene in enumerate(state.get("script_scenes", [])):
@@ -491,7 +562,9 @@ async def _ensure_scene_baseline_images(asset_project_id: str, state: dict) -> N
         refs = scene.get("reference_images")
         baseline = scene.get("baseline_image_path", "")
         if baseline or (isinstance(refs, list) and refs):
+            scene["reference_status"] = "ready"
             continue
+        scene["reference_retry_count"] = int(scene.get("reference_retry_count") or 0) + 1
         try:
             scene_payload = dict(scene)
             if skill_append:
@@ -504,12 +577,31 @@ async def _ensure_scene_baseline_images(asset_project_id: str, state: dict) -> N
             )
             scene["baseline_image_path"] = ref_path
             scene["reference_images"] = [ref_path]
+            scene["reference_status"] = "ready"
+            scene["reference_version"] = int(scene.get("reference_version") or 1)
+            scene["reference_failure_reason"] = ""
+            scene["reference_error_id"] = ""
         except Exception as exc:
-            scene["baseline_image_path"] = ""
-            scene["reference_images"] = []
-            scene["visual_prompt"] = ", ".join(
-                part for part in [scene.get("visual_prompt", ""), f"scene baseline generation pending: {exc}"] if part
-            )
+            error_id = log_failure(exc, error_type=ERROR_PIPELINE, context={"asset_type": "scene", "asset_id": scene.get("id")})
+            scene["baseline_image_path"] = baseline
+            scene["reference_images"] = list(refs or [])
+            scene["reference_status"] = "stale" if (baseline or refs) else "failed"
+            scene["reference_failure_reason"] = redact(str(exc), limit=500)
+            scene["reference_error_id"] = error_id
+
+
+def _copy_reference_state(item, source: dict) -> None:
+    for key in (
+        "reference_status",
+        "reference_version",
+        "reference_retry_count",
+        "reference_failure_reason",
+        "reference_error_id",
+        "reference_skip_reason",
+        "reference_capability_warning",
+    ):
+        if key in source:
+            setattr(item, key, source[key])
 
 
 def _resolve_asset_project_id(db, project_id: str) -> str:
@@ -554,6 +646,7 @@ def _upsert_characters(db, asset_project_id: str, characters: list[dict], style:
         elif not existing:
             item.reference_images = "[]"
             item.asset_status = "active"
+        _copy_reference_state(item, char)
         item.seed = str(char.get("seed", 42 + index))
         if not existing:
             db.add(item)
@@ -604,6 +697,7 @@ def _upsert_scenes(db, asset_project_id: str, scenes: list[dict], style: str = "
             item.baseline_image_path = ""
             item.reference_images = "[]"
             item.asset_status = "active"
+        _copy_reference_state(item, scene)
         item.consistency_profile = json.dumps(scene.get("consistency_profile", {}), ensure_ascii=False)
         item.prop_lock = scene.get("prop_lock", "")
         item.seed = 1200 + index
@@ -665,10 +759,12 @@ def _shot_model(
         shot_type=shot.get("shot_type", "medium"),
         scene_description=shot.get("scene_description", ""),
         character_action=shot.get("character_action", ""),
+        # 状态里的对白是结构化列表；ORM validates 钩子负责序列化入库。
         dialogue=shot.get("dialogue", ""),
         camera_angle=shot.get("camera_angle", "正面"),
         camera_movement=shot.get("camera_movement", "静止"),
         duration=shot.get("duration", 3.0),
+        estimated_speech_ms=int(shot.get("estimated_speech_ms") or 0),
         emotion=shot.get("emotion", "neutral"),
         transition=shot.get("transition", "cut"),
         image_path="",
@@ -682,7 +778,13 @@ def _shot_model(
         scene_group_id=consistency.get("scene_group_id", scene_meta.get("scene_group_key", scene_asset_id)),
         consistency_context=consistency.get("consistency_context", ""),
         reference_weights=json.dumps(consistency.get("reference_weights", {}), ensure_ascii=False),
-        continuity_profile=json.dumps(consistency.get("continuity_profile", {}), ensure_ascii=False),
+        continuity_profile=json.dumps(
+            {
+                **consistency.get("continuity_profile", {}),
+                **({"timing": shot.get("timing")} if shot.get("timing") else {}),
+            },
+            ensure_ascii=False,
+        ),
         continuity_reference_path="",
         pose_reference_path="",
         depth_reference_path="",
@@ -722,11 +824,11 @@ async def _persist_shot_update(project_id: str, shot: dict) -> None:
         db.close()
 
 
-async def _progress(project_id: str, step: str, progress: int, message: str) -> None:
+async def _progress(project_id: str, step: str, progress: int, message: str, report: dict | None = None) -> None:
     # 两个键都写一次：只有真正持有当前 run token 的那个会成功，另一个会被静默忽略，
     # 因此不需要在这里判断本次是 manual 还是 auto。
     for key in (f"project:{project_id}:pipeline:auto", f"project:{project_id}:pipeline:manual"):
-        update_job_progress(key, progress, current_step=step, message=message)
+        update_job_progress(key, progress, current_step=step, message=message, report=report)
     await ws_manager.send_to_project(project_id, {"type": "progress", "step": step, "progress": progress, "message": message})
 
 

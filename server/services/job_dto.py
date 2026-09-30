@@ -75,6 +75,19 @@ def _json_list(value: Any) -> list[str]:
         return []
 
 
+def _report(value: Any) -> dict[str, Any] | None:
+    """解析任务结果报告；空/非法历史行返回 None。"""
+    import json
+
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _error_detail(value: Any) -> dict[str, Any] | None:
     """解析落库的失败分析 JSON；无效或为空返回 None（字段白名单 + 长度兜底）。"""
 
@@ -209,6 +222,7 @@ def job_dto(
     dispatchable: bool | None = None,
     usage: dict[str, Any] | None = None,
     estimate: dict[str, Any] | None = None,
+    include_report: bool = False,
 ) -> dict[str, Any]:
     """把一条任务行转成稳定 DTO。绝不包含 run_token。"""
 
@@ -236,6 +250,8 @@ def job_dto(
         "error_code_label": error_code_label(error_code),
         "error_message": error_message,
         "error_detail": _error_detail(getattr(job, "error_detail", "")),
+        **({"report": _report(getattr(job, "report", ""))} if include_report else {}),
+        "debug_revision": max(0, int(getattr(job, "debug_revision", 0) or 0)),
         "attempt": max(1, int(job.attempt or 1)),
         "retry_of": str(job.retry_of) if job.retry_of else None,
         "version": int(job.version or 0),

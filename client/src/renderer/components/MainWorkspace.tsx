@@ -19,6 +19,7 @@ import {
   ZoomInOutlined,
   ZoomOutOutlined,
 } from '@ant-design/icons'
+import { formatDialogueForEditor } from '../services/dialogueTimeline'
 import { useShotStore } from '../stores/shotStore'
 import { useProjectStore } from '../stores/projectStore'
 import { useTaskStore } from '../stores/taskStore'
@@ -40,6 +41,7 @@ import {
 
 const AvWorkbench = React.lazy(() => import('./AvWorkbench'))
 import BudgetSummaryPanel from './BudgetSummaryPanel'
+import { consistencyImpactText, referenceStatusClass, referenceStatusLabel } from './consistencyModel'
 import { notifyBudgetBlocked, notifyBudgetWarning, notifyProviderBlocked, useTaskEstimateGate } from './TaskEstimateModal'
 
 const { TextArea } = Input
@@ -108,6 +110,11 @@ function normalizeShot(shot: any) {
     version: Number(shot.version || 1),
     confirmed: Boolean(shot.confirmed),
     media_stale: Boolean(shot.media_stale),
+    consistency_status: shot.consistency_status || 'pending',
+    consistency_report: shot.consistency_report || {},
+    storyboard_reference_manifest: Array.isArray(shot.storyboard_reference_manifest) ? shot.storyboard_reference_manifest : [],
+    video_reference_manifest: Array.isArray(shot.video_reference_manifest) ? shot.video_reference_manifest : [],
+    reference_capability_warning: shot.reference_capability_warning || '',
     characters_in_scene: Array.isArray(shot.characters_in_scene) ? shot.characters_in_scene : [],
     scene_asset_id: shot.scene_asset_id || '',
     character_asset_ids: Array.isArray(shot.character_asset_ids) ? shot.character_asset_ids : [],
@@ -158,6 +165,9 @@ const MainWorkspace: React.FC = () => {
     outputFormat,
     resolution,
     runMode,
+    status: projectStatus,
+    consistencyStatus,
+    consistencyReport,
   } = useProjectStore()
 
   // 提交前的成本估算闸门：所有会触发付费任务的入口都要先过一遍它。
@@ -185,7 +195,7 @@ const MainWorkspace: React.FC = () => {
   const [queueForceConfirmed, setQueueForceConfirmed] = useState(false)
   const [queueVersion, setQueueVersion] = useState(0)
   const [queueSubmitting, setQueueSubmitting] = useState(false)
-  const [assetBoard, setAssetBoard] = useState<{ characters: any[]; scenes: any[] } | null>(null)
+  const [assetBoard, setAssetBoard] = useState<{ characters: any[]; scenes: any[]; consistency_report?: any; consistency_status?: string } | null>(null)
   const [assetBoardReady, setAssetBoardReady] = useState(false)
   const [assetTab, setAssetTab] = useState<'characters' | 'scenes'>('characters')
   const [styleTemplates, setStyleTemplates] = useState<StyleOption[]>(STYLE_OPTIONS)
@@ -391,7 +401,16 @@ const MainWorkspace: React.FC = () => {
       !isLatestResourceResponse(requestId, assetLoadRequestRef.current, mutation, assetMutationRef.current) ||
       !isCurrentProject(pid, epoch)
     ) return null
-    setAssetBoard({ characters: board.characters || [], scenes: board.scenes || [] })
+    setAssetBoard({
+      characters: board.characters || [],
+      scenes: board.scenes || [],
+      consistency_report: board.consistency_report || {},
+      consistency_status: board.consistency_status || board.consistency_report?.status || 'ready',
+    })
+    setProject({
+      consistencyStatus: board.consistency_status || board.consistency_report?.status || 'ready',
+      consistencyReport: board.consistency_report || {},
+    })
     return board
   }
 
@@ -421,6 +440,8 @@ const MainWorkspace: React.FC = () => {
       genre: projectDetail.genre,
       style: projectDetail.style || style,
       status: projectDetail.status,
+      consistencyStatus: projectDetail.consistency_report?.status || projectDetail.consistency_status || 'ready',
+      consistencyReport: projectDetail.consistency_report || {},
       outputFormat: projectDetail.output_format || outputFormat,
       resolution: projectDetail.resolution || resolution,
       platform: projectDetail.platform || platform,
@@ -582,6 +603,16 @@ const MainWorkspace: React.FC = () => {
         return
       }
 
+      if (data.type === 'reference_review_required') {
+        appendLog(`[${ts}] 一致性参考未就绪，已转人工审核`)
+        message.warning(data.message || '自动模式已阻止生成：请补齐或明确降级一致性参考素材')
+        setGenerating(false)
+        setLoading(false)
+        setWorkspaceTab('assets')
+        void loadAssetBoard(pid)
+        return
+      }
+
       if (data.type === 'complete') {
         appendLog(`[${ts}] 流程执行完成`)
         applyServerProjectTitle(pid, data.title)
@@ -593,6 +624,9 @@ const MainWorkspace: React.FC = () => {
           })
         }
 
+        if (data.consistency_report?.degraded || data.consistency_status === 'degraded') {
+          message.warning(`一致性参考已降级：${consistencyImpactText(data.consistency_report) || '请查看素材板与任务报告'}`)
+        }
         if (data.asset_board_ready) {
           if (autoMode) {
             if (Array.isArray(data.shots) && data.shots.length > 0) {
@@ -881,12 +915,89 @@ const MainWorkspace: React.FC = () => {
       })
       setEditingAssetId(null)
       setAssetDraft({})
-      message.success(regenerate ? '素材已更新并重生成' : '素材已保存')
+      if (updated?.reference_status === 'failed' || updated?.reference_status === 'stale') {
+        message.warning(`素材已保存，但参考生成未完成（${referenceStatusLabel(updated.reference_status)}）：${updated.reference_failure_reason || '请重试或替换 Prompt'}`)
+      } else if (updated?.reference_status === 'degraded') {
+        message.warning('素材已保存并标记为 degraded，请确认影响范围')
+      } else {
+        message.success(regenerate ? '素材已更新并重生成' : '素材已保存')
+      }
     } catch (err: any) {
       if (!isCurrentOperation(operation)) return
       message.error('素材保存失败：' + (err.message || '未知错误'))
     } finally {
       if (isCurrentOperation(operation)) setSavingAsset(false)
+    }
+  }
+
+  const handleReferenceAction = async (item: any, action: 'retry' | 'regenerate' | 'replace_prompt' | 'skip') => {
+    if (!projectId) return
+    if (action === 'replace_prompt') {
+      startEditAsset(item)
+      return
+    }
+    const kind = assetTab === 'characters' ? 'character' : 'scene'
+    if (action === 'skip') {
+      const impact = consistencyImpactText(item.reference_impact || {})
+      Modal.confirm({
+        title: '确认跳过本次参考素材？',
+        content: `${item.name || item.id} 缺少可用参考时，受影响镜头会明确标记为 degraded。${impact ? `\n${impact}` : ''}\n跳过不会伪装成正常成功，后续仍可重试或替换 Prompt。`,
+        okText: '确认降级并跳过',
+        okButtonProps: { danger: true },
+        cancelText: '返回处理',
+        onOk: async () => {
+          try {
+            await assetApi.referenceAction(kind, item.id, {
+              project_id: projectId,
+              action: 'skip',
+              reason: '用户明确跳过本次参考',
+              confirm_degraded: true,
+            })
+            await loadAssetBoard(projectId)
+            message.warning('已标记为 degraded，请在任务报告中确认影响范围')
+          } catch (err: any) {
+            message.error('跳过参考失败：' + (err.message || '未知错误'))
+          }
+        },
+      })
+      return
+    }
+    try {
+      const result = await assetApi.referenceAction(kind, item.id, {
+        project_id: projectId,
+        action,
+        confirm_degraded: false,
+      })
+      await loadAssetBoard(projectId)
+      if (result?.status === 'ready') message.success(action === 'retry' ? '参考素材重试成功' : '参考素材已重新生成')
+      else message.warning(`参考素材${action === 'retry' ? '重试' : '重新生成'}未完成：${result?.failure_reason || '请查看失败原因与错误编号'}`)
+    } catch (err: any) {
+      message.error('参考素材操作失败：' + (err.message || '未知错误'))
+    }
+  }
+
+  const beginStoryboardGeneration = async (confirmDegraded = false) => {
+    if (!projectId) return
+    if (!(await confirmTaskEstimate('storyboard', '生成故事板'))) return
+    const entryProjectId = projectId
+    const operation = beginOperation('generate-storyboard', entryProjectId)
+    try {
+      setGeneratingStoryboard(true)
+      setGenerating(true)
+      setAwaitingStoryboardConfirm(false)
+      setWorkspaceTab('storyboard')
+      connectWebSocket(entryProjectId, operation.projectEpoch)
+      const storyboardResult = await shotApi.generateStoryboard(entryProjectId, undefined, confirmDegraded)
+      if (!isCurrentOperation(operation)) return
+      notifyBudgetWarning(storyboardResult)
+      appendLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${confirmDegraded ? '已确认参考降级，' : ''}开始生成定稿故事板参考图`)
+      message.success('故事板任务已启动')
+    } catch (err: any) {
+      if (!isCurrentOperation(operation)) return
+      if (!notifyBudgetBlocked(err) && !notifyProviderBlocked(err)) message.error('故事板生成失败：' + (err.message || '未知错误'))
+      setGenerating(false)
+    } finally {
+      if (isLatestOperation(operation) && mountedRef.current) setGeneratingStoryboard(false)
     }
   }
 
@@ -1118,6 +1229,10 @@ const MainWorkspace: React.FC = () => {
         message.warning('当前镜头尚未生成定稿故事板')
         return
       }
+      if (!['ready', 'degraded'].includes(shot.consistency_status || 'pending') || shot.media_stale) {
+        message.warning(`镜头 ${shot.sequence} 的一致性参考为${referenceStatusLabel(shot.consistency_status)}，请先重试、替换 Prompt 或明确降级`)
+        return
+      }
       if (!(await confirmTaskEstimate('shot_video', '生成镜头 ' + shot.sequence + ' 视频', { shotId: shot.id }))) return
       setGenerating(true)
       setPreviewMode('shot')
@@ -1209,28 +1324,46 @@ const MainWorkspace: React.FC = () => {
 
   const handleGenerateStoryboard = async () => {
     if (!projectId) return
-    if (!(await confirmTaskEstimate('storyboard', '生成故事板'))) return
-    const entryProjectId = projectId
-    const operation = beginOperation('generate-storyboard', entryProjectId)
-
+    let board: any = null
     try {
-      setGeneratingStoryboard(true)
-      setGenerating(true)
-      setAwaitingStoryboardConfirm(false)
-      setWorkspaceTab('storyboard')
-      connectWebSocket(entryProjectId, operation.projectEpoch)
-      const storyboardResult = await shotApi.generateStoryboard(entryProjectId)
-      if (!isCurrentOperation(operation)) return
-      notifyBudgetWarning(storyboardResult)
-      appendLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] 已确认素材，开始生成定稿故事板参考图`)
-      message.success('故事板任务已启动')
+      board = await assetApi.board(projectId)
     } catch (err: any) {
-      if (!isCurrentOperation(operation)) return
-      if (!notifyBudgetBlocked(err) && !notifyProviderBlocked(err)) message.error('故事板生成失败：' + (err.message || '未知错误'))
-      setGenerating(false)
-    } finally {
-      if (isLatestOperation(operation) && mountedRef.current) setGeneratingStoryboard(false)
+      message.error('读取一致性参考状态失败：' + (err.message || '未知错误'))
+      return
     }
+    const items = [...(board?.characters || []), ...(board?.scenes || [])]
+    const blocking = items.filter((item: any) => ['failed', 'unsupported', 'stale'].includes(item.reference_status))
+    if (blocking.length && runMode === 'auto') {
+      setWorkspaceTab('assets')
+      message.error('自动模式已阻止生成：关键角色或场景缺少必要一致性参考，请转人工审核补齐')
+      return
+    }
+    if (blocking.length) {
+      const detail = blocking.map((item: any) => `${item.name || item.id}（${referenceStatusLabel(item.reference_status)}）`).join('、')
+      const impact = consistencyImpactText(board?.consistency_report || {})
+      Modal.confirm({
+        title: '确认以 degraded 状态继续？',
+        content: `以下参考素材未就绪：${detail}。${impact ? `\n${impact}` : ''}\n继续会将受影响镜头和项目标记为 degraded，并写入任务报告；你仍可稍后重试或替换 Prompt。`,
+        okText: '确认降级并生成',
+        okButtonProps: { danger: true },
+        cancelText: '返回处理',
+        onOk: async () => {
+          for (const item of blocking) {
+            const kind = (board?.characters || []).some((candidate: any) => candidate.id === item.id) ? 'character' : 'scene'
+            await assetApi.referenceAction(kind, item.id, {
+              project_id: projectId,
+              action: 'skip',
+              reason: '用户在故事板生成前确认降级',
+              confirm_degraded: true,
+            })
+          }
+          await loadAssetBoard(projectId)
+          await beginStoryboardGeneration(true)
+        },
+      })
+      return
+    }
+    await beginStoryboardGeneration(false)
   }
 
   useEffect(() => {
@@ -1400,6 +1533,11 @@ const MainWorkspace: React.FC = () => {
   }
 
   const selectedShotReady = Boolean(selectedShot && (selectedShot.storyboard_path || selectedShot.image_path))
+  const selectedShotReferenceReady = Boolean(
+    selectedShot &&
+    ['ready', 'degraded'].includes(selectedShot.consistency_status || 'pending') &&
+    !selectedShot.media_stale,
+  )
   const showPreviewSurface = workspaceTab === 'storyboard' || workspaceTab === 'review' || workspaceTab === 'video'
 
   const toggleQueueShot = (shotId: string) => {
@@ -1733,9 +1871,14 @@ const MainWorkspace: React.FC = () => {
           >
             <div className="asset-page-head">
               <div>
-                <div className="asset-board-title">项目素材板</div>
+                <div className="asset-board-title">
+                  项目素材板
+                  <span className={referenceStatusClass(consistencyStatus)}>{referenceStatusLabel(consistencyStatus)}</span>
+                </div>
                 <div className="asset-board-note">
                   角色与场景将作为项目级素材复用到本集故事板和后续成片。
+                  {consistencyImpactText(consistencyReport) ? ` 当前${consistencyImpactText(consistencyReport)}。` : ''}
+                  {consistencyReport?.capability_warnings?.length ? ` Provider 警告：${consistencyReport.capability_warnings[0]}` : ''}
                 </div>
               </div>
               <Button
@@ -1808,11 +1951,29 @@ const MainWorkspace: React.FC = () => {
                           <div className="asset-mini-content">
                             <div className="asset-mini-title-row">
                               <strong>{item.name}</strong>
-                              <Button size="small" icon={<EditOutlined />} onClick={() => startEditAsset(item)}>
-                                编辑
-                              </Button>
+                              <span className={referenceStatusClass(item.reference_status)}>{referenceStatusLabel(item.reference_status)}</span>
+                              <div className="asset-card-actions">
+                                <Button size="small" icon={<EditOutlined />} onClick={() => startEditAsset(item)}>
+                                  编辑
+                                </Button>
+                                <Button size="small" onClick={() => void handleReferenceAction(item, 'replace_prompt')}>
+                                  替换 Prompt
+                                </Button>
+                                <Button size="small" icon={<ReloadOutlined />} onClick={() => void handleReferenceAction(item, 'retry')}>
+                                  重试
+                                </Button>
+                                <Button size="small" type="primary" onClick={() => void handleReferenceAction(item, 'regenerate')}>
+                                  重新生成
+                                </Button>
+                                <Button size="small" danger onClick={() => void handleReferenceAction(item, 'skip')}>
+                                  跳过本次参考
+                                </Button>
+                              </div>
                             </div>
                             <span>{assetTab === 'characters' ? (item.personality || '性格待补充') : (item.description || '场景描述待补充')}</span>
+                            {item.reference_failure_reason ? <em className="reference-failure">失败原因：{item.reference_failure_reason}{item.reference_error_id ? `（错误编号 ${item.reference_error_id}）` : ''}</em> : null}
+                            {item.reference_skip_reason ? <em className="reference-failure">已降级：{item.reference_skip_reason}</em> : null}
+                            {item.reference_capability_warning ? <em className="reference-warning">能力警告：{item.reference_capability_warning}</em> : null}
                             {assetTab === 'characters' ? (
                               <>
                                 <em>音色：{item.voice_id || 'Mimo 默认音色'}</em>
@@ -1858,7 +2019,7 @@ const MainWorkspace: React.FC = () => {
                     type="primary"
                     className="review-approve-main"
                     icon={<CheckCircleOutlined />}
-                    disabled={!selectedShot || !selectedShotReady || selectedShot.confirmed}
+                    disabled={!selectedShot || !selectedShotReady || !selectedShotReferenceReady || selectedShot.confirmed}
                     onClick={() => selectedShot && void handleApproveShot(selectedShot.id, true)}
                   >
                     {selectedShot?.confirmed ? '已通过审批' : '通过当前镜头'}
@@ -1996,7 +2157,10 @@ const MainWorkspace: React.FC = () => {
           {selectedShot && !isGenerating && previewMode === 'shot' && (
             <div className="preview-caption">
               <div className="preview-scene">{selectedShot.scene_description}</div>
-              {selectedShot.dialogue && <div className="preview-dialogue">“{selectedShot.dialogue}”</div>}
+              {selectedShot.reference_capability_warning ? (
+                <div className="reference-warning" role="alert">能力警告：{selectedShot.reference_capability_warning}</div>
+              ) : null}
+              {selectedShot.dialogue && <div className="preview-dialogue">“{formatDialogueForEditor(selectedShot.dialogue)}”</div>}
               {workspaceTab === 'review' && selectedShotReady && (
                 <div className="preview-approval-actions">
                   <Button
@@ -2012,6 +2176,7 @@ const MainWorkspace: React.FC = () => {
                     退回调整
                   </Button>
                   <span>{selectedShot.confirmed ? '已通过' : '待审核'}</span>
+                  <span className={referenceStatusClass(selectedShot.consistency_status)}>{referenceStatusLabel(selectedShot.consistency_status)}</span>
                 </div>
               )}
             </div>
@@ -2100,6 +2265,11 @@ const MainWorkspace: React.FC = () => {
                   </button>
                   {shot.media_stale && (
                     <span className="thumb-stale-badge" title="参数已修改，素材待重新生成">待重生成</span>
+                  )}
+                  {!['ready', 'pending'].includes(shot.consistency_status || 'pending') && (
+                    <span className={`thumb-reference-badge ${shot.consistency_status || ''}`} title={shot.reference_capability_warning || '一致性参考状态异常'}>
+                      {referenceStatusLabel(shot.consistency_status)}
+                    </span>
                   )}
                   {thumbUrl ? (
                     <img src={thumbUrl} alt={`镜头 ${i + 1}`} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />

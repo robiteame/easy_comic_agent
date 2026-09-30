@@ -22,6 +22,7 @@ from services.providers.usage import (
     adapter_usage_from_response,
 )
 from services import usage_service
+from services.job_debug import record_api_request, record_api_result
 
 
 class LLMService:
@@ -131,16 +132,40 @@ class LLMService:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        response = await self._completion_with_fallback(
-            lambda adapter, model: adapter.complete(
-                messages=messages,
-                model=model_override or model,
-                temperature=temperature,
-                max_tokens=self.max_tokens,
-            ),
-            allow_fallback=allow_fallback,
+        debug_request_id = record_api_request(
+            api="LLM Chat",
+            provider=self._endpoint.protocol,
+            model=model_override or self.model,
+            params={
+                "temperature": temperature,
+                "max_tokens": self.max_tokens,
+                "allow_fallback": allow_fallback,
+                "response_format": "text",
+            },
+            prompt={"system": system_prompt, "user": user_prompt},
         )
-        return self._message_text(response.choices[0].message)
+        try:
+            response = await self._completion_with_fallback(
+                lambda adapter, model: adapter.complete(
+                    messages=messages,
+                    model=model_override or model,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                ),
+                allow_fallback=allow_fallback,
+            )
+            text = self._message_text(response.choices[0].message)
+        except Exception as exc:
+            record_api_result(debug_request_id, api="LLM Chat", status="error", message=f"LLM 调用失败：{exc}")
+            raise
+        record_api_result(
+            debug_request_id,
+            api="LLM Chat",
+            status="success",
+            message="LLM 调用成功",
+            detail={"output_chars": len(text), "provider_used": self.last_provider_used},
+        )
+        return text
 
     async def call_json(
         self,
@@ -181,15 +206,39 @@ class LLMService:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        return await self._completion_with_fallback(
-            lambda adapter, model: adapter.complete_json(
-                messages=messages,
-                model=model_override or model,
-                temperature=temperature,
-                max_tokens=self.max_tokens,
-            ),
-            allow_fallback=allow_fallback,
+        debug_request_id = record_api_request(
+            api="LLM JSON",
+            provider=self._endpoint.protocol,
+            model=model_override or self.model,
+            params={
+                "temperature": temperature,
+                "max_tokens": self.max_tokens,
+                "allow_fallback": allow_fallback,
+                "response_format": "json_object",
+            },
+            prompt={"system": system_prompt, "user": user_prompt},
         )
+        try:
+            response = await self._completion_with_fallback(
+                lambda adapter, model: adapter.complete_json(
+                    messages=messages,
+                    model=model_override or model,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                ),
+                allow_fallback=allow_fallback,
+            )
+        except Exception as exc:
+            record_api_result(debug_request_id, api="LLM JSON", status="error", message=f"LLM JSON 调用失败：{exc}")
+            raise
+        record_api_result(
+            debug_request_id,
+            api="LLM JSON",
+            status="success",
+            message="LLM JSON 调用成功",
+            detail={"provider_used": self.last_provider_used},
+        )
+        return response
 
     async def _completion_with_fallback(self, create_completion, allow_fallback: bool = True):
         self._sync_config()
@@ -252,6 +301,13 @@ class LLMService:
         mime_type = mimetypes.guess_type(image_path)[0] or "image/png"
 
         adapter = self._adapter_for(self._endpoint)
+        debug_request_id = record_api_request(
+            api="LLM Vision",
+            provider=self._endpoint.protocol,
+            model=self.vision_model,
+            params={"temperature": 0.3, "max_tokens": self.max_tokens, "input_images": 1},
+            prompt=prompt,
+        )
         started = time.monotonic()
         try:
             response = await self.client.chat.completions.create(
@@ -274,8 +330,11 @@ class LLMService:
         except asyncio.CancelledError:
             self._record_cancelled(adapter, self.vision_model, started)
             raise
-        except Exception:
+        except Exception as exc:
             self._record_failure(adapter, self.vision_model, started)
+            record_api_result(debug_request_id, api="LLM Vision", status="error", message=f"视觉模型调用失败：{exc}")
             raise
         self._record(adapter, response, self.vision_model, started)
-        return self._message_text(response.choices[0].message)
+        text = self._message_text(response.choices[0].message)
+        record_api_result(debug_request_id, api="LLM Vision", status="success", message="视觉模型调用成功")
+        return text

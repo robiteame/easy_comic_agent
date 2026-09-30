@@ -362,8 +362,8 @@ const ShotVersionHistory: React.FC<ShotVersionHistoryProps> = ({ open, shot, onC
                       {diffRows.map((row) => (
                         <tr key={row.field} className={row.changed ? 'changed' : ''}>
                           <th scope="row">{fieldLabel(row.field)}</th>
-                          <td>{formatSnapshotValue(row.a)}</td>
-                          <td>{formatSnapshotValue(row.b)}</td>
+                          <td>{formatSnapshotValue(row.a, row.field)}</td>
+                          <td>{formatSnapshotValue(row.b, row.field)}</td>
                         </tr>
                       ))}
                       {!diffRows.length && (

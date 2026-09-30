@@ -9,6 +9,7 @@ import time
 
 from config import settings
 from services import usage_service
+from services.job_debug import record_api_request, record_api_result
 from services.providers.base import TTSRequest
 from services.providers.endpoint import get_endpoint
 from services.providers.registry import get_adapter
@@ -63,6 +64,13 @@ class TTSService:
         request = TTSRequest(text=text, voice_id=voice_id, emotion=emotion)
         # 用量按字符数记账（TTS 的通用计价口径）；成功/失败都留痕。
         metadata = adapter_usage_for_request(adapter, CAPABILITY_TTS, request)
+        debug_request_id = record_api_request(
+            api="TTS Synthesize",
+            provider=endpoint.protocol,
+            model=endpoint.model or "default",
+            params={"voice_id": voice_id, "emotion": emotion, "text_chars": len(text)},
+            prompt=text,
+        )
         scope = usage_service.current_scope().merged(project_id=safe_project_id, shot_id=safe_shot_id)
         started = time.monotonic()
         try:
@@ -74,18 +82,26 @@ class TTSService:
                 scope=scope,
             )
             raise
-        except Exception:
+        except Exception as exc:
             usage_service.record_failure(
                 metadata,
                 error_code=ERROR_CODE_PROVIDER_CALL_FAILED,
                 duration_ms=int((time.monotonic() - started) * 1000),
                 scope=scope,
             )
+            record_api_result(debug_request_id, api="TTS Synthesize", status="error", message=f"TTS API 调用失败：{exc}")
             raise
         usage_service.record_metadata(
             metadata,
             duration_ms=int((time.monotonic() - started) * 1000),
             scope=scope,
+        )
+        record_api_result(
+            debug_request_id,
+            api="TTS Synthesize",
+            status="success",
+            message="TTS API 返回成功",
+            detail={"audio_bytes": len(audio_data)},
         )
 
         audio_dir = safe_path(self.output_dir, safe_project_id, "audio", create_parent=True)

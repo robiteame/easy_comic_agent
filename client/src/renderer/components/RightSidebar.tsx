@@ -17,7 +17,8 @@ import Input from 'antd/es/input'
 import InputNumber from 'antd/es/input-number'
 import message from 'antd/es/message'
 import Select from 'antd/es/select'
-import { assetApi, shotApi, toOutputUrl } from '../services/api'
+import { assetApi, renderApi, shotApi, toOutputUrl, type RenderCapabilities } from '../services/api'
+import { formatDialogueForEditor, parseDialogueFromEditor } from '../services/dialogueTimeline'
 import { optimisticShotFieldPatch, saveFailureRollbackPatch, type MediaStaleBackup } from '../services/shotEditGuard'
 import { notifyBudgetBlocked, notifyBudgetWarning, notifyProviderBlocked, useTaskEstimateGate } from './TaskEstimateModal'
 import {
@@ -90,6 +91,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
   const [shotDirty, setShotDirty] = useState(false)
   const [shotSaveState, setShotSaveState] = useState<'idle' | 'dirty' | 'saving' | 'error'>('idle')
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false)
+  const [renderCapabilities, setRenderCapabilities] = useState<RenderCapabilities | null>(null)
   // 提交前估算闸门：重新生成镜头会真实调用图像接口，需要先确认成本与耗时。
   const estimateGate = useTaskEstimateGate()
   const shotDraftRef = useRef<Record<string, any>>({})
@@ -148,6 +150,20 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
       })
       .catch(() => undefined)
   }, [projectId])
+
+  useEffect(() => {
+    let active = true
+    renderApi.capabilities()
+      .then((capabilities) => {
+        if (active) setRenderCapabilities(capabilities)
+      })
+      .catch(() => {
+        if (active) setRenderCapabilities(null)
+      })
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     promptRequestRef.current += 1
@@ -507,7 +523,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
       ]),
       `场景描述：${(shotDraft.scene_description ?? selectedShot.scene_description) || '未填写'}`,
       (shotDraft.character_action ?? selectedShot.character_action) ? `人物动作：${shotDraft.character_action ?? selectedShot.character_action}` : '',
-      (shotDraft.dialogue ?? selectedShot.dialogue) ? `对白：${shotDraft.dialogue ?? selectedShot.dialogue}` : '',
+      (shotDraft.dialogue ?? selectedShot.dialogue) ? `对白：${formatDialogueForEditor(shotDraft.dialogue ?? selectedShot.dialogue)}` : '',
       selectedShot.consistency_context ? `一致性约束：${selectedShot.consistency_context}` : '',
       (shotDraft.visual_notes ?? selectedShot.visual_notes) ? `用户补充：${shotDraft.visual_notes ?? selectedShot.visual_notes}` : '',
     ]
@@ -769,7 +785,16 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                           { value: '跟', label: '跟镜（跟随）' },
                           { value: '升降', label: '升降镜头' },
                           { value: '环绕', label: '环绕运镜' },
-                        ]}
+                          { value: '缓慢推进', label: '缓慢推进' },
+                        ].map((option) => {
+                          const capability = renderCapabilities?.camera_movements.find((item) => item.value === option.value)
+                          const supported = capability?.supported ?? true
+                          return {
+                            ...option,
+                            disabled: !supported,
+                            label: supported ? option.label : `${option.label}（Provider 不支持）`,
+                          }
+                        })}
                       />
                     </div>
 
@@ -790,7 +815,15 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                           { value: 'white_flash', label: '白闪 White Flash' },
                           { value: 'push', label: '推拉 Push' },
                           { value: 'wipe', label: '划像 Wipe' },
-                        ]}
+                        ].map((option) => {
+                          const capability = renderCapabilities?.transitions.find((item) => item.value === option.value)
+                          const supported = capability?.supported ?? true
+                          return {
+                            ...option,
+                            disabled: !supported,
+                            label: supported ? option.label : `${option.label}（FFmpeg 不支持，降级 Cut）`,
+                          }
+                        })}
                       />
                     </div>
 
@@ -910,9 +943,10 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                         id="shot-dialogue"
                         aria-label="对白"
                         autoSize={{ minRows: 2, maxRows: 5 }}
-                        value={shotDraft.dialogue ?? selectedShot.dialogue}
+                        value={formatDialogueForEditor(shotDraft.dialogue ?? selectedShot.dialogue)}
                         disabled={selectedShot.confirmed}
-                        onChange={(e) => updateCurrentShot({ dialogue: e.target.value })}
+                        placeholder="说话人 | 情绪 | 开始-结束(ms 或 auto) | 台词（每行一句）"
+                        onChange={(e) => updateCurrentShot({ dialogue: parseDialogueFromEditor(e.target.value) })}
                       />
                     </div>
 

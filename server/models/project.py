@@ -47,7 +47,12 @@ class Project(Base):
     output_format = Column(String, default="9:16")
     resolution = Column(String, default="1080p")
     platform = Column(String, default="douyin")
+    # 0 表示历史项目未显式设置；新项目由创建/解析请求写入，渲染时不得静默猜回默认值。
+    target_duration = Column(Integer, default=0)
+    timing_plan = Column(Text, default="{}")
     consistency_config = Column(Text, default="{}")
+    # 当前项目一致性参考汇总：含每项状态、失败原因、错误编号和影响镜头范围。
+    consistency_report = Column(Text, default="{}")
     # 字幕/音频配置版本：工作台每次修改轨道或字幕条目时 +1；渲染任务记录
     # 渲染时的值，发布前比对不一致即丢弃成片，避免旧配置覆盖新修改。
     av_config_version = Column(Integer, default=0)

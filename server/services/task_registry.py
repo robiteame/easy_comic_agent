@@ -18,6 +18,7 @@ authority, which makes competing requests and server restarts explicit.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from dataclasses import dataclass, field, replace
@@ -30,6 +31,12 @@ from config import settings
 from db import SessionLocal
 from models import BackgroundJob, Project, Shot
 from services import budget_service, usage_service
+from services.job_debug import (
+    append_event as append_debug_event,
+    make_event as make_debug_event,
+    parse_events as parse_debug_events,
+    publish_debug_event,
+)
 from services.error_reporter import ERROR_BACKGROUND_JOB, log_failure, redact, summarize
 from services.job_dto import job_dto
 from services.job_events import (
@@ -315,9 +322,22 @@ def _claim_row(
             **queue_metadata,
         )
         db.add(job)
+        debug_raw, debug_revision = append_debug_event(
+            "[]",
+            make_debug_event(
+                "lifecycle",
+                message or "任务已创建，等待执行",
+                step=current_step,
+                progress=0,
+                status="request",
+            ),
+        )
+        job.debug_events = debug_raw
+        job.debug_revision = debug_revision
         usage, estimate = _cost_context(db, key)
         payload = job_dto(job, now=now, usage=usage, estimate=estimate)
         db.commit()
+        publish_debug_event(job, parse_debug_events(debug_raw)[-1], debug_revision)
         _claim_tokens[key] = run_token
         _record_claim_scope(key, scope, resolved_type, job, identity)
         # 已经把 job_id 补进估算 / 预留 / 已落库的用量行，任务中心可据此直查成本。
@@ -405,6 +425,15 @@ def active(key: str) -> bool:
         db.close()
 
 
+def _report_json(report: dict[str, Any] | str | None) -> str:
+    if isinstance(report, str):
+        return report[:20000]
+    try:
+        return json.dumps(report or {}, ensure_ascii=False)[:20000]
+    except (TypeError, ValueError):
+        return "{}"
+
+
 def update_progress(
     key: str,
     progress: int,
@@ -412,6 +441,7 @@ def update_progress(
     run_token: str | None = None,
     current_step: str | None = None,
     message: str | None = None,
+    report: dict[str, Any] | str | None = None,
 ) -> bool:
     """写入进度与可读步骤；``current_step`` / ``message`` 为可选增量。
 
@@ -421,29 +451,56 @@ def update_progress(
     token = run_token or _run_token_for_current_task(key)
     if not token:
         return False
-    values: dict[Any, Any] = {
-        BackgroundJob.progress: max(0, min(100, int(progress))),
-        BackgroundJob.updated_at: datetime.utcnow(),
-    }
-    if current_step is not None:
-        values[BackgroundJob.current_step] = str(current_step)[:120]
-    if message is not None:
-        values[BackgroundJob.message] = summarize(message, limit=_ERROR_MESSAGE_CHARS)
+    progress_value = max(0, min(100, int(progress)))
     db = SessionLocal()
     try:
-        updated = (
+        job = (
             db.query(BackgroundJob)
             .filter(
                 BackgroundJob.idempotency_key == key,
                 BackgroundJob.run_token == token,
                 BackgroundJob.status.in_(ACTIVE_STATUSES),
             )
+            .first()
+        )
+        if job is None:
+            return False
+        values: dict[Any, Any] = {
+            BackgroundJob.progress: progress_value,
+            BackgroundJob.updated_at: datetime.utcnow(),
+        }
+        resolved_step = str(current_step if current_step is not None else job.current_step or "")[:120]
+        resolved_message = summarize(message, limit=_ERROR_MESSAGE_CHARS) if message is not None else str(job.message or "")
+        if current_step is not None:
+            values[BackgroundJob.current_step] = resolved_step
+        if message is not None:
+            values[BackgroundJob.message] = resolved_message
+        if report is not None:
+            values[BackgroundJob.report] = _report_json(report)
+        debug_event = make_debug_event(
+            "progress",
+            resolved_message or "进度已更新",
+            step=resolved_step,
+            progress=progress_value,
+            status="progress",
+        )
+        debug_raw, debug_revision = append_debug_event(
+            job.debug_events,
+            debug_event,
+            revision=int(job.debug_revision or 0),
+        )
+        values[BackgroundJob.debug_events] = debug_raw
+        values[BackgroundJob.debug_revision] = debug_revision
+        updated = (
+            db.query(BackgroundJob)
+            .filter(BackgroundJob.id == job.id, BackgroundJob.run_token == token)
             .update(values, synchronize_session=False)
         )
         db.commit()
-        if updated and has_job_listeners():
-            job = db.query(BackgroundJob).filter(BackgroundJob.idempotency_key == key).first()
-            if job is not None:
+        if updated:
+            db.refresh(job)
+            publish_debug_event(job, debug_event, debug_revision)
+            if has_job_listeners():
                 usage, estimate = _cost_context(db, key)
                 publish_job_event(EVENT_JOB_PROGRESS, job_dto(job, usage=usage, estimate=estimate))
         return bool(updated)
@@ -482,6 +539,7 @@ def finish(
     *,
     run_token: str | None = None,
     error_code: str | None = None,
+    report: dict[str, Any] | str | None = None,
 ) -> bool:
     """收敛到终态。终态是吸收态，且只有持有当前 run token 的尝试可以写入。
 
@@ -519,11 +577,28 @@ def finish(
         job.error = safe_error
         job.error_code = error_code or error_code_for_status(target, safe_error)
         job.error_message = _short_error(safe_error, target)
+        if report is not None:
+            job.report = _report_json(report)
         job.current_step = "" if target == STATUS_COMPLETED else job.current_step
         job.message = _terminal_message(target, job.message)
         job.progress = 100 if target == STATUS_COMPLETED else job.progress
         job.finished_at = datetime.utcnow()
         job.updated_at = job.finished_at
+        terminal_debug = make_debug_event(
+            "lifecycle",
+            _terminal_message(target, job.message),
+            step=str(job.current_step or ""),
+            progress=100 if target == STATUS_COMPLETED else int(job.progress or 0),
+            status="success" if target == STATUS_COMPLETED else ("cancelled" if target == STATUS_CANCELLED else "error"),
+            detail={"error_code": str(job.error_code or "")} if target != STATUS_COMPLETED else None,
+        )
+        debug_raw, debug_revision = append_debug_event(
+            job.debug_events,
+            terminal_debug,
+            revision=int(job.debug_revision or 0),
+        )
+        job.debug_events = debug_raw
+        job.debug_revision = debug_revision
         if target != STATUS_COMPLETED:
             _reconcile_abandoned_work(db, job, target)
         usage, estimate = _cost_context(db, key)
@@ -533,6 +608,7 @@ def finish(
         if _claim_tokens.get(key) == token:
             _claim_tokens.pop(key, None)
         _settle(key, target, job_id=job_id)
+        publish_debug_event(job, terminal_debug, debug_revision)
         publish_job_event(terminal_event_for(target), payload)
         if target == STATUS_FAILED:
             # 失败归因在后台异步进行（规则 + LLM），完成后再推 job.updated；

@@ -10,7 +10,8 @@ from config import settings
 from services.atomic_json import read_json_file
 from services.model_config_service import get_model_config, save_model_config
 from services.model_discovery_service import ModelDiscoveryError, discover_models
-from services.providers.endpoint import endpoint_identity, get_endpoint
+from services.providers.capability_matrix import capability_report
+from services.providers.endpoint import KNOWN_PROTOCOLS, endpoint_identity, get_endpoint
 from services.skill_config_service import list_skill_templates, save_skill_template, set_skill_bindings
 from services.style_templates import create_custom_style_template, style_options
 
@@ -91,6 +92,19 @@ async def update_skill_bindings(data: SkillBindingsSave):
         return set_skill_bindings(data.model_dump(exclude_none=True))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/provider-capabilities")
+async def get_provider_capabilities():
+    """完整 Provider Capability Matrix；不含密钥，不把提示词策略当模型能力。"""
+
+    providers: dict[str, list[dict]] = {}
+    for capability in ("image", "video"):
+        providers[capability] = [
+            capability_report(capability, protocol)
+            for protocol in KNOWN_PROTOCOLS.get(capability, ())
+        ]
+    return {"matrix_version": 1, "providers": providers}
 
 
 @router.get("/model-configs")

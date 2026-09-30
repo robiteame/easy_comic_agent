@@ -25,6 +25,7 @@ from config import settings
 from models import BackgroundJob
 from services import usage_service
 from services.job_dto import as_utc, estimate_eta_seconds, job_dto
+from services.job_debug import parse_events as parse_debug_events
 from services.job_types import (
     ACTIVE_STATUSES,
     DISPATCHABLE_JOB_TYPES,
@@ -163,6 +164,7 @@ def _dto(
     samples: dict[str, list[float]],
     usages: dict[str, dict[str, Any]] | None = None,
     estimates: dict[str, dict[str, Any]] | None = None,
+    include_report: bool = False,
 ) -> dict[str, Any]:
     eta = None
     if str(row.status) in ACTIVE_STATUSES:
@@ -182,6 +184,7 @@ def _dto(
         dispatchable=str(row.job_type) in DISPATCHABLE_JOB_TYPES,
         usage=usage,
         estimate=estimate,
+        include_report=include_report,
     )
 
 
@@ -350,6 +353,7 @@ def job_detail(db: Session, job: BackgroundJob) -> dict[str, Any]:
         samples=samples,
         usages=usages,
         estimates=estimates,
+        include_report=True,
     )
     dto["attempts"] = attempt_history(db, job)
     dto["latest_attempt_job_id"] = str(latest.id) if latest is not None else None
@@ -359,6 +363,22 @@ def job_detail(db: Session, job: BackgroundJob) -> dict[str, Any]:
         "attempt": dto["attempt"],
     }
     return dto
+
+
+def job_debug_log(db: Session, job: BackgroundJob) -> dict[str, Any]:
+    """返回单条任务的脱敏调试轨迹，供进度条弹层实时轮询/断线补齐。"""
+
+    return {
+        "job_id": str(job.id),
+        "project_id": str(job.project_id or ""),
+        "status": str(job.status or ""),
+        "progress": max(0, min(100, int(job.progress or 0))),
+        "current_step": str(job.current_step or ""),
+        "message": str(job.message or ""),
+        "debug_revision": max(0, int(job.debug_revision or 0)),
+        "events": parse_debug_events(job.debug_events),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def purge_jobs(db: Session, query: JobQuery) -> int:

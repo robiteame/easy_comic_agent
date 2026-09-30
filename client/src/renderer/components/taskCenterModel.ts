@@ -252,6 +252,7 @@ export function normalizeJob(raw: unknown): JobDto | null {
     error_code_label: asString(source.error_code_label),
     error_message: asString(source.error_message),
     error_detail: normalizeErrorDetail(source.error_detail),
+    report: source.report && typeof source.report === 'object' ? (source.report as Record<string, any>) : null,
     attempt: Math.max(1, Math.round(asNumber(source.attempt, 1))),
     retry_of: asIsoOrNull(source.retry_of),
     version: asNumber(source.version),

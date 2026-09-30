@@ -90,6 +90,11 @@ JSON 结构：
     if not result.get("script") or not shot.get("scene_description") or not shot.get("dialogue"):
         raise RuntimeError(f"unexpected Mimo storyboard result: {result}")
     shot["shot_id"] = DIAGNOSTIC_SHOT_ID
+    # 对白为结构化列表（或旧字符串）：诊断只取第一句文本做 TTS 探测。
+    dialogue = shot.get("dialogue")
+    if isinstance(dialogue, list):
+        first = dialogue[0] if dialogue else {}
+        shot["dialogue"] = str((first or {}).get("line") or "") if isinstance(first, dict) else str(first or "")
     print(f"MIMO_OK title={result.get('title', '')} dialogue={shot.get('dialogue', '')}")
     return result
 
