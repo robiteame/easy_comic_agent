@@ -75,6 +75,24 @@ class Settings(BaseSettings):
     TTS_PROVIDER: str = "mimo"  # 语音协议选择：mimo / tencent / dashscope（bailian、cosyvoice 等别名亦可）
     TTS_DEFAULT_VOICE: str = "zh-CN-XiaoyiNeural"
 
+    # 自动模式质量闭环（QualityReviewService）：
+    # - 通过阈值：镜头加权综合分低于该值不得自动批准；
+    # - 降级策略：strict = 存在未检测维度（Provider 未配置）时不通过；
+    #   lenient = 允许在已检测维度上通过，未检测项在界面与日志如实标注；
+    # - 最大重试：质量不达标的镜头按审核建议修正 prompt 后重生成，
+    #   超过次数仍不达标则标记 needs_review 转人工，绝不自动放行。
+    QUALITY_REVIEW_PASS_SCORE: float = 0.75
+    QUALITY_STORYBOARD_MAX_RETRIES: int = 2
+    QUALITY_VIDEO_MAX_RETRIES: int = 1
+    QUALITY_DEGRADATION_POLICY: str = "strict"  # strict | lenient
+    QUALITY_IDENTITY_SIMILARITY_THRESHOLD: float = 0.75
+
+    # 角色身份 embedding Provider（OpenAI 兼容多模态 /embeddings 接口）。
+    # 未配置时身份相似度证据如实标记 unsupported，绝不假装通过。
+    IDENTITY_EMBEDDING_API_KEY: str = ""
+    IDENTITY_EMBEDDING_BASE_URL: str = ""
+    IDENTITY_EMBEDDING_MODEL: str = ""
+
     # ChromaDB 配置
     CHROMADB_PATH: str = str(Path(__file__).parent / "data" / "chromadb")
 

@@ -27,9 +27,17 @@ export const SHOT_META_FIELDS = [
   'storyboard_status',
   'confirmed',
   'media_stale',
+  'duration',
+  'estimated_speech_ms',
+  'consistency_status',
+  'consistency_report',
+  'storyboard_reference_manifest',
+  'video_reference_manifest',
+  'reference_capability_warning',
   'scene_group_id',
   'reference_weights',
   'continuity_profile',
+  'quality_review',
 ] as const
 
 export type ShotServerUpdate = Record<string, unknown>

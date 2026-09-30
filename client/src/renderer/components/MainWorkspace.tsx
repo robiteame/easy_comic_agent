@@ -42,6 +42,8 @@ import {
 const AvWorkbench = React.lazy(() => import('./AvWorkbench'))
 import BudgetSummaryPanel from './BudgetSummaryPanel'
 import { consistencyImpactText, referenceStatusClass, referenceStatusLabel } from './consistencyModel'
+import QualityReviewPanel from './QualityReviewPanel'
+import { qualityBadgeFor, verdictMeta } from './qualityReviewModel'
 import { notifyBudgetBlocked, notifyBudgetWarning, notifyProviderBlocked, useTaskEstimateGate } from './TaskEstimateModal'
 
 const { TextArea } = Input
@@ -98,6 +100,7 @@ function normalizeShot(shot: any) {
     camera_angle: shot.camera_angle || '正面',
     camera_movement: shot.camera_movement || '静止',
     duration: Number(shot.duration || 3),
+    estimated_speech_ms: Number(shot.estimated_speech_ms || 0),
     emotion: shot.emotion || 'neutral',
     transition: shot.transition || 'cut',
     visual_notes: shot.visual_notes || '',
@@ -115,6 +118,7 @@ function normalizeShot(shot: any) {
     storyboard_reference_manifest: Array.isArray(shot.storyboard_reference_manifest) ? shot.storyboard_reference_manifest : [],
     video_reference_manifest: Array.isArray(shot.video_reference_manifest) ? shot.video_reference_manifest : [],
     reference_capability_warning: shot.reference_capability_warning || '',
+    quality_review: shot.quality_review || null,
     characters_in_scene: Array.isArray(shot.characters_in_scene) ? shot.characters_in_scene : [],
     scene_asset_id: shot.scene_asset_id || '',
     character_asset_ids: Array.isArray(shot.character_asset_ids) ? shot.character_asset_ids : [],
@@ -722,6 +726,35 @@ const MainWorkspace: React.FC = () => {
         setLoading(false)
         setProgress(100, 'quality_check')
         message.success('成片已生成，可直接播放')
+        return
+      }
+
+      if (data.type === 'quality_review' && data.review) {
+        // 自动模式质量门禁每轮审核的实时回显：只记日志 + 通知面板刷新，
+        // 不在这里改 store（审核详情由面板按镜头拉取，避免部分更新）。
+        const review = data.review as {
+          shot_id: string
+          verdict: string
+          overall_score: number
+          degraded?: boolean
+          stage?: string
+        }
+        const meta = verdictMeta(review.verdict)
+        appendLog(
+          `[${ts}] 质量审核 | 镜头 ${review.shot_id} ${review.stage === 'video' ? '视频' : '故事板'} ${meta.label}` +
+            `（${Math.round(Number(review.overall_score || 0) * 100)} 分）${review.degraded ? '｜含未检测维度（降级放行）' : ''}`,
+        )
+        window.dispatchEvent(new CustomEvent('quality-review-updated', { detail: { shot_id: review.shot_id } }))
+        // quality_review is persisted separately from shot_update; reload the
+        // project list so every thumbnail badge reflects the new latest row,
+        // including reviews for shots other than the selected one.
+        void loadProjectShots(pid)
+        return
+      }
+
+      if (data.type === 'quality_gate_needs_human' && Array.isArray(data.shot_ids)) {
+        appendLog(`[${ts}] 质量门禁 | ${data.shot_ids.length} 个镜头始终未通过自动审核，已转人工（needs_review）`)
+        message.warning('部分镜头未通过自动质量审核，已转人工处理，请在「分镜审核」中查看评分与问题')
         return
       }
 
@@ -2043,6 +2076,10 @@ const MainWorkspace: React.FC = () => {
               </div>
             )}
 
+            {workspaceTab === 'review' && selectedShot && (
+              <QualityReviewPanel shot={selectedShot} />
+            )}
+
             <div
               className="preview-panel panel-enter"
               {...getWorkspacePanelAriaProps(workspaceTab)}
@@ -2271,6 +2308,15 @@ const MainWorkspace: React.FC = () => {
                       {referenceStatusLabel(shot.consistency_status)}
                     </span>
                   )}
+                  {(() => {
+                    const badge = qualityBadgeFor(shot.quality_review)
+                    if (!badge) return null
+                    return (
+                      <span className={`thumb-quality-badge ${badge.className}`} title={badge.title}>
+                        {badge.label}
+                     </span>
+                   )
+                  })()}
                   {thumbUrl ? (
                     <img src={thumbUrl} alt={`镜头 ${i + 1}`} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   ) : (

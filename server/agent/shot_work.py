@@ -114,6 +114,8 @@ async def generate_storyboard_shot(
     project_id: str,
     provider_override: str = "",
     preferred_size: str = "",
+    capability_mode: str = "auto",
+    confirm_capability_downgrade: bool = False,
 ) -> dict[str, Any]:
     """单镜头故事板适配器：复用 route 层实现，但不把单镜头结果写成项目级失败。"""
 
@@ -126,6 +128,8 @@ async def generate_storyboard_shot(
         emit_project_result=False,
         provider_override=provider_override,
         preferred_size=preferred_size,
+        capability_mode=capability_mode,
+        confirm_capability_downgrade=confirm_capability_downgrade,
     )
     return _db_artifact(shot_id, stage="image_generation", path_fields=("storyboard_path", "image_path"), expected_version=expected_version)
 
@@ -137,6 +141,8 @@ async def generate_video_shot(
     project_id: str,
     provider_override: str = "",
     resolution_override: str = "",
+    capability_mode: str = "auto",
+    confirm_capability_downgrade: bool = False,
 ) -> dict[str, Any]:
     from api.routes.shot import _run_single_shot_video
 
@@ -146,6 +152,8 @@ async def generate_video_shot(
         expected_version=int(expected_version),
         provider_override=provider_override,
         resolution_override=resolution_override,
+        capability_mode=capability_mode,
+        confirm_capability_downgrade=confirm_capability_downgrade,
     )
     return _db_artifact(shot_id, stage="video_generation", path_fields=("video_path",), expected_version=expected_version)
 

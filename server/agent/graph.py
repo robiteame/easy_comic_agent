@@ -385,13 +385,44 @@ async def _image_generation_fan_in(state: AgentState) -> dict:
 
 
 async def _quality_review(state: AgentState) -> dict:
+    project_id = str(state.get("project_id") or "")
     reference_gate = _reference_gate(str(state.get("project_id") or ""))
     if reference_gate.get("blocking"):
         return _reference_review_update(str(state.get("project_id") or ""), reference_gate)
-    critique = critique_images(_latest_artifacts(state, StageName.IMAGE_GENERATION))
-    if critique.passed:
-        await _confirm_storyboard_shots(state.get("project_id", ""), _latest_artifacts(state, StageName.IMAGE_GENERATION))
-    return {"critiques": [critique.model_dump(mode="json")], "current_step": "quality_review"}
+    artifacts = _latest_artifacts(state, StageName.IMAGE_GENERATION)
+    structural = critique_images(artifacts)
+    if not structural.passed:
+        return {
+            "critiques": [structural.model_dump(mode="json")],
+            "stage_status": {StageName.QUALITY_REVIEW.value: StageStatus.FAILED.value},
+            "current_step": "quality_review",
+        }
+    gate = await _run_storyboard_quality_gate(project_id)
+    reviews = gate.get("reviews") or {}
+    passed = bool(gate.get("passed")) and not gate.get("errors")
+    quality_critique = {
+        "stage": StageName.QUALITY_REVIEW.value,
+        "passed": passed,
+        "score": round(sum(float(review.overall_score) for review in reviews.values()) / max(1, len(reviews)), 3),
+        "issues": [
+            {"code": "quality_review_failed", "severity": "error", "message": f"镜头 {shot_id} 未通过质量审核: {review.suggestion or '请查看质量审核记录'}", "shot_id": shot_id}
+            for shot_id, review in reviews.items() if not review.passed
+        ],
+        "proposed_changes": [review.suggestion for review in reviews.values() if review.suggestion],
+        "source": "quality_review_service",
+    }
+    status = StageStatus.SUCCEEDED.value if passed else StageStatus.WAITING_HUMAN.value
+    update: dict[str, Any] = {
+        "critiques": [structural.model_dump(mode="json"), quality_critique],
+        "stage_status": {StageName.QUALITY_REVIEW.value: status},
+        "current_step": "quality_review",
+    }
+    if passed:
+        await _confirm_storyboard_shots(project_id, artifacts)
+    if gate.get("errors"):
+        update.update({key: value for key, value in gate.items() if key in {"errors", "needs_human_review", "human_reason"}})
+    _save_quality_review_checkpoint(state, quality_critique, reviews, status=status)
+    return update
 
 
 async def _quality_decision(state: AgentState) -> dict:
@@ -404,6 +435,17 @@ async def _quality_recovery(state: AgentState) -> dict:
 
 async def _video_generation_fan_out(state: AgentState) -> dict:
     project_id, store, base = _stage_context(state, StageName.VIDEO_GENERATION)
+    from services.quality_review_service import quality_review_service
+
+    storyboard_gate = quality_review_service.storyboard_gate_status(project_id)
+    if not storyboard_gate.get("ok"):
+        return {
+            **_abort("video_generation", "故事板质量门禁未通过，自动模式禁止生成视频: " + _gate_failure_summary(storyboard_gate)),
+            "stage_status": {StageName.VIDEO_GENERATION.value: StageStatus.WAITING_HUMAN.value},
+            "needs_human_review": True,
+            "human_reason": "故事板质量门禁未通过",
+            "current_step": "video_generation",
+        }
     shot_versions = _shot_versions(project_id, state.get("pending_shot_ids"), require_storyboard=True)
     if not shot_versions:
         return {"stage_status": {StageName.VIDEO_GENERATION.value: StageStatus.FAILED.value}, "current_step": "video_generation_fan_out"}
@@ -446,8 +488,16 @@ async def _video_generation_fan_in(state: AgentState) -> dict:
 
 
 async def _video_review(state: AgentState) -> dict:
+    quality = await _review_shot_videos(state)
     critique = critique_videos(_latest_artifacts(state, StageName.VIDEO_GENERATION))
-    return {"critiques": [critique.model_dump(mode="json")], "current_step": "video_review"}
+    update = dict(quality)
+    update.setdefault("critiques", []).append(critique.model_dump(mode="json"))
+    update["current_step"] = "video_review"
+    if quality.get("errors"):
+        update["stage_status"] = {StageName.VIDEO_GENERATION.value: StageStatus.WAITING_HUMAN.value}
+    else:
+        update["stage_status"] = {StageName.VIDEO_GENERATION.value: StageStatus.SUCCEEDED.value}
+    return update
 
 
 async def _video_decision(state: AgentState) -> dict:
@@ -504,19 +554,23 @@ async def _generate_shot_videos(state: AgentState) -> dict:
     if state.get("errors"):
         return {}
     from api.routes.shot import _run_single_shot_video
+    from services.quality_review_service import quality_review_service
 
     project_id = state["project_id"]
+    gate = quality_review_service.storyboard_gate_status(project_id)
+    if not gate.get("ok"):
+        return _abort("generate_shot_videos", "故事板质量门禁未通过，自动模式禁止生成视频: " + _gate_failure_summary(gate))
     failures: dict[str, str] = {}
     for shot_id in _shot_ids(project_id):
         try:
-            await _run_single_shot_video(shot_id, force=False)
+            await _run_single_shot_video(shot_id, force=False, capability_mode="auto")
         except Exception as exc:
             failures[shot_id] = str(exc)
     if failures:
         retried = list(failures)
         for shot_id in retried:
             try:
-                await _run_single_shot_video(shot_id, force=True)
+                await _run_single_shot_video(shot_id, force=True, capability_mode="auto")
                 failures.pop(shot_id, None)
             except Exception as exc:
                 failures[shot_id] = str(exc)
@@ -528,11 +582,62 @@ async def _generate_shot_videos(state: AgentState) -> dict:
     return {"current_step": "generate_shot_videos"}
 
 
+async def _review_shot_videos(state: AgentState) -> dict:
+    """兼容旧自动入口：真实审核视频，按镜头重试，失败即转人工。"""
+    if state.get("errors"):
+        return {}
+    from api.routes.shot import _run_single_shot_video, prepare_video_quality_retry
+    from config import settings
+    from services.quality_review_service import STAGE_VIDEO, quality_review_service
+
+    project_id = str(state.get("project_id") or "")
+    shot_ids = _shot_ids(project_id)
+    capability = quality_review_service.video_capability()
+    if not capability.get("supported"):
+        await quality_review_service.record_unsupported_reviews(project_id, shot_ids, STAGE_VIDEO, capability.get("reason") or "未配置")
+        await quality_review_service.mark_shots_needs_human_review(shot_ids)
+        return {**_abort("review_shot_videos", f"视频质量审核能力未配置，自动模式不得导出成片（{capability.get('reason') or 'unsupported'}）"), "needs_human_review": True}
+    max_retries = max(0, int(settings.QUALITY_VIDEO_MAX_RETRIES))
+    previous_frames = _previous_last_frames(project_id)
+    last_reviews: dict[str, Any] = {}
+    for attempt in range(max_retries + 1):
+        reviews = {shot_id: await quality_review_service.review_video_shot(shot_id, previous_frame_path=previous_frames.get(shot_id, "")) for shot_id in shot_ids}
+        last_reviews = reviews
+        errored = {shot_id: review for shot_id, review in reviews.items() if review.verdict == "error"}
+        if errored:
+            return {**_abort("review_shot_videos", f"视频质量审核 Provider 调用失败: {_review_summary(errored)}"), "stage_status": {StageName.VIDEO_GENERATION.value: StageStatus.FAILED.value}}
+        unsupported = {shot_id: review for shot_id, review in reviews.items() if review.verdict == "unsupported"}
+        if unsupported:
+            await quality_review_service.mark_shots_needs_human_review(sorted(unsupported))
+            return {**_abort("review_shot_videos", f"视频审核存在未检测维度，转人工: {_review_summary(unsupported)}"), "needs_human_review": True}
+        failed = {shot_id: review for shot_id, review in reviews.items() if not review.passed}
+        if not failed:
+            return {"current_step": "review_shot_videos"}
+        if attempt >= max_retries:
+            break
+        retry_ids = [shot_id for shot_id in sorted(failed) if prepare_video_quality_retry(shot_id, failed[shot_id])]
+        if not retry_ids:
+            break
+        for shot_id in retry_ids:
+            try:
+                await _run_single_shot_video(shot_id, force=True, capability_mode="auto")
+            except Exception as exc:
+                return _abort("review_shot_videos", exc)
+    await quality_review_service.mark_shots_needs_human_review(sorted(last_reviews))
+    return {**_abort("review_shot_videos", f"以下镜头视频未通过质量审核（已重试 {max_retries} 次），转人工审核: {_review_summary(last_reviews)}"), "needs_human_review": True}
+
+
 async def _compose(state: AgentState) -> dict:
+    if state.get("errors"):
+        return {}
     project_id, store, base = _stage_context(state, StageName.EDIT_COMPOSITION)
     if store.stage_is_reusable(StageName.EDIT_COMPOSITION.value, base["input_fingerprint"]):
         return _restore_stage(state, store, StageName.EDIT_COMPOSITION)
     try:
+        from services.quality_review_service import quality_review_service
+        video_gate = quality_review_service.video_gate_status(project_id)
+        if not video_gate.get("ok"):
+            return _abort("compose", "视频质量门禁未通过，自动模式禁止导出成片: " + _gate_failure_summary(video_gate))
         from api.routes.render import _render_status, _render_task
 
         await _render_task(project_id, state.get("output_format") or "9:16", state.get("resolution") or "1080p")
@@ -1039,8 +1144,123 @@ def _abort(node: str, exc) -> dict:
     return {"errors": [f"[{node}] 执行失败（错误编号 {error_id}）"], "current_step": "aborted"}
 
 
+def _review_summary(reviews: dict[str, Any]) -> str:
+    parts = []
+    for shot_id, review in sorted(reviews.items()):
+        issues = getattr(review, "issues", None) or []
+        top_issue = issues[0] if issues else getattr(review, "verdict", "failed")
+        score = float(getattr(review, "overall_score", 0.0) or 0.0)
+        parts.append(f"{shot_id}[{getattr(review, 'verdict', 'failed')} {score:.2f}] {top_issue}")
+    return "; ".join(parts)[:500]
+
+
+def _gate_failure_summary(gate: dict[str, Any]) -> str:
+    failed = gate.get("failed") or []
+    if not failed:
+        return str(gate.get("reason") or "门禁未通过")
+    return "; ".join(f"{item.get('shot_id', '?')}: {item.get('reason', '门禁未通过')}" for item in failed[:10])
+
+
+async def _run_storyboard_generation_auto(project_id: str, shot_ids: list[str]) -> None:
+    """Run automatic storyboard retries while tolerating legacy callables."""
+
+    import inspect
+    from api.routes import shot as shot_route
+
+    func = shot_route._run_storyboard_generation
+    kwargs = {"capability_mode": "auto"} if "capability_mode" in inspect.signature(func).parameters else {}
+    await func(project_id, shot_ids, **kwargs)
+
+
+def _save_quality_review_checkpoint(
+    state: AgentState,
+    critique: dict[str, Any],
+    reviews: dict[str, Any],
+    *,
+    status: str,
+) -> dict[str, Any]:
+    """Persist the real per-shot quality results in the resumable stage store."""
+
+    _project_id, store, base = _stage_context(state, StageName.QUALITY_REVIEW)
+    payload = {
+        "reviews": {
+            shot_id: review.to_dict() if hasattr(review, "to_dict") else dict(review)
+            for shot_id, review in reviews.items()
+        },
+        "review_count": len(reviews),
+    }
+    return store.save_stage(
+        StageName.QUALITY_REVIEW.value,
+        status=status,
+        input_fingerprint=base["input_fingerprint"],
+        output_fingerprint=fingerprint(payload),
+        payload=payload,
+        critique=critique,
+    )
+
+
+async def _run_storyboard_quality_gate(project_id: str, shot_ids: list[str] | None = None) -> dict[str, Any]:
+    """Run the persisted storyboard quality service and fail closed."""
+    from api.routes.shot import _run_storyboard_generation, prepare_storyboard_quality_retry
+    from config import settings
+    from services.quality_review_service import STAGE_STORYBOARD, quality_review_service
+
+    shot_ids = list(shot_ids or _shot_ids(project_id))
+    if not shot_ids:
+        return {**_abort("quality_review", "无镜头可进行故事板质量审核"), "passed": False, "reviews": {}}
+    capability = quality_review_service.storyboard_capability()
+    if not capability.get("supported"):
+        await quality_review_service.record_unsupported_reviews(project_id, shot_ids, STAGE_STORYBOARD, capability.get("reason") or "未配置")
+        await quality_review_service.mark_shots_needs_human_review(shot_ids)
+        return {**_abort("quality_review", f"质量审核能力未配置，自动模式不得批准故事板（{capability.get('reason') or 'unsupported'}）"), "passed": False, "needs_human_review": True, "reviews": {}}
+    max_retries = max(0, int(settings.QUALITY_STORYBOARD_MAX_RETRIES))
+    last_reviews: dict[str, Any] = {}
+    for attempt in range(max_retries + 1):
+        reviews = {shot_id: await quality_review_service.review_storyboard_shot(shot_id) for shot_id in shot_ids}
+        last_reviews = reviews
+        errored = {shot_id: review for shot_id, review in reviews.items() if review.verdict == "error"}
+        if errored:
+            return {**_abort("quality_review", f"质量审核 Provider 调用失败: {_review_summary(errored)}"), "passed": False, "reviews": reviews}
+        unsupported = {shot_id: review for shot_id, review in reviews.items() if review.verdict == "unsupported"}
+        if unsupported:
+            await quality_review_service.mark_shots_needs_human_review(sorted(unsupported))
+            return {**_abort("quality_review", f"质量审核存在未检测维度，转人工: {_review_summary(unsupported)}"), "passed": False, "needs_human_review": True, "reviews": reviews}
+        failed = {shot_id: review for shot_id, review in reviews.items() if not review.passed}
+        if not failed:
+            return {"passed": True, "reviews": reviews, "attempt": attempt}
+        if attempt >= max_retries:
+            break
+        retry_ids = [shot_id for shot_id in sorted(failed) if prepare_storyboard_quality_retry(shot_id, failed[shot_id])]
+        if not retry_ids:
+            break
+        try:
+            await _run_storyboard_generation_auto(project_id, retry_ids)
+        except Exception as exc:
+            return {**_abort("quality_review", exc), "passed": False, "reviews": reviews}
+    await quality_review_service.mark_shots_needs_human_review(sorted(last_reviews))
+    return {**_abort("quality_review", f"以下镜头未通过质量审核（已重试 {max_retries} 次），转人工审核: {_review_summary(last_reviews)}"), "passed": False, "needs_human_review": True, "reviews": last_reviews}
+
+
 def _shot_ids(project_id: str) -> list[str]:
     return list(_shot_versions(project_id))
+
+
+def _previous_last_frames(project_id: str) -> dict[str, str]:
+    from db import SessionLocal
+    from models import Shot
+
+    db = SessionLocal()
+    try:
+        shots = db.query(Shot).filter(Shot.project_id == project_id).order_by(Shot.sequence).all()
+        frames: dict[str, str] = {}
+        previous = ""
+        for shot in shots:
+            if previous:
+                frames[shot.id] = previous
+            previous = shot.last_frame_path or shot.storyboard_path or shot.image_path or ""
+        return frames
+    finally:
+        db.close()
 
 
 def _project_failed(project_id: str) -> bool:
@@ -1107,12 +1327,29 @@ async def _auto_approve_storyboard(state: AgentState) -> dict:
         db.close()
 
     if failed_once:
-        from api.routes.shot import _run_storyboard_generation
-
         try:
-            await _run_storyboard_generation(project_id, list(failed_once))
+            await _run_storyboard_generation_auto(project_id, list(failed_once))
         except Exception as exc:
             return _abort("auto_approve_storyboard", exc)
+
+        # A retry is only a chance to repair the file. Re-run the structural
+        # check before invoking any semantic/VLM provider; malformed output
+        # must fail locally and must never trigger a network review call.
+        db = SessionLocal()
+        try:
+            shots = db.query(Shot).filter(Shot.project_id == project_id).all()
+            failed_after_retry = _structural_failures(shots)
+        finally:
+            db.close()
+        if failed_after_retry:
+            return _abort(
+                "auto_approve_storyboard",
+                f"以下镜头故事板未通过结构检查（已重试一次仍失败）: {', '.join(failed_after_retry)}",
+            )
+
+    gate = await _run_storyboard_quality_gate(project_id)
+    if gate.get("errors") or not gate.get("passed"):
+        return gate
 
     db = SessionLocal()
     try:

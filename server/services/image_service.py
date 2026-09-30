@@ -321,7 +321,7 @@ class ImageService:
         style_params: dict,
         project_id: str,
         seed: int = 42,
-        capability_mode: str = "manual",
+        capability_mode: str | None = None,
         confirm_capability_downgrade: bool = False,
         provider_override: str = "",
         preferred_size: str = "",
@@ -346,7 +346,18 @@ class ImageService:
             preferred_size=preferred_size,
             label="SHOT PLACEHOLDER",
             shot_id=safe_shot_id,
-            allow_text_only_references=self._reference_enforcement() != "strict",
+            # Losing reference assets is a capability downgrade. Automatic
+            # runs and unconfirmed manual runs must fail closed even when the
+            # legacy preference is set to ``prefer``.
+            allow_text_only_references=(
+                self._reference_enforcement() != "strict"
+                if capability_mode is None
+                else (
+                    self._reference_enforcement() != "strict"
+                    and str(capability_mode).lower() == "manual"
+                    and bool(confirm_capability_downgrade)
+                )
+            ),
             reference_assets=self._reference_assets_for_request(shot),
             provider_override=provider_override,
         )

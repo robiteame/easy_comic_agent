@@ -292,13 +292,41 @@ class LLMService:
             return content
         return getattr(message, "reasoning_content", None) or ""
 
-    async def call_with_image(self, prompt: str, image_path: str) -> str:
+    @property
+    def vision_available(self) -> bool:
+        """VLM 评分能力是否可用：script 端点已配置且适配器声明支持图片输入。
+
+        质量审核门禁据此判断能力，未配置时调用方必须把审核标记为
+        unsupported，而不是假装通过。
+        """
+        self._sync_config()
+        if not self.available:
+            return False
+        try:
+            adapter = self._adapter_for(self._endpoint)
+        except Exception:
+            return False
+        return bool(getattr(adapter.capabilities, "vision", False))
+
+    @property
+    def vision_provider_label(self) -> str:
+        self._sync_config()
+        model = self.vision_model or self.model
+        return f"vlm:{self._endpoint.protocol}:{model}"
+
+    async def call_with_images(self, prompt: str, image_paths: list[str]) -> str:
+        """多图视觉调用：第 1 张起依次作为附图（用于 VLM 质量审核）。"""
         import base64
         import mimetypes
 
-        with open(image_path, "rb") as f:
-            image_data = base64.b64encode(f.read()).decode()
-        mime_type = mimetypes.guess_type(image_path)[0] or "image/png"
+        parts: list[dict] = [{"type": "text", "text": prompt}]
+        for image_path in image_paths:
+            with open(image_path, "rb") as f:
+                image_data = base64.b64encode(f.read()).decode()
+            mime_type = mimetypes.guess_type(image_path)[0] or "image/png"
+            parts.append(
+                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_data}"}}
+            )
 
         adapter = self._adapter_for(self._endpoint)
         debug_request_id = record_api_request(
@@ -312,18 +340,7 @@ class LLMService:
         try:
             response = await self.client.chat.completions.create(
                 model=self.vision_model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:{mime_type};base64,{image_data}"},
-                            },
-                        ],
-                    }
-                ],
+                messages=[{"role": "user", "content": parts}],
                 temperature=0.3,
                 max_tokens=self.max_tokens,
             )
@@ -338,3 +355,27 @@ class LLMService:
         text = self._message_text(response.choices[0].message)
         record_api_result(debug_request_id, api="LLM Vision", status="success", message="视觉模型调用成功")
         return text
+
+    async def call_with_image(self, prompt: str, image_path: str) -> str:
+        return await self.call_with_images(prompt, [image_path])
+
+    async def call_json_with_images(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        image_paths: list[str],
+        temperature: float = 0.2,
+        max_retries: int = 2,
+    ) -> dict:
+        """多图视觉调用 + JSON 清洗（质量审核的 VLM 评分入口）。"""
+        prompt = f"{system_prompt}\n\n{user_prompt}"
+        last_error: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                content = await self.call_with_images(prompt, image_paths)
+                return self._loads_json(content or "{}")
+            except Exception as exc:
+                last_error = exc
+                if attempt < max_retries:
+                    continue
+        raise ValueError(f"VLM JSON 解析失败，已重试 {max_retries} 次: {last_error}")

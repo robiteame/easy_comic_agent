@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { EditableDialogueLine } from '../services/dialogueTimeline.ts'
 import { mergeShotServerUpdate, type ShotServerUpdate } from '../services/shotUpdateGuard.ts'
+import type { ShotQualitySummary } from '../components/qualityReviewModel.ts'
 
 export interface Shot {
   id: string
@@ -43,6 +44,8 @@ export interface Shot {
   pose_reference_path?: string
   depth_reference_path?: string
   last_frame_path?: string
+  // 质量审核摘要（最新一轮；结构检查与质量审核在界面上分开呈现）。
+  quality_review?: ShotQualitySummary
 }
 
 interface ShotState {

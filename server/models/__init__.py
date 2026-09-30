@@ -4,6 +4,7 @@ from .shot_version import ShotVersion
 from .character import Character
 from .scene_asset import SceneAsset
 from .background_job import BackgroundJob
+from .quality_review import QualityReview
 from .av_track import AudioTrack, SubtitleCue, SubtitleTrack
 from .pricing import DEFAULT_CURRENCY, MICRO_PER_UNIT, PricingConfig
 from .usage import CostEstimate, UsageRecord
@@ -16,6 +17,7 @@ __all__ = [
     "Character",
     "SceneAsset",
     "BackgroundJob",
+    "QualityReview",
     "AudioTrack",
     "SubtitleTrack",
     "SubtitleCue",

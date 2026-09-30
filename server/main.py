@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from api.routes import asset, audio_track, budget, character, chat, graph, jobs, project, regeneration_queue, render, script, settings as settings_routes, shot, subtitle  # noqa: E402
+from api.routes import asset, audio_track, budget, character, chat, graph, jobs, project, quality_review, regeneration_queue, render, script, settings as settings_routes, shot, subtitle  # noqa: E402
 from api.websocket import jobs_manager, ws_manager  # noqa: E402
 from config import settings as app_settings  # noqa: E402
 from db import SessionLocal, engine, init_db  # noqa: E402
@@ -67,6 +67,29 @@ async def lifespan(app: FastAPI):
             print("视频 Provider 预检未通过: " + "；".join(preflight["issues"]))
     except Exception as exc:  # noqa: BLE001
         print(f"视频 Provider 预检失败: {exc}")
+    # 质量审核能力预检：自动模式的真实质量门禁依赖 VLM（可选身份 embedding）。
+    # 未配置时如实打进日志——自动模式将拒绝自动批准并把镜头转人工。
+    try:
+        from services.quality_review_service import quality_review_service
+
+        capability = quality_review_service.capability_summary()
+        storyboard = capability["storyboard"]
+        identity = storyboard.get("identity_embedding") or {}
+        print(
+            "质量审核能力预检: vlm_supported={vlm} identity_embedding_configured={identity} "
+            "threshold={threshold} policy={policy}".format(
+                vlm=storyboard.get("supported"),
+                identity=identity.get("supported", False),
+                threshold=capability["gate"]["threshold"],
+                policy=capability["gate"]["policy"],
+            )
+        )
+        if not storyboard.get("supported"):
+            print(f"质量审核 VLM 未配置: {storyboard.get('reason') or '原因未知'}（自动模式不会自动批准镜头）")
+        if identity and not identity.get("supported"):
+            print(f"身份 embedding 未配置: {identity.get('reason') or '原因未知'}（身份相似度按未检测处理）")
+    except Exception as exc:  # noqa: BLE001
+        print(f"质量审核能力预检失败: {exc}")
     yield
     print("服务关闭")
 
@@ -140,6 +163,7 @@ app.include_router(regeneration_queue.router, prefix="/api/shot")
 app.include_router(budget.router)
 app.include_router(subtitle.router)
 app.include_router(audio_track.router)
+app.include_router(quality_review.router)
 
 output_dir = app_settings.OUTPUT_DIR
 output_dir.mkdir(parents=True, exist_ok=True)

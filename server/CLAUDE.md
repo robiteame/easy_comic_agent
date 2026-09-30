@@ -135,7 +135,8 @@ POST /api/render ─────────────────────
 POST /api/script/parse (mode=auto) ──▶ get_graph().ainvoke(state)
 
 START → parse_and_storyboard → generate_storyboard_images
-      → auto_approve_storyboard → generate_shot_videos → compose → END
+      → auto_approve_storyboard（结构检查 + 质量审核门禁）
+      → generate_shot_videos → review_shot_videos（视频质量审核）→ compose → END
 ```
 
 定义于 `agent/graph.py`，线性串联，任一节点失败即短路至 END（错误经 WebSocket 上报）。**每个图节点都是薄包装，惰性 import 并复用手动模式同一批 route 步骤函数**：
@@ -144,9 +145,18 @@ START → parse_and_storyboard → generate_storyboard_images
 |----------|----------------------|
 | parse_and_storyboard | `api/routes/script.py::_run_storyboard_phase` |
 | generate_storyboard_images | `api/routes/shot.py::_run_storyboard_generation` |
-| auto_approve_storyboard | 图内 DB helper（将全部已出图镜头置 confirmed） |
-| generate_shot_videos | `api/routes/shot.py::_run_single_shot_video`（逐镜头循环） |
-| compose | `api/routes/render.py::_render_task` |
+| auto_approve_storyboard | 结构检查（`structural_validation`）+ `services/quality_review_service`（评分/修正重试，全通过才置 confirmed） |
+| generate_shot_videos | `api/routes/shot.py::_run_single_shot_video`（逐镜头循环；前置校验故事板质量门禁） |
+| review_shot_videos | `services/quality_review_service`（运动/衔接/口型/音画/清晰度，未过不得导出） |
+| compose | `api/routes/render.py::_render_task`（前置校验视频质量门禁） |
+
+**质量闭环语义**：结构检查只代表「文件可用」，绝不代表「质量通过」。质量审核由
+`QualityReviewService` 驱动（VLM 评分 + 可选身份 embedding + ffprobe/ffmpeg 客观探测）：
+不达标镜头按审核修正指令改写 `visual_notes` 后重生成（`quality_retry` 版本来源），
+超过 `QUALITY_STORYBOARD_MAX_RETRIES` / `QUALITY_VIDEO_MAX_RETRIES` 仍不达标则置
+`needs_review` 转人工；审核能力未配置时裁决为 `unsupported`，自动模式拒绝批准。
+每轮审核落库 `quality_reviews`（维度评分/问题/证据/未检测维度/建议），REST 见
+`/api/quality-review/*`，降级与未检测必须在界面与日志如实展示。
 
 `/api/graph/structure` 由 `build_graph()` + `GRAPH_NODE_META` 派生，保证可视化与真实自动流程一致。
 
@@ -545,4 +555,6 @@ uvicorn main:app --host 0.0.0.0 --port 8011 --reload
     LoRA / IP-Adapter 未接入，字段保持空串，界面显示「未接入」。
 11. **结构检查 ≠ 质量认证**：`services/structural_validation.py` 只做图片/视频可读性、
     尺寸、时长、首尾帧与空文件检查，不含人脸一致性 / 美学 / 闪烁检测；界面与日志
-    统一显示「结构检查（仅结构，非质量认证）」。
+    统一显示「结构检查（仅结构，非质量认证）」。质量结论只能来自
+    `services/quality_review_service.py`（StructuralCheck 之上真实质量门禁），
+    能力未配置时其维度状态为 `unsupported`，绝不计为通过。

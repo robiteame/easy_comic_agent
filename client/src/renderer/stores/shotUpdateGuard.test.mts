@@ -129,11 +129,23 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     storyboard_path: '/output/final_storyboard.png',
     media_stale: false,
     storyboard_status: 'done',
+    estimated_speech_ms: 1250,
+    consistency_status: 'degraded',
+    quality_review: {
+      storyboard: {
+        verdict: 'passed', passed: true, overall_score: 0.91, attempt: 1,
+        degraded: false, issues_count: 0, unsupported: [],
+      },
+      video: null,
+    },
   })
   after = useShotStore.getState().shots[0]!
   assert.equal(after.storyboard_path, '/output/final_storyboard.png')
   assert.equal(after.version, 10)
   assert.equal(after.media_stale, false)
+  assert.equal(after.estimated_speech_ms, 1250)
+  assert.equal(after.consistency_status, 'degraded')
+  assert.equal(after.quality_review?.storyboard?.verdict, 'passed')
 
   // 未知镜头：静默忽略。
   useShotStore.getState().applyServerShotUpdate('shot-missing', { shot_id: 'shot-missing', version: 1 })

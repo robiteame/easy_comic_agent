@@ -26,7 +26,7 @@ from models import Project, SceneAsset, Character, Shot, ShotVersion
 from services.security import existing_file
 from services.shot_dialogue import dialogue_lines_payload, parse_shot_dialogue, serialize_dialogue_lines
 
-VERSION_SOURCES = ("manual_edit", "regenerate", "restore", "import")
+VERSION_SOURCES = ("manual_edit", "regenerate", "restore", "import", "quality_retry")
 
 # 快照直接取值的镜头标量字段。confirmed 也会被记录，但恢复时永远写回 False。
 _SIMPLE_FIELDS: tuple[str, ...] = (

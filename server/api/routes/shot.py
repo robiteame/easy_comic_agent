@@ -39,6 +39,7 @@ from services.image_service import ImageService
 from services.providers.base import Dialogue
 from services.providers.endpoint import get_endpoint
 from services.providers.registry import UnknownProtocolError, get_adapter
+from services.quality_review_service import quality_review_service
 from services.shot_version_service import (
     apply_snapshot_to_shot,
     capture_current_snapshot,
@@ -121,12 +122,16 @@ class RegenerateRequest(BaseModel):
     force_confirmed: bool = False
     # 关键镜头可一次生成 2 个候选：每个候选各自进入版本历史，人工对比后选用。
     candidates: schemas.CandidateCount = 1
+    capability_mode: schemas.PipelineMode = "manual"
+    confirm_capability_downgrade: bool = False
 
 
 class StoryboardGenerateRequest(BaseModel):
     shot_ids: schemas.ShotIdList = Field(default_factory=list)
     # 手动模式专用：用户必须在 UI 明确确认后才允许参考素材降级。
     confirm_degraded: bool = False
+    capability_mode: schemas.PipelineMode = "manual"
+    confirm_capability_downgrade: bool = False
 
 
 class StoryboardApprovalRequest(BaseModel):
@@ -141,6 +146,8 @@ class ShotVideoGenerateRequest(BaseModel):
     # 仅供显式选择性队列使用：故事板 + 视频批次可以在同一批次内衔接，
     # 不把“未人工审核”误认为普通视频入口的授权。
     allow_unconfirmed: bool = False
+    capability_mode: schemas.PipelineMode = "manual"
+    confirm_capability_downgrade: bool = False
 
 
 class ShotAudioGenerateRequest(BaseModel):
@@ -284,6 +291,25 @@ def _validate_timing_edit(shot: Shot, changed: dict, db: Session) -> int:
     return estimated_speech_ms
 
 
+def _capability_kwargs(capability_mode: str, confirm_capability_downgrade: bool) -> dict[str, object]:
+    """Normalize capability policy before passing it to generation services.
+
+    ``confirm_degraded`` remains a separate readiness gate for storyboard assets;
+    this helper only controls Provider capability downgrade behavior.
+    """
+
+    mode = str(capability_mode or "manual").strip().lower()
+    if mode not in {"manual", "auto"}:
+        mode = "manual"
+    # Keep legacy internal adapters/callables compatible for the default policy.
+    if mode == "manual" and not confirm_capability_downgrade:
+        return {}
+    return {
+        "capability_mode": mode,
+        "confirm_capability_downgrade": bool(confirm_capability_downgrade),
+    }
+
+
 def _prepare_storyboard_candidate(shot: Shot, db: Session, data: RegenerateRequest) -> tuple[int, str]:
     """登记一版故事板候选：版本快照 + 失效下游 + 应用本次参数。
 
@@ -346,7 +372,66 @@ async def _run_storyboard_candidates(
             current_step="regenerate_storyboard",
             message=f"正在生成故事板候选 {index + 1}/{candidates}",
         )
-        await _regenerate_single_shot(shot_id, reason, expected_version)
+        await _regenerate_single_shot(
+            shot_id,
+            reason,
+            expected_version,
+            **_capability_kwargs(data.capability_mode, data.confirm_capability_downgrade),
+        )
+
+
+def prepare_storyboard_quality_retry(shot_id: str, review) -> bool:
+    """按质量审核结果登记一轮故事板重试。
+
+    审核修正指令合入 ``visual_notes``（替换上一轮的修正块，不叠加），随后走
+    与人工重生成相同的登记口径：版本快照 + 失效下游 + 版本号 +1。返回 False
+    表示无法登记（镜头不存在 / 已确认锁定 / 没有修正指令），调用方跳过重生成。
+    """
+    from services.quality_review_service import merge_quality_fix_notes
+
+    directives = [str(item) for item in ((review.fix or {}).get("directives") or []) if str(item).strip()]
+    if not directives:
+        return False
+    db = SessionLocal()
+    try:
+        shot = db.query(Shot).filter(Shot.id == shot_id).first()
+        if shot is None or shot.confirmed:
+            return False
+        task_key = _shot_task_key(shot.id, "storyboard")
+        create_version(db, shot, "quality_retry", task_id=task_key)
+        previous_scene_key = _shot_scene_key(shot)
+        _invalidate_storyboard_outputs(shot)
+        _invalidate_downstream_media(db, shot, {previous_scene_key, _shot_scene_key(shot)}, source="regenerate")
+        shot.status = "pending"
+        shot.storyboard_status = "queued"
+        shot.version = (shot.version or 1) + 1
+        shot.visual_notes = merge_quality_fix_notes(shot.visual_notes or "", directives)
+        _mark_project_output_stale(db, shot.project_id)
+        db.commit()
+        return True
+    finally:
+        db.close()
+
+
+def prepare_video_quality_retry(shot_id: str, review) -> bool:
+    """按视频质量审核结果登记一轮视频重试（只改 prompt 指令，故事板不动）。"""
+    from services.quality_review_service import merge_quality_fix_notes
+
+    directives = [str(item) for item in ((review.fix or {}).get("directives") or []) if str(item).strip()]
+    if not directives:
+        return False
+    db = SessionLocal()
+    try:
+        shot = db.query(Shot).filter(Shot.id == shot_id).first()
+        if shot is None:
+            return False
+        create_version(db, shot, "quality_retry", task_id=_shot_task_key(shot.id, "video"))
+        shot.visual_notes = merge_quality_fix_notes(shot.visual_notes or "", directives)
+        shot.version = (shot.version or 1) + 1
+        db.commit()
+        return True
+    finally:
+        db.close()
 
 
 @router.post("/{shot_id}/regenerate")
@@ -378,7 +463,15 @@ async def regenerate_shot(shot_id: str, data: RegenerateRequest, db: Session = D
                 _run_storyboard_candidates(shot_id, data, candidates, expected_version, reason),
             )
         else:
-            task = start_task(task_key, _regenerate_single_shot(shot_id, reason, expected_version))
+            task = start_task(
+                task_key,
+                _regenerate_single_shot(
+                    shot_id,
+                    reason,
+                    expected_version,
+                    **_capability_kwargs(data.capability_mode, data.confirm_capability_downgrade),
+                ),
+            )
     except BaseException as exc:
         db.rollback()
         finish_task(task_key, "failed", f"storyboard scheduling failed: {exc}")
@@ -515,7 +608,16 @@ async def generate_storyboard_images(project_id: str, data: StoryboardGenerateRe
         project.status = "storyboard_generating"
         db.commit()
 
-        task = start_task(task_key, _run_storyboard_generation(project_id, [shot.id for shot in shots], expected_versions, allow_degraded=True))
+        task = start_task(
+            task_key,
+            _run_storyboard_generation(
+                project_id,
+                [shot.id for shot in shots],
+                expected_versions,
+                allow_degraded=True,
+                **_capability_kwargs(data.capability_mode, data.confirm_capability_downgrade),
+            ),
+        )
     except BaseException as exc:
         db.rollback()
         finish_task(task_key, "failed", f"storyboard scheduling failed: {exc}")
@@ -631,7 +733,16 @@ async def generate_shot_video(shot_id: str, data: ShotVideoGenerateRequest, db: 
         shot.status = "video_generating"
         _mark_project_output_stale(db, shot.project_id, status="storyboard_approved")
         db.commit()
-        task = start_task(task_key, _run_single_shot_video(shot_id, data.force, expected_version, data.reuse_audio))
+        task = start_task(
+            task_key,
+            _run_single_shot_video(
+                shot_id,
+                data.force,
+                expected_version,
+                data.reuse_audio,
+                **_capability_kwargs(data.capability_mode, data.confirm_capability_downgrade),
+            ),
+        )
     except BaseException as exc:
         db.rollback()
         finish_task(task_key, "failed", f"video scheduling failed: {exc}")
@@ -844,6 +955,8 @@ async def _run_storyboard_generation(
     expected_versions: dict[str, int] | None = None,
     *,
     allow_degraded: bool = False,
+    capability_mode: str = "manual",
+    confirm_capability_downgrade: bool = False,
 ) -> None:
     """Run one project storyboard job at a time."""
 
@@ -862,7 +975,14 @@ async def _run_storyboard_generation(
         finally:
             db.close()
     async with lock:
-        await _run_storyboard_generation_impl(project_id, shot_ids, expected_versions, allow_degraded=allow_degraded)
+        await _run_storyboard_generation_impl(
+            project_id,
+            shot_ids,
+            expected_versions,
+            allow_degraded=allow_degraded,
+            capability_mode=capability_mode,
+            confirm_capability_downgrade=confirm_capability_downgrade,
+        )
 
 
 async def _run_storyboard_generation_impl(
@@ -874,6 +994,8 @@ async def _run_storyboard_generation_impl(
     allow_degraded: bool = False,
     provider_override: str = "",
     preferred_size: str = "",
+    capability_mode: str = "manual",
+    confirm_capability_downgrade: bool = False,
 ) -> None:
     """生成指定镜头；``emit_project_result=False`` 时作为 fan-out worker 使用。
 
@@ -950,6 +1072,8 @@ async def _run_storyboard_generation_impl(
                 seed=seed,
                 provider_override=provider_override,
                 preferred_size=preferred_size,
+                capability_mode=capability_mode,
+                confirm_capability_downgrade=confirm_capability_downgrade,
             )
 
             db = SessionLocal()
@@ -972,6 +1096,12 @@ async def _run_storyboard_generation_impl(
                         "reference_mode": image_meta.get("reference_mode", ""),
                         "references_validated": image_meta.get("references_validated", 0),
                         "references_sent": image_meta.get("references_sent", 0),
+                        "references_sent_detail": image_meta.get("references_sent_detail", []),
+                        "control_types_sent": image_meta.get("control_types_sent", []),
+                        "provider_capabilities": image_meta.get("provider_capabilities", {}),
+                        "reference_weight_policy": image_meta.get("reference_weight_policy", "text_only_policy"),
+                        "consistency_metrics": image_meta.get("consistency_metrics", {}),
+                        "generation_report": image_meta,
                         "references_unsupported": bool(image_meta.get("references_unsupported")),
                         "reference_capability_warning": image_meta.get("reference_capability_warning", ""),
                         "prompt_trimmed_fields": list(image_service.last_prompt_trimmed_fields or []),
@@ -1087,7 +1217,14 @@ async def _run_storyboard_generation_impl(
         raise
 
 
-async def _regenerate_single_shot(shot_id: str, reason: str = "", expected_version: int | None = None):
+async def _regenerate_single_shot(
+    shot_id: str,
+    reason: str = "",
+    expected_version: int | None = None,
+    *,
+    capability_mode: str = "manual",
+    confirm_capability_downgrade: bool = False,
+):
     lock = _shot_generation_locks.setdefault(shot_id, asyncio.Lock())
     if lock.locked():
         raise RuntimeError("镜头故事板生成任务已在运行")
@@ -1151,6 +1288,8 @@ async def _regenerate_single_shot(shot_id: str, reason: str = "", expected_versi
             style_params=style_params,
             project_id=project_id,
             seed=seed,
+            capability_mode=capability_mode,
+            confirm_capability_downgrade=confirm_capability_downgrade,
         )
 
         db = SessionLocal()
@@ -1170,6 +1309,12 @@ async def _regenerate_single_shot(shot_id: str, reason: str = "", expected_versi
                     "reference_mode": image_meta.get("reference_mode", ""),
                     "references_validated": image_meta.get("references_validated", 0),
                     "references_sent": image_meta.get("references_sent", 0),
+                    "references_sent_detail": image_meta.get("references_sent_detail", []),
+                    "control_types_sent": image_meta.get("control_types_sent", []),
+                    "provider_capabilities": image_meta.get("provider_capabilities", {}),
+                    "reference_weight_policy": image_meta.get("reference_weight_policy", "text_only_policy"),
+                    "consistency_metrics": image_meta.get("consistency_metrics", {}),
+                    "generation_report": image_meta,
                     "prompt_trimmed_fields": list(image_service.last_prompt_trimmed_fields or []),
                     "requested_style": shot_data.get("requested_style", shot_data.get("style", "anime")),
                     "effective_style": shot_data.get("effective_style", shot_data.get("style", "anime")),
@@ -1287,6 +1432,9 @@ async def _run_single_shot_video(
     reuse_audio: bool = False,
     provider_override: str = "",
     resolution_override: str = "",
+    *,
+    capability_mode: str = "manual",
+    confirm_capability_downgrade: bool = False,
 ) -> None:
     lock = _shot_generation_locks.setdefault(shot_id, asyncio.Lock())
     if lock.locked():
@@ -1437,6 +1585,7 @@ async def _run_single_shot_video(
             video_options["provider_override"] = provider_override
         if resolution_override:
             video_options["resolution_override"] = resolution_override
+        video_options.update(_capability_kwargs(capability_mode, confirm_capability_downgrade))
         result = await seedance_service.generate_shot_video(
             video_shot_data,
             characters,
@@ -1447,15 +1596,36 @@ async def _run_single_shot_video(
         if native_routed and not result.get("native_audio"):
             raise RuntimeError("视频适配器未按原生音频模式返回带音轨视频，已阻止无声成品")
         continuity_profile = shot_data.get("continuity_profile", {}) or {}
+        video_report = dict(result.get("generation_report") or {})
+        if video_report:
+            continuity_profile.update(
+                {
+                    "provider": video_report.get("provider", ""),
+                    "model": video_report.get("model", ""),
+                    "provider_source": video_report.get("provider_source", ""),
+                    "reference_mode": video_report.get("reference_mode", ""),
+                    "references_validated": video_report.get("references_validated", 0),
+                    "references_sent": video_report.get("references_sent", []),
+                    "references_sent_detail": video_report.get("references_sent_detail", []),
+                    "control_types_sent": video_report.get("control_types_sent", []),
+                    "provider_capabilities": video_report.get("provider_capabilities", {}),
+                    "reference_weight_policy": video_report.get("reference_weight_policy", "text_only_policy"),
+                    "consistency_metrics": video_report.get("consistency_metrics", {}),
+                    "generation_report": video_report,
+                }
+            )
         continuity_profile["reference_capability_warning"] = result.get("reference_capability_warning", "")
         continuity_profile["reference_manifest"] = result.get("reference_manifest", shot_data.get("reference_manifest", []))
         if result.get("reference_payload_mode"):
             continuity_profile["seedance_reference_payload_mode"] = result["reference_payload_mode"]
-            continuity_profile["reference_mode"] = "first_frame_only"
-            continuity_profile["references_validated"] = len(video_shot_data.get("seedance_reference_manifest") or [])
-            continuity_profile["references_sent"] = ["approved_storyboard_first_frame"] if result["reference_payload_mode"] == "first_frame_reference" else []
-            continuity_profile["provider"] = get_endpoint("video").protocol
-            continuity_profile["model"] = get_endpoint("video").model
+            continuity_profile.setdefault("reference_mode", "first_frame_only")
+            continuity_profile.setdefault("references_validated", len(video_shot_data.get("seedance_reference_manifest") or []))
+            continuity_profile.setdefault(
+                "references_sent",
+                ["approved_storyboard_first_frame"] if result["reference_payload_mode"] == "first_frame_reference" else [],
+            )
+            continuity_profile.setdefault("provider", get_endpoint("video").protocol)
+            continuity_profile.setdefault("model", get_endpoint("video").model)
             continuity_profile["requested_style"] = video_shot_data.get("requested_style", video_shot_data.get("style", "anime"))
             continuity_profile["effective_style"] = video_shot_data.get("effective_style", video_shot_data.get("style", "anime"))
             continuity_profile["style_source"] = video_shot_data.get("style_source", "project_request")
@@ -1605,6 +1775,9 @@ def _serialize_shot(s: Shot) -> dict:
         "depth_reference_path": s.depth_reference_path or "",
         "last_frame_path": s.last_frame_path or "",
         "style_fingerprint": s.style_fingerprint or "",
+        # 质量审核摘要（最新一轮）：verdict/passed/score/degraded/未检测维度。
+        # 结构检查（storyboard_status 等）与质量审核严格分开展示。
+        "quality_review": quality_review_service.shot_review_summary(s.id),
     }
 
 
@@ -1647,6 +1820,7 @@ def _shot_update_payload(shot: Shot) -> dict:
         "provider_source": _json_dict(shot.continuity_profile).get("provider_source", ""),
         "references_unsupported": bool(_json_dict(shot.continuity_profile).get("references_unsupported")),
         "reference_capability_warning": _json_dict(shot.continuity_profile).get("reference_capability_warning", ""),
+        "quality_review": quality_review_service.shot_review_summary(shot.id),
     }
 
 
