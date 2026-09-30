@@ -165,9 +165,9 @@ def agent_prompt_append(skill_config: dict[str, Any] | None, agent: str) -> str:
         config.get("custom_style_keywords", ""),
     ]
     if config.get("force_character_scene_references", True):
-        parts.append("strictly use bound character assets and scene baseline references when available")
+        parts.append("prefer bound character assets and scene baseline references when the Provider supports them")
     if config.get("continuity_enabled", True):
-        parts.append("continue from the previous shot frame for pose, eye-line, axis and lighting continuity")
+        parts.append("prefer continuity with the previous shot frame for eye-line, axis and lighting; no pose control is implied")
     return ", ".join(str(part).strip() for part in parts if str(part or "").strip())
 
 
@@ -176,11 +176,12 @@ def apply_agent_config_to_shot(shot_data: dict[str, Any], skill_config: dict[str
     metadata = resolve_effective_style(shot_data.get("style") or shot_data.get("effective_style"), skill_config, agent)
     shot_data.update(metadata)
     shot_data["style"] = metadata["effective_style"]
-    weights = shot_data.get("reference_weights") if isinstance(shot_data.get("reference_weights"), dict) else {}
-    weights["environment"] = float(config.get("style_reference_weight") or 0.45)
-    weights["style"] = float(config.get("style_reference_weight") or 0.45)
-    weights["action"] = float(config.get("action_reference_weight") or 0.30)
-    shot_data["reference_weights"] = weights
+    preferences = {
+        "environment": float(config.get("style_reference_weight") or 0.45),
+        "style": float(config.get("style_reference_weight") or 0.45),
+        "action": float(config.get("action_reference_weight") or 0.30),
+    }
+    shot_data["reference_weights"] = {"policy": "text_only_policy", "preferences": preferences}
     shot_data["skill_prompt_append"] = agent_prompt_append(skill_config, agent)
     shot_data["skill_config_snapshot"] = copy.deepcopy(config)
     if not config.get("continuity_enabled", True):

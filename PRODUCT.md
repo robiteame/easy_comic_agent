@@ -24,5 +24,10 @@
 - 自然语言交互优于表单操作
 - 预览即时反馈
 
+## Product Truth
+- 能力状态只使用 supported / partial / unsupported，并与实际请求载荷一致
+- Prompt 是生成偏好，不宣称是模型硬约束
+- 自动模式优先选择满足一致性要求的 Provider；能力降级必须人工确认或阻止生成
+
 ## Register
 product

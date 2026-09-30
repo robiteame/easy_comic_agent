@@ -30,7 +30,12 @@ export interface Shot {
   character_asset_ids: string[]
   scene_group_id?: string
   consistency_context?: string
-  reference_weights?: { environment?: number; action?: number }
+  reference_weights?: {
+    policy?: string
+    preferences?: { environment?: number; style?: number; action?: number }
+    environment?: number
+    action?: number
+  }
   continuity_profile?: Record<string, any>
   continuity_reference_path?: string
   pose_reference_path?: string

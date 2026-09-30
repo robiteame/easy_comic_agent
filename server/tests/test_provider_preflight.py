@@ -253,6 +253,7 @@ class ReferenceProviderPreferenceTests(unittest.TestCase):
                     characters=[],
                     style_params={},
                     project_id="ref_pref_tests",
+                    confirm_capability_downgrade=True,
                 )
             )
         metadata = service.last_generation_metadata

@@ -9,6 +9,7 @@
 注:各步骤函数沿用其手动模式的 WebSocket 进度百分比,自动模式下数值会跳变,属已知 cosmetic。
 """
 
+import inspect
 import logging
 
 from langgraph.graph import END, START, StateGraph
@@ -18,6 +19,20 @@ from services.error_reporter import ERROR_PIPELINE, log_failure, new_error_id, r
 from .state import AgentState
 
 logger = logging.getLogger(__name__)
+def _call_with_capability_options(func, *args, capability_mode: str, **kwargs):
+    """兼容只接收旧位置参数的测试/插件函数；真实 route 函数会收到 auto 策略。"""
+
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        signature = None
+    if signature is not None and "capability_mode" not in signature.parameters and not any(
+        item.kind == inspect.Parameter.VAR_KEYWORD for item in signature.parameters.values()
+    ):
+        return func(*args, **kwargs)
+    return func(*args, capability_mode=capability_mode, **kwargs)
+
+
 
 # 节点可视化元数据(供 /api/graph/structure 派生中文标签/类型/描述)
 GRAPH_NODE_META: dict[str, dict] = {
@@ -99,7 +114,7 @@ async def _generate_storyboard_images(state: AgentState) -> dict:
     if not shot_ids:
         return _abort("generate_storyboard_images", "无分镜可生成定稿故事板")
     try:
-        await _run_storyboard_generation(project_id, shot_ids)
+        await _call_with_capability_options(_run_storyboard_generation, project_id, shot_ids, capability_mode="auto")
     except Exception as exc:
         return _abort("generate_storyboard_images", exc)
     if _project_failed(project_id):
@@ -153,7 +168,7 @@ async def _auto_approve_storyboard(state: AgentState) -> dict:
         try:
             from api.routes.shot import _run_storyboard_generation
 
-            await _run_storyboard_generation(project_id, list(failed_once))
+            await _call_with_capability_options(_run_storyboard_generation, project_id, list(failed_once), capability_mode="auto")
         except Exception as exc:
             return _abort("auto_approve_storyboard", exc)
 
@@ -185,7 +200,7 @@ async def _generate_shot_videos(state: AgentState) -> dict:
     failures: dict[str, str] = {}
     for shot_id in shot_ids:
         try:
-            await _run_single_shot_video(shot_id, force=False)
+            await _call_with_capability_options(_run_single_shot_video, shot_id, force=False, capability_mode="auto")
         except Exception as exc:
             failures[shot_id] = str(exc)
     if failures:
@@ -194,7 +209,7 @@ async def _generate_shot_videos(state: AgentState) -> dict:
         retried = list(failures)
         for shot_id in retried:
             try:
-                await _run_single_shot_video(shot_id, force=True)
+                await _call_with_capability_options(_run_single_shot_video, shot_id, force=True, capability_mode="auto")
                 failures.pop(shot_id, None)
             except Exception as exc:
                 failures[shot_id] = str(exc)

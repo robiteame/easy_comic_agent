@@ -30,6 +30,10 @@ from services.storage_service import StorageQuotaExceeded, StorageService
 class ArkSeedanceVideoAdapter(BaseAdapter):
     capabilities = VideoCapabilities(
         reference_image=True,
+        multiple_reference_images=False,
+        reference_parameter="content",
+        reference_weight_policy="text_only_policy",
+        reference_role_parameter="content[].role",
         native_audio=False,
         dialogue_in_prompt=False,
         voice_consistent=False,

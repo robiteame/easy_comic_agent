@@ -43,6 +43,7 @@ def _png(path: Path, label: str, color: tuple[int, int, int]) -> Path:
 
 def _stale_shot(**overrides):
     data = {
+        "id": "stale_shot",
         "project_id": "project1",
         "sequence": 1,
         "scene_group_id": "classroom-morning",
@@ -59,8 +60,11 @@ def _stale_shot(**overrides):
         "pose_reference_path": "pose.png",
         "depth_reference_path": "depth.png",
         "continuity_profile": "{\"previous_reference_path\":\"prev.png\"}",
-        "reference_weights": "{\"environment\":0.45}",
+        "reference_weights": "{\"policy\":\"text_only_policy\",\"preferences\":{\"environment\":0.45}}",
         "consistency_context": "old context",
+        "visual_notes": "",
+        "version": 1,
+        "media_stale": False,
     }
     data.update(overrides)
     return SimpleNamespace(**data)
@@ -109,7 +113,8 @@ def main() -> None:
         # root. Point the smoke fixture at its isolated temporary root instead
         # of using the old placeholder path.
         settings.OUTPUT_DIR = TMP_ROOT
-        shot_route.reference_asset_service.output_dir = TMP_ROOT
+        shot_route.image_service.reference_assets.output_dir = TMP_ROOT
+        shot_route.seedance_service.reference_assets.output_dir = TMP_ROOT
         frame = _png(TMP_ROOT / "prev_frame.png", "prev", (90, 120, 180))
         storyboard = _png(TMP_ROOT / "storyboard.png", "story", (180, 120, 90))
         scene_ref = _png(TMP_ROOT / "scene_ref.png", "scene", (80, 160, 110))
@@ -152,20 +157,19 @@ def main() -> None:
         )
         blocking = shot["continuity_profile"]["character_blocking"]
         assert blocking["character_order_left_to_right"] == ["Xia", "Bo"]
-        assert "180-degree axis locked" in blocking["axis_line"]
+        assert "180-degree axis preference" in blocking["axis_line"]
         assert "Bo" in blocking["eye_line_target"]
         assert "scene light" in blocking["skin_light_integration"]
-        assert "Character blocking lock" in shot["consistency_context"]
+        assert "Character blocking prompt preference" in shot["consistency_context"]
         shot_route._materialize_control_references("_sop_payload_smoke", shot)
 
         pose_path = Path(shot["pose_reference_path"])
         depth_path = Path(shot["depth_reference_path"])
-        assert pose_path.exists(), pose_path
-        assert depth_path.exists(), depth_path
+        assert not shot["pose_reference_path"] and not shot["depth_reference_path"]
 
         image_service = ImageService()
         image_prompt, _ = image_service._build_prompt(shot, [character, character_b], {})
-        assert "locked character blocking" in image_prompt
+        assert "character blocking prompt preference" in image_prompt
         assert "left-to-right order Xia, Bo" in image_prompt
         image_refs = image_service._reference_images_for_request(shot)
         seedream_payload = image_service._seedream_payload("doubao-seedream-5-0-lite", "prompt", "negative", 42, "2K", image_refs)
@@ -176,9 +180,9 @@ def main() -> None:
         reference_manifest = video_service._validate_video_references(shot)
         shot["seedance_reference_manifest"] = reference_manifest
         video_prompt = video_service._build_prompt(shot, [character, character_b], {"scene1": scene})
-        assert "locked character blocking" in video_prompt
+        assert "character blocking prompt preference" in video_prompt
         assert "left-to-right order Xia, Bo" in video_prompt
-        assert "Seedance 1.5 pro API-safe reference mode" in video_prompt
+        assert "provider_capabilities and references_sent" in video_prompt
         video_content = video_service._build_content("prompt text", shot)
         assert video_content[0]["type"] == "text"
         image_content = [item for item in video_content if item.get("type") == "image_url"]
@@ -222,7 +226,7 @@ def main() -> None:
         assert stale.pose_reference_path == "pose.png"
         assert stale.depth_reference_path == "depth.png"
         assert stale.continuity_profile == "{\"previous_reference_path\":\"prev.png\"}"
-        assert stale.reference_weights == "{\"environment\":0.45}"
+        assert stale.reference_weights == "{\"policy\":\"text_only_policy\",\"preferences\":{\"environment\":0.45}}"
         assert stale.consistency_context == "old context"
 
         valid_video = TMP_ROOT / "video.mp4"
@@ -292,8 +296,8 @@ def main() -> None:
                     "stale_media_invalidation_checked": True,
                     "scene_group_previous_reference_checked": True,
                     "character_blocking_checked": True,
-                    "pose_ref_exists": pose_path.exists(),
-                    "depth_ref_exists": depth_path.exists(),
+                    "pose_ref_exists": bool(shot["pose_reference_path"]),
+                    "depth_ref_exists": bool(shot["depth_reference_path"]),
                 },
                 ensure_ascii=False,
             )

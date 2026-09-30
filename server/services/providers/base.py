@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from services.providers.endpoint import EndpointConfig
 from services.providers.usage import UsageMetadata, unknown_usage
@@ -18,17 +19,41 @@ class LLMCapabilities:
 @dataclass(frozen=True)
 class ImageCapabilities:
     reference_images: bool = False  # 是否支持参考图输入（seedream 支持多图）
-    requires_credentials: bool = True  # 是否需要 API Key（placeholder 免凭据）
-
+    max_reference_images: int = 0  # 0 表示协议未声明上限；适配器发送时仍按自身上限截断
+    reference_parameter: str = "image"
+    reference_weight_parameter: str = ""  # 真实数值权重参数；空表示 text_only_policy
+    reference_weight_policy: str = "text_only_policy"
+    reference_role_parameter: str = ""  # 角色类型参数；空表示只发送无角色的多图数组
+    character_reference_parameter: str = ""
+    scene_reference_parameter: str = ""
+    lora: bool = False
+    ip_adapter: bool = False
+    openpose: bool = False
+    depth: bool = False
+    requires_credentials: bool = True  # 是否需要 API Key（placeholder 免密钥）
 
 @dataclass(frozen=True)
 class VideoCapabilities:
     reference_image: bool = False  # 是否需要/支持首帧参考图（Seedance 必须）
+    multiple_reference_images: bool = False  # 是否支持角色/场景/连续性多参考图
+    max_reference_images: int = 0
+    reference_parameter: str = "content"
+    reference_weight_parameter: str = ""
+    reference_weight_policy: str = "text_only_policy"
+    reference_role_parameter: str = ""
+    character_reference_parameter: str = ""
+    scene_reference_parameter: str = ""
+    last_frame_input: bool = False
+    first_last_frame_interpolation: bool = False
+    lora: bool = False
+    ip_adapter: bool = False
+    openpose: bool = False
+    depth: bool = False
     native_audio: bool = False  # 是否原生生成音频（含对白语音）
     dialogue_in_prompt: bool = False  # 对白是否通过 prompt 文本驱动（Veo 3 风格）
     voice_consistent: bool = False  # 能否指定/锁定音色
     fixed_duration: int | None = None  # 协议固定时长（秒）；None 表示按镜头时长
-    reference_mode: str = "text_only"  # first_frame_only / text_only
+    reference_mode: str = "text_only"  # first_frame_only / multi_reference / model_conditional / text_only
     # 该协议参考图内联（base64 data URL）时的编码字节预算；0 表示沿用全局
     # settings.VIDEO_REFERENCE_INLINE_BUDGET_BYTES。按网关实际上限声明，
     # 避免所有协议都被压到同一个保守值。
@@ -45,11 +70,28 @@ class Dialogue:
 
 
 @dataclass
+class ReferenceAsset:
+    """已校验并准备进入请求载荷的参考素材。"""
+
+    url: str
+    type: str = "reference_image"
+    role: str = ""
+    provider_type: str = ""
+    source_path: str = ""
+    weight: float | None = None  # 仅当 Provider 声明数值权重参数时才允许发送
+    required: bool = True
+
+    def payload_value(self) -> str:
+        return self.url
+
+
+@dataclass
 class ImageRequest:
     prompt: str
     negative_prompt: str = ""
     seed: int = 42
-    reference_images: list[str] = field(default_factory=list)  # data URL / http(s) URL
+    reference_images: list[str] = field(default_factory=list)  # 兼容旧调用：data URL / http(s) URL
+    reference_assets: list[ReferenceAsset] = field(default_factory=list)
     size: str = ""  # 期望出图尺寸（如 1440x2560）；空表示适配器自定
     label: str = "PLACEHOLDER"  # 占位图标题（仅 placeholder 适配器使用）
 
@@ -58,6 +100,7 @@ class ImageRequest:
 class VideoRequest:
     prompt: str
     reference_image: str | None = None  # 已审核首帧参考图（data URL / http(s) URL）
+    reference_assets: list[ReferenceAsset] = field(default_factory=list)  # 角色/场景/连续性等多参考图
     dialogues: list[Dialogue] | None = None  # 台词；native_audio 适配器将其编入 prompt
     duration: int = 5
     ratio: str = "9:16"
@@ -74,6 +117,8 @@ class VideoResult:
     native_audio: bool = False  # 产物是否自带音轨（适配器如实声明）
     payload_mode: str = ""  # 参考图载荷模式（first_frame_reference / image_reference / text_only）
     task_id: str = ""
+    references_sent: list[dict] = field(default_factory=list)
+    control_types_sent: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -99,6 +144,12 @@ class BaseAdapter:
 
     def __init__(self, endpoint: EndpointConfig):
         self.endpoint = endpoint
+
+    @classmethod
+    def effective_capabilities(cls, model: str = "") -> Any:
+        """按模型变体返回生效能力；默认返回类级声明。"""
+
+        return cls.capabilities
 
     # --- 统一 usage metadata ------------------------------------------------
 

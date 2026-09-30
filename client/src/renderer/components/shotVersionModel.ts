@@ -47,7 +47,7 @@ export const FIELD_LABELS: Record<string, string> = {
   storyboard_status: '故事板状态',
   scene_group_id: '场景组',
   consistency_context: '一致性上下文',
-  reference_weights: '参考权重',
+  reference_weights: '权重策略',
   continuity_profile: '连续性配置',
   continuity_reference_path: '续帧参考',
   pose_reference_path: '骨骼参考',

@@ -236,7 +236,7 @@ class NativeModeSkipsVoiceTests(_PipelineTestCase):
             patch("services.video_service.get_adapter", return_value=_RecordingNativeAdapter),
             patch.object(shot_route.tts_service, "generate_dialogue", side_effect=fake_tts),
         ):
-            asyncio.run(shot_route._run_single_shot_video(self.shot.id, force=True))
+            asyncio.run(shot_route._run_single_shot_video(self.shot.id, force=True, confirm_capability_downgrade=True))
 
         self.assertEqual(tts_calls, [], "native 模式必须跳过 TTS 配音节点")
         self.assertEqual(len(requests), 1)

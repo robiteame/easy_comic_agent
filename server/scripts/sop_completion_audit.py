@@ -87,6 +87,7 @@ def main() -> None:
     # The reuse gate now verifies the file is present and large enough. Keep a
     # disposable fixture under an approved output root instead of using the
     # historical placeholder path (``video.mp4``).
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     fixture_root = Path(tempfile.mkdtemp(prefix=".sop-completion-", dir=settings.OUTPUT_DIR))
     fixture_video = fixture_root / "video.mp4"
     fixture_video.write_bytes(b"\x00" * 4096)
@@ -135,19 +136,21 @@ def main() -> None:
         )
     )
 
-    weights = {shot_type: consistency.reference_weights(shot_type) for shot_type in ("wide", "medium", "close-up")}
+    preferences = {shot_type: consistency.reference_weights(shot_type) for shot_type in ("wide", "medium", "close-up")}
     checks.append(
         _assert(
-            all(0.4 <= item["environment"] <= 0.5 and 0.25 <= item["action"] <= 0.35 for item in weights.values()),
-            "reference_weight_ranges",
-            json.dumps(weights, ensure_ascii=False),
+            all(0.4 <= item["environment"] <= 0.5 and 0.25 <= item["action"] <= 0.35 for item in preferences.values()),
+            "reference_weight_preferences_text_only",
+            json.dumps(preferences, ensure_ascii=False),
         )
     )
     config = consistency.project_config()
     checks.append(
         _assert(
-            config["rules_override_single_shot_customization"] and config["manual_storyboard_approval_required_before_video"],
-            "project_sop_config_gates",
+            config["prompt_rules_are_preferences"]
+            and config["reference_weight_policy"] == "text_only_policy"
+            and config["manual_storyboard_approval_required_before_video"],
+            "project_capability_policy_gates",
             json.dumps(config, ensure_ascii=False),
         )
     )
@@ -213,9 +216,9 @@ def main() -> None:
     )
     checks.append(
         _assert(
-            "NON-NEGOTIABLE AGENT CONSISTENCY SOP" in generation_context["consistency_context"]
-            and "override" in generation_context["consistency_context"].lower(),
-            "sop_prompt_overrides_single_shot",
+            "Prompt preference only, not a model hard constraint" in generation_context["consistency_context"]
+            and "text_only_policy" in generation_context["consistency_context"],
+            "sop_prompt_is_honest_preference",
             generation_context["consistency_context"][:180],
         )
     )
@@ -224,8 +227,9 @@ def main() -> None:
     image_prompt, _ = image_service._build_prompt({**generation_shot, **generation_context}, [character_a, character_b], {})
     checks.append(
         _assert(
-            "locked character blocking" in image_prompt and "scene baseline/reference assets are loaded" in image_prompt,
-            "image_prompt_contains_sop_context",
+            "character blocking prompt preference" in image_prompt
+            and "actual sending is recorded in the request report" in image_prompt,
+            "image_prompt_contains_honest_reference_context",
             image_prompt[:220],
         )
     )
@@ -239,11 +243,10 @@ def main() -> None:
     video_prompt = video_service._build_prompt({**generation_shot, **generation_context}, [character_a, character_b], {"scene1": morning_scene})
     checks.append(
         _assert(
-            "locked character blocking" in video_prompt
+            "character blocking prompt preference" in video_prompt
             and "previous shot final frame" in video_prompt
-            and "first_frame_only" in video_prompt
-            and "receives first frame only" in video_prompt,
-            "seedance_prompt_contains_honest_first_frame_context",
+            and "provider_capabilities and references_sent" in video_prompt,
+            "seedance_prompt_contains_honest_reference_context",
             video_prompt[:220],
         )
     )

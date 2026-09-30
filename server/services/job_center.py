@@ -22,7 +22,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from config import settings
-from models import BackgroundJob
+from models import BackgroundJob, Shot
 from services import usage_service
 from services.job_dto import as_utc, estimate_eta_seconds, job_dto
 from services.job_types import (
@@ -331,7 +331,7 @@ def _retry_of_attempt(db: Session, job: BackgroundJob) -> int | None:
     return int(previous) if previous is not None else None
 
 
-def job_detail(db: Session, job: BackgroundJob) -> dict[str, Any]:
+def _job_detail_base(db: Session, job: BackgroundJob) -> dict[str, Any]:
     """详情 = DTO + 尝试历史 + 重试关系。DTO 已含可执行动作与禁用原因。"""
 
     canonical = parse_job_key(job.idempotency_key).canonical
@@ -359,6 +359,46 @@ def job_detail(db: Session, job: BackgroundJob) -> dict[str, Any]:
         "attempt": dto["attempt"],
     }
     return dto
+
+
+
+def job_detail(db: Session, job: BackgroundJob) -> dict[str, Any]:
+    """任务详情；生成类任务附带真实一致性载荷/能力报告。"""
+
+    detail = _job_detail_base(db, job)
+    shot_id = str(getattr(job, "queue_shot_id", "") or "")
+    if not shot_id:
+        identity = parse_job_key(job.idempotency_key)
+        if identity.owner_type == "shot":
+            shot_id = identity.owner_id
+    if shot_id:
+        shot = db.query(Shot).filter(Shot.id == shot_id).first()
+        profile = _json_dict(getattr(shot, "continuity_profile", "") if shot else "")
+        report = profile.get("generation_report") or {}
+        detail.update(
+            {
+                "generation_report": report,
+                "provider_capabilities": profile.get("provider_capabilities") or report.get("provider_capabilities") or {},
+                "references_validated": profile.get("references_validated", report.get("references_validated", 0)),
+                "references_sent": profile.get("references_sent", report.get("references_sent", [])),
+                "control_types_sent": profile.get("control_types_sent", report.get("control_types_sent", [])),
+                "reference_weight_policy": profile.get("reference_weight_policy", report.get("reference_weight_policy", "text_only_policy")),
+                "consistency_metrics": profile.get("consistency_metrics", report.get("consistency_metrics", {})),
+            }
+        )
+    return detail
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    import json
+
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(value or "{}")
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):
+        return {}
 
 
 def purge_jobs(db: Session, query: JobQuery) -> int:

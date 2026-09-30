@@ -10,7 +10,7 @@ from io import BytesIO
 from config import settings
 from services import usage_service
 from services.consistency_service import ConsistencyService
-from services.providers.base import ImageRequest
+from services.providers.base import ImageRequest, ReferenceAsset
 from services.providers.endpoint import (
     KNOWN_PROTOCOLS,
     EndpointConfig,
@@ -19,12 +19,18 @@ from services.providers.endpoint import (
 )
 from services.providers.image_placeholder import PlaceholderImageAdapter
 from services.providers.registry import UnknownProtocolError, get_adapter
+from services.providers.capability_matrix import (
+    CapabilityDowngradeRequiredError,
+    capability_report,
+    payload_control_types,
+)
 from services.providers.usage import (
     CAPABILITY_IMAGE,
     ERROR_CODE_PROVIDER_CALL_FAILED,
     adapter_usage_for_request,
 )
 from services.reference_asset_service import ReferenceAssetService
+from services.consistency_metrics import combine_report, payload_metrics, validate_visual_consistency
 from services.prompt_budget import assemble_prompt, dedupe_terms, ensure_critical_fields, remove_conflicting_terms
 from services.security import atomic_write_bytes, safe_path, validate_identifier
 from services.storage_service import StorageQuotaExceeded, StorageService
@@ -145,15 +151,19 @@ class ImageService:
         label: str,
         shot_id: str = "",
         allow_text_only_references: bool = False,
+        reference_assets: list[ReferenceAsset] | None = None,
     ) -> bytes:
         """生成一张图。
 
-        ``allow_text_only_references`` 由调用方按产品策略传入：默认 False 时，
-        参考图不可用会直接报错（低层原语的严格契约）；服务入口在 prefer 策略下
-        传 True，此时会明确告警、如实记录 references_sent=0 后继续生成，
-        但绝不假装参考图已生效。
+        ``allow_text_only_references`` 只有在人工显式确认能力降级时才为 True；
+        否则参考图不可用直接抛出 ``CapabilityDowngradeRequiredError``，避免
+        自动模式或未确认的手动任务静默丢失角色/场景/连续性参考。
         """
-        requires_references = bool(reference_images)
+        validated_assets = list(reference_assets or [])
+        if not validated_assets and reference_images:
+            validated_assets = [ReferenceAsset(url=value, type="reference_image", role="reference_image") for value in reference_images]
+        validated_assets = [item for item in validated_assets if item.url]
+        requires_references = bool(validated_assets)
         adapter, endpoint = self._resolve_route()
         provider_source = "configured"
         if requires_references:
@@ -162,44 +172,73 @@ class ImageService:
         reference_warning = ''
         if references_unsupported:
             reference_warning = (
-                f"图像 Provider {endpoint.protocol}/{endpoint.model or 'default'} 声明不支持参考图，"
-                f"本次 {len(reference_images)} 张参考图（角色三视图/场景基准图/续帧）不会发送给模型；"
-                "请在「系统设置 → 模型服务」切换到支持参考图的图像 Provider（如 ark-seedream）。"
+                f"图像 Provider {endpoint.protocol}/{endpoint.model or 'default'} 不支持参考图，"
+                f"本次 {len(validated_assets)} 张角色/场景/连续性参考不会发送给模型；"
+                "如需继续纯文本生成，请显式确认能力降级。"
             )
             if not allow_text_only_references:
                 logger.warning(reference_warning)
-                raise RuntimeError(reference_warning)
+                raise CapabilityDowngradeRequiredError(reference_warning)
             logger.warning("参考图未生效（已如实降级为纯文本生成）: %s", reference_warning)
         size = preferred_size or str(endpoint.param("image_size") or "")
+        sent_assets = validated_assets if not references_unsupported else []
         request = ImageRequest(
             prompt=prompt,
             negative_prompt=negative_prompt,
             seed=seed,
-            # 适配器声明支持参考图时才传入，不再硬编码假设。
-            reference_images=list(reference_images) if adapter.capabilities.reference_images else [],
+            reference_images=[item.url for item in sent_assets],
+            reference_assets=list(sent_assets),
             size=size,
             label=label,
         )
+        report = capability_report("image", endpoint.protocol, model=endpoint.model, adapter_cls=adapter.__class__)
+        sent_detail = [
+            {
+                "type": item.type,
+                "role": item.role,
+                "parameter": report["features"]["multiple_reference_images"].get("parameter") or "image",
+                "weight_policy": report.get("reference_weight_policy", "text_only_policy"),
+            }
+            for item in sent_assets
+        ]
+        control_types = payload_control_types("image", report)
         self.last_generation_metadata = {
             "provider": endpoint.protocol,
             "model": endpoint.model,
             "provider_source": provider_source,
-            "reference_mode": ("multi_reference" if adapter.capabilities.reference_images else "text_only") if reference_images else "text_only",
-            "references_validated": len(reference_images),
-            "references_sent": len(request.reference_images),
+            "reference_mode": ("multi_reference" if len(sent_assets) > 1 else "reference") if sent_assets else "text_only",
+            "references_validated": len(validated_assets),
+            "references_sent": len(sent_assets),
+            "references_sent_detail": sent_detail,
+            "control_types_sent": control_types,
+            "provider_capabilities": report,
+            "capability_states": report.get("states", {}),
+            "reference_weight_policy": report.get("reference_weight_policy", "text_only_policy"),
             "references_unsupported": bool(references_unsupported),
             "reference_capability_warning": reference_warning,
         }
+        self.last_generation_metadata["consistency_metrics"] = combine_report(
+            payload_metrics(
+                references_validated=len(validated_assets),
+                references_sent=sent_detail,
+                required_roles=[item.role or item.type for item in validated_assets],
+                control_types_sent=control_types,
+                provider_capabilities=report,
+            ),
+            {"status": "not_run"},
+        )
         logger.info(
             "图像生成请求: provider=%s model=%s provider_source=%s reference_mode=%s "
-            "references_validated=%s references_sent=%s references_unsupported=%s label=%s",
+            "references_validated=%s references_sent=%s control_types_sent=%s capability_states=%s reference_weight_policy=%s label=%s",
             endpoint.protocol,
             endpoint.model or "default",
             provider_source,
             self.last_generation_metadata["reference_mode"],
             self.last_generation_metadata["references_validated"],
             self.last_generation_metadata["references_sent"],
-            self.last_generation_metadata["references_unsupported"],
+            control_types,
+            self.last_generation_metadata["capability_states"],
+            self.last_generation_metadata["reference_weight_policy"],
             label,
         )
         # 用量按「实际调用的适配器」记账：回退到占位图时 provider 记为 placeholder，
@@ -247,6 +286,8 @@ class ImageService:
         style_params: dict,
         project_id: str,
         seed: int = 42,
+        capability_mode: str = "manual",
+        confirm_capability_downgrade: bool = False,
     ) -> str:
         prompt, negative_prompt = self._build_prompt(shot, characters, style_params)
         reference_images = self._reference_images_for_request(shot)
@@ -268,11 +309,25 @@ class ImageService:
             preferred_size=preferred_size,
             label="SHOT PLACEHOLDER",
             shot_id=safe_shot_id,
-            allow_text_only_references=self._reference_enforcement() != "strict",
+            allow_text_only_references=(
+                self._reference_enforcement() != "strict"
+                and str(capability_mode or "manual").lower() == "manual"
+                and bool(confirm_capability_downgrade)
+            ),
+            reference_assets=self._reference_assets_for_request(shot),
         )
 
         self._validate_image(image_data)
         self._write_image(project_id, image_path, image_data)
+        visual = await validate_visual_consistency(
+            generated_path=str(image_path),
+            reference_paths=[item.source_path for item in self._reference_assets_for_request(shot) if item.source_path],
+            metric_keys=("character_identity", "scene_group"),
+        )
+        metrics = dict(self.last_generation_metadata.get("consistency_metrics") or {})
+        metrics["visual_validation"] = visual
+        metrics["claim_scope"] = "request_payload_and_vlm" if visual.get("status") == "passed" else "request_payload_only"
+        self.last_generation_metadata["consistency_metrics"] = metrics
         return str(image_path)
 
     async def generate_scene_baseline_reference(
@@ -441,11 +496,11 @@ class ImageService:
 
         # --- 3. 场景、构图和首帧参考说明 ---
         if shot.get("scene_reference_images"):
-            fields.append(("scene_reference", "scene baseline/reference assets are loaded for environment, props, lighting and perspective"))
+            fields.append(("scene_reference", "scene baseline/reference assets are candidates for Provider input; actual sending follows Capability Matrix"))
         if shot.get("character_reference_images"):
-            fields.append(("character_reference", "character three-view reference assets are loaded for identity, outfit, face and hairstyle"))
+            fields.append(("character_reference", "character three-view assets are candidates for Provider input; actual sending follows Capability Matrix"))
         if shot.get("continuity_reference_path"):
-            fields.append(("continuity_reference", "previous shot final frame reference anchors eye-line, pose, axis and depth continuity"))
+            fields.append(("continuity_reference", "previous shot final frame is a continuity candidate; no pose/depth control is implied"))
         fields.extend([
             ("scene", shot.get("scene_description", "")),
             ("approved_storyboard", shot.get("storyboard_prompt", "")),
@@ -462,19 +517,17 @@ class ImageService:
         ])
 
         # --- 5. 连续性规则和低优先级 SOP ---
-        fields.append(("identity_policy", "NON-NEGOTIABLE identity and style consistency policy"))
+        fields.append(("identity_policy", "identity and style prompt preferences only, not model hard constraints"))
         if shot.get("reference_weights"):
             weights = shot.get("reference_weights") or {}
-            fields.append(("reference_weights",
-                f"apply locked reference weights: environment/style {float(weights.get('environment') or 0.45):.2f}, character/action {float(weights.get('action') or 0.30):.2f}"
-            ))
+            fields.append(("reference_weights", "reference weight policy: text_only_policy; no numeric model weight is implied"))
         if shot.get("reference_assets"):
             roles = ", ".join(str(item.get("role", "")) for item in shot.get("reference_assets", []) if isinstance(item, dict))
-            fields.append(("reference_roles", f"mandatory persisted reference assets drive these roles: {roles}"))
+            fields.append(("reference_roles", f"validated reference candidates and roles: {roles}; actual sending is recorded in the request report"))
         if shot.get("continuity_profile"):
             profile = shot.get("continuity_profile") or {}
             fields.append(("continuity_rules",
-                "locked continuity controls: "
+                "continuity prompt preferences: "
                 f"{', '.join(profile.get('editing_logic', []))}; "
                 f"OpenPose {profile.get('openpose_lock', 'unsupported')}; "
                 f"Depth {profile.get('depth_lock', 'unsupported')}; "
@@ -485,7 +538,7 @@ class ImageService:
             if blocking:
                 order = blocking.get("character_order_left_to_right") or []
                 fields.append(("blocking",
-                    "locked character blocking: "
+                    "character blocking prompt preference: "
                     f"left-to-right order {', '.join(order) if order else 'single subject'}; "
                     f"{blocking.get('axis_line', '180-degree axis locked')}; "
                     f"eye-line {blocking.get('eye_line_target', 'locked')}; "
@@ -548,6 +601,37 @@ class ImageService:
                 selected.append(char)
                 seen.add(key)
         return selected
+
+    def _reference_assets_for_request(self, shot: dict) -> list[ReferenceAsset]:
+        """把角色三视图、场景基准图、连续性帧整理成可校验的结构化参考。"""
+
+        candidates: list[tuple[str, str, str]] = []
+        for asset in shot.get("reference_assets") or []:
+            if isinstance(asset, dict) and asset.get("path"):
+                candidates.append((str(asset.get("type") or "reference_image"), str(asset.get("role") or ""), str(asset["path"])))
+        for path in shot.get("scene_reference_images") or []:
+            if path:
+                candidates.append(("scene_baseline", "environment_props_lighting_perspective", str(path)))
+        for path in shot.get("character_reference_images") or []:
+            if path:
+                candidates.append(("character_three_view", "identity_outfit_face_body_hair", str(path)))
+        if shot.get("continuity_reference_path"):
+            candidates.append(("continuity_frame", "eye_line_axis_motion", str(shot["continuity_reference_path"])))
+
+        result: list[ReferenceAsset] = []
+        seen: set[tuple[str, str]] = set()
+        for kind, role, path in candidates:
+            key = (kind, path)
+            if key in seen:
+                continue
+            seen.add(key)
+            url = self.reference_assets.to_image_url(path)
+            if not url:
+                continue
+            result.append(ReferenceAsset(url=url, type=kind, role=role or kind, source_path=path))
+            if len(result) >= 14:
+                break
+        return result
 
     def _reference_images_for_request(self, shot: dict) -> list[str]:
         refs: list[str] = []

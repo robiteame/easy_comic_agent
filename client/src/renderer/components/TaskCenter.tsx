@@ -778,6 +778,21 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
                     )}
                   </div>
                 )}
+                {selectedJob.generation_report && (
+                  <>
+                    <h4 className="task-detail-subtitle">一致性载荷报告</h4>
+                    <dl className="task-detail-grid">
+                      <dt>Provider</dt>
+                      <dd>{[selectedJob.generation_report.provider, selectedJob.generation_report.model].filter(Boolean).join(' / ') || '—'}</dd>
+                      <dt>参考已校验 / 已发送</dt>
+                      <dd>{String(selectedJob.references_validated ?? 0)} / {Array.isArray(selectedJob.references_sent) ? selectedJob.references_sent.join(' / ') || '无' : String(selectedJob.references_sent ?? '无')}</dd>
+                      <dt>控制参数</dt>
+                      <dd>{selectedJob.control_types_sent?.join(' / ') || '无'}</dd>
+                      <dt>权重策略</dt>
+                      <dd>{selectedJob.reference_weight_policy || 'text_only_policy'}</dd>
+                    </dl>
+                  </>
+                )}
                 <h4 className="task-detail-subtitle">历次尝试</h4>
                 <ol className="task-attempt-list">
                   {(selectedJob.attempts || []).map((attempt) => (

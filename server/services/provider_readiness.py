@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+from services.providers.capability_matrix import capability_report
 from services.providers.endpoint import endpoint_identity, get_endpoint
 from services.providers.registry import UnknownProtocolError, get_adapter
 
@@ -168,6 +169,9 @@ def video_provider_preflight() -> dict:
         "reference_mode": "text_only",
         "native_audio": False,
         "fixed_duration": None,
+        "provider_capabilities": {},
+        "control_types_supported": [],
+        "reference_weight_policy": "text_only_policy",
         "issues": [],
     }
     try:
@@ -177,7 +181,11 @@ def video_provider_preflight() -> dict:
         report["issues"].append(f"视频协议未注册适配器: {exc}")
         return report
 
-    capabilities = getattr(adapter_cls, "capabilities", None)
+    capabilities = adapter_cls.effective_capabilities(endpoint.model)
+    matrix = capability_report("video", endpoint.protocol, model=endpoint.model, adapter_cls=adapter_cls)
+    report["provider_capabilities"] = matrix
+    report["control_types_supported"] = matrix.get("supported", [])
+    report["reference_weight_policy"] = matrix.get("reference_weight_policy", "text_only_policy")
     if capabilities is not None:
         report["reference_image"] = bool(capabilities.reference_image)
         report["reference_mode"] = str(getattr(capabilities, "reference_mode", "text_only"))

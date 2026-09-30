@@ -21,8 +21,8 @@ AI漫剧Agent 是一套"全流程自动化+轻量化人工干预"的漫剧生产
 | Web 框架 | FastAPI | REST API + WebSocket |
 | Agent 框架 | LangGraph | 自动模式状态图编排（手动模式不经过图） |
 | LLM | Mimo（小米 MiMo，OpenAI 兼容；可切 OpenAI/DeepSeek 兜底） | 脚本生成、解析、分镜决策 |
-| 图像生成 | Seedream（火山方舟）/ Qwen-Image（阿里云百炼）/ Stability AI / **local 占位 stub** | 角色三视图、场景基准图、定稿故事板 |
-| 视频生成 | SeedDance（火山方舟，首帧图驱动） | 逐镜头视频生成 |
+| 图像生成 | Seedream / Qwen-Image / Stability / **local 占位 stub** | 参考能力按 Capability Matrix；Seedream 多参考图，其余当前不接收 |
+| 视频生成 | SeedDance / 通义万相 | SeedDance=first_frame_only；万相 r2v 可多参考图 |
 | TTS | Mimo 内置 TTS | 角色配音 |
 | 视频渲染 | FFmpeg (ffmpeg-python) | 成片合成、转场、字幕、Ken Burns、音频混流 |
 | ORM | SQLAlchemy 2.0 | 数据库模型 |
@@ -60,8 +60,8 @@ server/
 │   ├── video_service.py       # SeedDance 逐镜头视频生成 (任务轮询)
 │   ├── tts_service.py         # Mimo 内置 TTS 配音
 │   ├── ffmpeg_service.py      # FFmpeg 成片合成
-│   ├── consistency_service.py # 角色/场景一致性 SOP 注入引擎
-│   ├── reference_asset_service.py # 参考图/连续帧/OpenPose/深度图物料化
+│   ├── consistency_service.py # 角色/场景一致性偏好与参考资产编排
+│   ├── reference_asset_service.py # 参考图/连续帧物料化；OpenPose/Depth unsupported
 │   ├── style_templates.py     # 风格模板 (8 套)
 │   └── storage_service.py     # 文件存储管理
 │
@@ -167,7 +167,7 @@ class AgentState(TypedDict):
 
 ### 1. 角色一致性保障 (Character Card)
 
-每次图像生成时，从角色卡片强制注入以下参数：
+每次图像生成时，从角色卡片注入以下提示偏好；它们不是模型硬约束：
 
 - `base_prompt`: 角色基础英文描述 (发型/发色/瞳色/身材)
 - `key_features`: 关键视觉特征列表
@@ -285,7 +285,7 @@ ws://localhost:8011/ws/{project_id}
 - **video**：必须配置 API Key（视频没有本地回退）；
 - **image**：永不拦截 —— 缺 Key 自动回退占位图（既有约定）；
 - **video 预检明细**：除 API Key 外还校验协议已注册适配器、`model` 非空、适配器声明
-  `reference_image=True`（本流水线是首帧图生视频）。任一不满足即 409；启动日志由
+  `reference_image=True`，并返回完整 `provider_capabilities`。任一不满足即 409；启动日志由
   `video_provider_preflight()` 如实打印协议 / 模型 / 参考图模式 / 固定时长 / 原生音频，不含密钥；
 - **voice 豁免**：视频适配器具备真正可用的原生音频能力
   （`native_audio` + `production_ready`，如接入 Veo 3 / Sora 2 厂商实现后）时
@@ -451,7 +451,7 @@ uvicorn main:app --host 0.0.0.0 --port 8011 --reload
 | status | str | pending/storyboard_done/storyboard_approved/video_generating/video_done/failed/needs_review |
 | storyboard_status / confirmed / version | | 故事板状态 / 审核确认 / 版本号 |
 | scene_asset_id / scene_group_id / character_asset_ids | | 关联场景/角色资产 |
-| consistency_context / reference_weights / continuity_profile | str/JSON | 一致性 SOP / 参考权重 / 连续性配置 |
+| consistency_context / reference_weights / continuity_profile | str/JSON | 提示偏好 / 权重策略 / 请求与验证报告 |
 | continuity_reference_path / pose_reference_path / depth_reference_path | str | 连续帧 / OpenPose / 深度图 |
 
 ### Character
@@ -535,10 +535,13 @@ uvicorn main:app --host 0.0.0.0 --port 8011 --reload
    统一经 `skill_config_service.resolve_effective_style()` 解析，接口 / WebSocket / 日志
    返回 `requested_style` / `effective_style` / `style_source`；`_persist_phase1` 不得把
    anime 写回项目。
-10. **参考图能力如实上报**：`references_validated`（文件存在并已读取）与
-    `references_sent`（实际进入请求载荷）必须分开记录；没有真实姿态/深度模型时
+10. **Capability Matrix 如实上报**：`references_validated`（文件存在并已读取）与
+    `references_sent`（实际进入请求载荷）必须分开记录，同时返回
+    `references_sent_detail` / `control_types_sent` / `provider_capabilities`；
+    Prompt 只能写“偏好”，不得描述为模型硬约束。没有真实姿态/深度模型时
     `openpose_lock`/`depth_lock` 一律标 `unsupported`，不产出伪造控制图；
-    LoRA / IP-Adapter 未接入，字段保持空串，界面显示「未接入」。
+    LoRA / IP-Adapter 未接入，字段保持空串。权重参数不支持时记录
+    `text_only_policy`，不得伪装成数值模型权重。
 11. **结构检查 ≠ 质量认证**：`services/structural_validation.py` 只做图片/视频可读性、
     尺寸、时长、首尾帧与空文件检查，不含人脸一致性 / 美学 / 闪烁检测；界面与日志
     统一显示「结构检查（仅结构，非质量认证）」。

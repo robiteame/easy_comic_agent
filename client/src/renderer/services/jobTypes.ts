@@ -114,6 +114,13 @@ export interface JobAttemptDto {
 }
 
 export interface JobDetailDto extends JobDto {
+  generation_report?: Record<string, any>
+  provider_capabilities?: Record<string, any>
+  references_validated?: number | boolean
+  references_sent?: unknown
+  control_types_sent?: string[]
+  reference_weight_policy?: string
+  consistency_metrics?: Record<string, any>
   attempts: JobAttemptDto[]
   latest_attempt_job_id: string | null
   retry_relationship: {

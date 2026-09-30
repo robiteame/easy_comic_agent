@@ -17,7 +17,6 @@ import InputNumber from 'antd/es/input-number'
 import message from 'antd/es/message'
 import Segmented from 'antd/es/segmented'
 import Select from 'antd/es/select'
-import Slider from 'antd/es/slider'
 import Switch from 'antd/es/switch'
 import { projectApi, settingsApi } from '../services/api'
 import PricingConfigPanel from './PricingConfigPanel'
@@ -73,15 +72,15 @@ type DiscoveredModelState = Record<ModelCategory, DiscoveredModel[]>
 // 接入同协议新服务只需改 base_url/api_key/model；全新协议需后端新增适配器。
 const PROTOCOL_OPTIONS: Partial<Record<ModelCategory, { value: string; label: string }[]>> = {
   image: [
-    { value: 'ark-seedream', label: '火山方舟 Seedream（支持参考图）' },
-    { value: 'qwen-image', label: '阿里云百炼 Qwen-Image（不支持参考图）' },
-    { value: 'stability', label: 'Stability AI（不支持参考图）' },
+    { value: 'ark-seedream', label: '火山方舟 Seedream（多参考图；无模型数值权重）' },
+    { value: 'qwen-image', label: '阿里云百炼 Qwen-Image（当前适配器不接受参考图）' },
+    { value: 'stability', label: 'Stability AI（当前适配器不接受参考图）' },
     { value: 'placeholder', label: '本地占位图（离线/免密钥）' },
   ],
   video: [
-    { value: 'ark-seedance', label: '火山方舟 Seedance（首帧参考 + 无声视频 + TTS，固定约 5 秒）' },
-    { value: 'dashscope-wanx', label: '阿里云百炼 通义万相（首帧参考 + 无声视频 + TTS）' },
-    { value: 'native-audio', label: '原生音视频（对白直出，厂商接入中）' },
+    { value: 'ark-seedance', label: '火山方舟 Seedance（first_frame_only；无声视频 + TTS）' },
+    { value: 'dashscope-wanx', label: '阿里云百炼 通义万相（i2v=first_frame_only；r2v=multi_reference）' },
+    { value: 'native-audio', label: '原生音视频（协议骨架；具体厂商未接入）' },
   ],
   voice: [
     { value: 'mimo-tts', label: 'Mimo 内置 TTS' },
@@ -374,6 +373,19 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
     })
   }
 
+  const refreshProviderCapability = async (category: ModelCategory, protocol: string, model: string) => {
+    if (category !== 'image' && category !== 'video') return
+    try {
+      const capabilities = await settingsApi.providerCapabilities({ capability: category, protocol, model })
+      setModelConfig((current) => ({
+        ...current,
+        [category]: { ...current[category], capabilities },
+      }))
+    } catch {
+      // 能力读取失败时保留后端已返回的上一份矩阵，不硬编码替代能力。
+    }
+  }
+
   const updateProjectField = async (field: 'style' | 'resolution' | 'outputFormat', value: string) => {
     const previousValue = { style, resolution, outputFormat }[field]
     setProject({ [field]: value } as any)
@@ -517,6 +529,11 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
     }))
     if (field === 'base_url' || field === 'protocol') {
       setDiscoveredModels((current) => ({ ...current, [category]: [] }))
+    }
+
+    if (field === 'protocol' || field === 'model') {
+      const next = { ...modelConfig[category], [field]: value }
+      void refreshProviderCapability(category, String(next.protocol || next.provider || ''), String(next.model || ''))
     }
   }
 
@@ -886,38 +903,50 @@ function CapabilityBadges({
   capabilities?: Record<string, any>
 }) {
   if (!capabilities || !protocol) return null
-  const badges: string[] = []
+  const features = capabilities.features || {}
+  const statusLabel: Record<string, string> = {
+    supported: 'supported',
+    partial: 'partial',
+    unsupported: 'unsupported',
+  }
+  const rows: string[] = []
+  const add = (label: string, key: string) => {
+    const feature = features[key]
+    if (feature) rows.push(`${label}：${statusLabel[feature.status] || 'unsupported'}`)
+  }
   if (category === 'image') {
-    badges.push(
-      capabilities.reference_images
-        ? '支持参考图（多图）'
-        : '不支持参考图（需参考图的阶段会降级为纯文本生成并明确告警，绝不假装参考图已生效）',
-    )
-    if (capabilities.requires_credentials === false) badges.push('免密钥（本地占位图）')
+    add('多参考图', 'multiple_reference_images')
+    add('角色一致性', 'character_identity')
+    add('场景参考', 'scene_reference')
+    add('参考权重', 'reference_weights')
   }
   if (category === 'video') {
-    badges.push(capabilities.reference_image ? `首帧参考：${capabilities.reference_mode || 'first_frame_only'}` : '不支持首帧参考图')
-    if (capabilities.fixed_duration) badges.push(`固定时长 ${capabilities.fixed_duration}s（超长镜头需拆分）`)
-    badges.push(capabilities.native_audio ? '原生音频' : '无声视频（对白走 TTS 配音链路）')
+    add('首帧', 'first_frame')
+    add('多参考图', 'multiple_reference_images')
+    add('首尾帧插值', 'first_last_frame_interpolation')
+    add('参考权重', 'reference_weights')
   }
-  if (!badges.length) return null
+  add('OpenPose', 'pose_control')
+  add('Depth', 'depth_control')
+  add('LoRA', 'lora')
+  add('IP-Adapter', 'ip_adapter')
+  if (capabilities.reference_mode) rows.push(`reference_mode：${capabilities.reference_mode}`)
+  if (capabilities.reference_weight_policy) rows.push(`weight_policy：${capabilities.reference_weight_policy}`)
+  if (!rows.length) return null
   return (
-    <div
-      className="model-config-capabilities"
-      style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '4px 0 10px' }}
-    >
-      {badges.map((badge) => (
+    <div className="model-config-capabilities" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '4px 0 10px' }}>
+      {rows.map((row) => (
         <span
-          key={badge}
+          key={row}
           style={{
             fontSize: 12,
             padding: '2px 8px',
             borderRadius: 10,
-            background: 'rgba(127,127,127,0.14)',
-            color: 'var(--ant-color-text-secondary, #888)',
+            background: row.includes('unsupported') ? 'var(--ant-color-error-bg)' : 'var(--ant-color-fill-quaternary)',
+            color: 'var(--ant-color-text-secondary)',
           }}
         >
-          {badge}
+          {row}
         </span>
       ))}
     </div>
@@ -1172,12 +1201,12 @@ function AgentSkillPanel({
         />
       </div>
       <ToggleRow label="TTS 过滤指令话术" checked={agent.filter_tts_instruction_text} onChange={(value) => update('filter_tts_instruction_text', value)} />
-      <ToggleRow label="强制引用人物/场景基准图" checked={agent.force_character_scene_references} onChange={(value) => update('force_character_scene_references', value)} />
+      <ToggleRow label="优先引用人物/场景基准图" checked={agent.force_character_scene_references} onChange={(value) => update('force_character_scene_references', value)} />
       <ToggleRow label="Prompt 自动拼装" checked={agent.prompt_auto_assembly} onChange={(value) => update('prompt_auto_assembly', value)} />
-      <div className="skill-toggle-row"><span>OpenPose / Depth 控制</span><span>未接入（unsupported）</span></div>
+            <div className="skill-toggle-row"><span>OpenPose / Depth</span><span>unsupported（未接入）</span></div>
+      <div className="skill-toggle-row"><span>LoRA / IP-Adapter</span><span>unsupported（未接入）</span></div>
       <ToggleRow label="镜头续帧连贯逻辑" checked={agent.continuity_enabled} onChange={(value) => update('continuity_enabled', value)} />
-      <WeightField label="参考图画风权重" value={agent.style_reference_weight} onChange={(value) => update('style_reference_weight', value)} />
-      <WeightField label="动作权重" value={agent.action_reference_weight} onChange={(value) => update('action_reference_weight', value)} />
+      <WeightPolicyRow label="参考权重传输" />
     </div>
   )
 }
@@ -1191,12 +1220,11 @@ function ToggleRow({ label, checked, onChange }: { label: string; checked: boole
   )
 }
 
-function WeightField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+function WeightPolicyRow({ label }: { label: string }) {
   return (
-    <div className="skill-weight-row">
+    <div className="skill-toggle-row">
       <span>{label}</span>
-      <Slider min={0} max={1} step={0.05} value={value} onChange={onChange} />
-      <InputNumber min={0} max={1} step={0.05} value={value} onChange={(next) => onChange(Number(next || 0))} />
+      <span>text_only_policy（当前 Provider 不支持数值权重，不发送伪权重）</span>
     </div>
   )
 }

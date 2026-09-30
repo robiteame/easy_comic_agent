@@ -253,8 +253,20 @@ def _image_defaults(protocol: str = "") -> dict:
     }
 
 
-def _video_defaults() -> dict:
-    protocol = normalize_protocol("video", settings.VIDEO_PROVIDER)
+def _video_defaults(protocol: str = "") -> dict:
+    if not protocol:
+        protocol = normalize_protocol("video", settings.VIDEO_PROVIDER)
+    else:
+        protocol = normalize_protocol("video", protocol)
+    if protocol == "native-audio":
+        return {
+            "protocol": "native-audio",
+            "base_url": "",
+            "api_key": "",
+            "model": "",
+            "auth_style": "bearer",
+            "params": {"audio_mode": "native"},
+        }
     if protocol == "dashscope-wanx":
         return {
             "protocol": "dashscope-wanx",
@@ -355,6 +367,12 @@ def _endpoint_from_merged(capability: str, merged: dict) -> EndpointConfig:
         auth_style=normalize_auth_style(merged.get("auth_style", "")),
         params=dict(merged.get("params") or {}),
     )
+
+
+def video_protocol_defaults(protocol: str) -> EndpointConfig:
+    """按指定视频协议构造 .env 默认端点，用于一致性 Provider 自动优选。"""
+
+    return endpoint_from_stored("video", _video_defaults(protocol))
 
 
 def get_endpoint(capability: str) -> EndpointConfig:

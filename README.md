@@ -56,7 +56,7 @@
 <tr><td width="140"><strong>📝 剧本输入</strong></td><td>手工输入、AI 自动生成、上传 <code>.txt</code> / <code>.docx</code> 剧本文件，支持系列项目与多剧集管理</td></tr>
 <tr><td><strong>🤖 Agent 流水线</strong></td><td>剧本解析 → 分镜拆解 → 角色三视图 + 场景基准图 → 定稿故事板 → 逐镜头配音 → 逐镜头视频 → 成片合成，全流程自动编排</td></tr>
 <tr><td><strong>🎨 素材板</strong></td><td>集中管理角色卡片（6 种情绪变体、服装/配饰锁定）与场景资产（地点+时段分组、光照/道具锁定），可编辑 Prompt 并重新生成</td></tr>
-<tr><td><strong>🔒 视觉一致性 SOP</strong></td><td>角色身份、场景光照、场景组隔离、180 度轴线、参考权重、续帧参考、OpenPose/深度图控制——生成阶段强制注入，跨镜头风格统一</td></tr>
+<tr><td><strong>🔒 视觉一致性系统</strong></td><td>Capability Matrix 驱动的真实参考载荷、Provider 参数、可测量一致性指标与 VLM 复核；Prompt 只作为偏好，不冒充模型硬约束</td></tr>
 <tr><td><strong>⚡ 双运行模式</strong></td><td><b>手动审核模式</b>（默认）：每阶段人工卡点，逐镜头确认质量；<b>全自动模式</b>：LangGraph 端到端 <code>ainvoke</code>，一键出片。两种模式复用同一批步骤函数</td></tr>
 <tr><td><strong>🎛️ 系统设置</strong></td><td>内置 8 套画风模板 + 自定义画风；LLM / 图像 / 视频 / 配音四类模型 API 可视化配置；子 Agent Skill 方案保存、导入和项目/剧集绑定</td></tr>
 <tr><td><strong>📡 实时进度</strong></td><td>WebSocket 推送阶段进度、镜头更新、故事板就绪、渲染完成等事件，前端实时反馈</td></tr>
@@ -82,7 +82,7 @@
 | 数据库 | SQLite | — | Demo 阶段零运维本地持久化 |
 | LLM | Mimo（小米 MiMo）/ OpenAI 兼容 | — | 剧本生成、剧本解析、分镜决策、自然语言交互 |
 | 图像生成 | Seedream（火山方舟）/ Qwen-Image（阿里云百炼）/ Stability / PIL 占位 | — | 角色三视图、场景基准图、定稿故事板 |
-| 视频生成 | SeedDance（火山方舟） | 1.5 pro | 首帧图驱动的逐镜头视频生成 |
+| 视频生成 | SeedDance / 通义万相 | 按配置 | SeedDance=first_frame_only；万相 r2v 可发送多参考图 |
 | 配音 | Mimo 内置 TTS | — | 角色对白语音合成 |
 | 渲染 | FFmpeg | — | 成片合成、Ken Burns、转场、混音 |
 
@@ -162,8 +162,8 @@ ComicAgent/
 │   │   ├── video_service.py             # SeedDance 视频生成（异步任务轮询）
 │   │   ├── tts_service.py               # Mimo 内置 TTS 配音
 │   │   ├── ffmpeg_service.py            # FFmpeg 成片合成（Ken Burns/字幕/转场/混音）
-│   │   ├── consistency_service.py       # 视觉一致性 SOP 注入引擎
-│   │   ├── reference_asset_service.py   # 参考图/连续帧/OpenPose/深度图物料化
+│   │   ├── consistency_service.py       # 视觉一致性偏好与参考资产编排
+│   │   ├── reference_asset_service.py   # 参考图/连续帧物料化；OpenPose/Depth 明确 unsupported
 │   │   ├── style_templates.py           # 8 套内置画风模板 + 自定义模板管理
 │   │   ├── model_config_service.py      # 模型 API 配置持久化（覆盖 .env）
 │   │   ├── skill_config_service.py      # 子 Agent Skill 方案管理
@@ -308,15 +308,15 @@ ComicAgent/
 
 ### 视觉一致性系统
 
-后端通过 `ConsistencyService` 维护跨图像与视频生成的强制一致性规则：
+后端通过 `ConsistencyService` 组织一致性提示偏好，再由 Capability Matrix 决定哪些参考与控制参数真正进入 Provider 请求：
 
 | 规则 | 内容 |
 |------|------|
-| **角色卡片** | 视觉 Prompt、关键特征（key_features）、6 种情绪变体（neutral/happy/shy/sad/angry/surprised）、固定种子、服装/化妆/配饰锁定 |
-| **场景组** | 按"地点 + 时段"分组，锁定色温、光源方向、强度、天气、透视、LUT、道具位置；日夜场景严格隔离 |
-| **参考权重** | wide / medium / close-up 使用不同的环境与动作参考权重 |
-| **续帧** | 同场景组内优先使用上一镜头末帧（last_frame_path）作为连续性参考 |
-| **控制参考** | 复杂动作时派生 OpenPose 风格边缘图（pose_reference_path）与深度图（depth_reference_path），随 SeedDance 请求加载 |
+| **角色卡片** | 视觉 Prompt、关键特征（key_features）、6 种情绪变体（neutral/happy/shy/sad/angry/surprised）、固定种子、服装/化妆/配饰提示偏好 |
+| **场景组** | 按“地点 + 时段”分组，提供色温、光源、天气、透视、LUT、道具位置等提示偏好；日夜场景分开 |
+| **参考权重** | Provider 声明真实权重参数时才发送；当前适配器均记录 `text_only_policy`，不发送伪数值权重 |
+| **续帧** | 同场景组内优先校验上一镜尾帧（last_frame_path）；只有支持多参考图的 Provider 才实际发送 |
+| **控制参考** | OpenPose / Depth / LoRA / IP-Adapter / 首尾帧插值均按 Provider 能力声明；当前接入项为 `unsupported`，不生成或发送伪造控制图 |
 | **审核闸门** | 视频生成前必须存在已审核的故事板参考图；镜头编辑后清空下游故事板、音频、视频与连续帧产物，防止不一致传播 |
 | **转场规则** | 同场景硬切或 0.2s 淡入淡出；跨场景 0.3-0.5s 白色闪光或推拉；环境底噪连续不截断 |
 
@@ -498,6 +498,22 @@ runner 上成套构建三个平台的安装包并发布到 GitHub Releases（当
 | `MIMO_MULTIMODAL_MODEL` | `mimo-v2-omni` | 图像理解/诊断用多模态模型 |
 | `LLM_MAX_TOKENS` | `4096` | LLM 最大输出 Token 数 |
 
+### Provider Capability Matrix
+
+统一 DTO：每个能力项只有 `supported` / `partial` / `unsupported` 三种状态；权重项额外返回 `reference_weight_policy`。
+
+| Provider | 多参考图 | 参考权重 | 角色/场景一致性 | 首帧/尾帧 | 姿态/深度 | LoRA / IP-Adapter |
+|---|---|---|---|---|---|---|
+| `ark-seedream` | supported（最多 14 张，`image`） | unsupported · `text_only_policy` | partial（多图参考，无角色身份专用参数） | unsupported | unsupported | unsupported |
+| `qwen-image` | unsupported | unsupported · `text_only_policy` | unsupported | unsupported | unsupported | unsupported |
+| `stability` | unsupported | unsupported · `text_only_policy` | unsupported | unsupported | unsupported | unsupported |
+| `placeholder` | unsupported | unsupported · `text_only_policy` | unsupported | unsupported | unsupported | unsupported |
+| `ark-seedance` | unsupported | unsupported · `text_only_policy` | partial（仅首帧） | first_frame supported；last_frame input / interpolation unsupported | unsupported | unsupported |
+| `dashscope-wanx` | partial：仅 `-r2v` 模型通过 `input.media[].type` 支持；i2v 为 first_frame_only | unsupported · `text_only_policy` | partial | first_frame supported；last_frame input / interpolation unsupported | unsupported | unsupported |
+| `native-audio` | unsupported（协议骨架，厂商实现未接入） | unsupported · `text_only_policy` | unsupported | unsupported | unsupported | unsupported |
+
+图像和视频任务落库 `continuity_profile.generation_report`，前端“一致性规划”展示同名载荷报告。生产环境可由 `CONSISTENCY_VALIDATION_MODE=vlm` 对生成结果做角色身份、场景组、镜头连续性评分；VLM 不可用时结果明确为 `unavailable`，不会宣称视觉一致性通过。
+
 #### 图像生成配置
 
 | 变量 | 默认值 | 说明 |
@@ -513,11 +529,13 @@ runner 上成套构建三个平台的安装包并发布到 GitHub Releases（当
 | `QWEN_IMAGE_BASE_URL` | `https://dashscope.aliyuncs.com/api/v1` | Qwen-Image 原生 API 地址 |
 | `QWEN_IMAGE_MODEL` | `qwen-image-3.0` | Qwen-Image 模型（另有 `qwen-image-3.0-pro` / `qwen-image-2.0-pro` / `qwen-image-plus`） |
 | `QWEN_IMAGE_SIZE` | `1440x2560` | 默认出图尺寸（宽x高） |
-| `IMAGE_REFERENCE_ENFORCEMENT` | `prefer` | 参考图能力策略：`prefer`＝先尝试切到已配置且支持参考图的 Provider，都没有时明确告警并如实记录 `references_sent=0` 后继续；`strict`＝同样先尝试切换，仍无可用参考图 Provider 时直接阻止生成 |
+| `IMAGE_REFERENCE_ENFORCEMENT` | `prefer` | 参考图能力策略：`prefer`＝先自动切换到已配置且支持参考图的 Provider；没有可用 Provider 时要求 `confirm_capability_downgrade=true`，否则阻止生成。`strict`＝不允许能力降级 |
 
 > `IMAGE_PROVIDER=local` 或缺少对应 API Key 时，系统自动使用 PIL 生成纯色占位图，图像阶段可离线跑通。但剧本解析、配音和视频生成仍需对应 API Key。
 
-> **参考图能力（如实声明）**：只有 `ark-seedream` 适配器声明 `reference_images=True`；`qwen-image` / `stability` / `placeholder` 均声明不支持参考图，不会收到角色三视图、场景基准图或续帧参考。此时接口与日志会返回 `provider` / `model` / `provider_source` / `reference_mode` / `references_validated` / `references_sent`，其中 `references_validated` 是「文件存在并已读取」的数量，`references_sent` 是「实际发送给模型」的数量——两者分开记录，界面不会声称参考图已生效。
+> **Capability Matrix（真实能力）**：`ark-seedream` 支持最多 14 张多参考图；`qwen-image` / `stability` / `placeholder` 不接收参考图。视频 `ark-seedance` 为 `first_frame_only`；`dashscope-wanx` 的 i2v 为 `first_frame_only`，只有 `-r2v` 模型通过 `input.media[].type` 接收多参考图。所有当前 Provider 的数值参考权重均不支持，记录 `text_only_policy`。OpenPose、Depth、LoRA、IP-Adapter、首尾帧插值均保持 `unsupported`。
+>
+> 请求报告会分别返回 `references_validated`（已校验）、`references_sent`（实际发送）、`references_sent_detail`、`control_types_sent` 与 `provider_capabilities`。只有载荷中真实存在的参考和控制参数才进入 `references_sent` / `control_types_sent`。
 > **没有用户上传参考图的 API/UI**：本项目不提供用户上传自定义参考图的入口，参考资产全部由系统按角色/场景生成。需要真实参考图条件作用时，请把图像 Provider 切到 `ark-seedream`。
 
 #### 视频生成配置
@@ -622,11 +640,11 @@ runner 上成套构建三个平台的安装包并发布到 GitHub Releases（当
 | `PUT` | `/api/shot/{shot_id}` | 修改镜头参数（场景描述、运镜、情绪等），自动失效下游产物并增加版本号 |
 | `POST` | `/api/shot/{shot_id}/regenerate` | 重新生成单个镜头故事板；`candidates=2` 时一次生成 2 个候选（各占一版版本历史，可对比后选用） |
 | `POST` | `/api/shot/batch-regenerate` | 批量重新生成镜头故事板 |
-| `GET` | `/api/shot/{shot_id}/generation-prompt` | 获取镜头完整生成 Prompt（含一致性注入结果，调试用） |
+| `GET` | `/api/shot/{shot_id}/generation-prompt` | 获取镜头完整生成 Prompt（含一致性提示与请求报告说明，调试用） |
 | `POST` | `/api/shot/{project_id}/generate-storyboard` | 批量生成定稿故事板参考图 |
 | `POST` | `/api/shot/{shot_id}/approve-storyboard` | 单镜头故事板审核通过 |
 | `POST` | `/api/shot/{project_id}/confirm-storyboard` | 批量确认全部故事板 |
-| `POST` | `/api/shot/{shot_id}/generate-video` | 单镜头配音 + SeedDance 视频生成 |
+| `POST` | `/api/shot/{shot_id}/generate-video` | 单镜头配音 + 视频生成（能力不足时需显式确认降级或阻止） |
 | `GET` | `/api/asset/{project_id}/board` | 获取素材板（角色 + 场景资产列表） |
 | `PUT` | `/api/asset/shot/{shot_id}` | 重新绑定镜头的场景/角色资产 |
 | `PUT` | `/api/asset/character/{character_id}` | 更新角色资产（Prompt、外观、服装锁定等） |
@@ -647,7 +665,8 @@ runner 上成套构建三个平台的安装包并发布到 GitHub Releases（当
 | `GET` `POST` | `/api/settings/style-templates` | 画风模板列表 / 新建自定义模板 |
 | `GET` `POST` | `/api/settings/skill-configs` | Skill 方案列表 / 保存方案 |
 | `PUT` | `/api/settings/skill-configs/bindings` | Skill 方案绑定（全局 / 项目 / 剧集） |
-| `GET` `PUT` | `/api/settings/model-configs` | 模型 API 配置读取 / 保存 |
+| `GET` `PUT` | `/api/settings/model-configs` | 模型 API 配置读取 / 保存（含当前 Provider Capability Matrix） |
+| `GET` | `/api/settings/provider-capabilities` | 全量/单个 Provider 能力矩阵；支持 `capability` / `protocol` / `model` 查询 |
 | `GET` | `/api/graph/structure` | 获取自动模式流程图结构（节点+边，含中文标签和描述） |
 | `POST` | `/api/chat` | 自然语言交互（返回操作建议和项目/镜头上下文） |
 
@@ -707,7 +726,7 @@ PricingConfig (各能力单价，按 capability + provider + model 匹配)
 
 **Project** — 支持 `series`（系列）和 `episode`（剧集）两种类型，剧集通过 `parent_project_id` 复用父项目素材。包含 `output_format`（9:16/16:9/1:1）、`resolution`（720p/1080p/4k）、`platform`（douyin/kuaishou/bilibili/custom）等渲染参数。
 
-**Shot** — 核心模型（45+ 字段），除基础镜头属性外，含有大量一致性追踪字段：`consistency_context`（一致性 SOP 快照）、`reference_weights`（参考权重配置）、`continuity_profile`（连续帧配置）、`continuity_reference_path`（上一帧末帧）、`pose_reference_path`（OpenPose 边缘图）、`depth_reference_path`（深度图）。
+**Shot** — 核心模型（45+ 字段），除基础镜头属性外，含有大量一致性追踪字段：`consistency_context`（一致性 SOP 快照）、`reference_weights`（权重策略；当前为 `text_only_policy`）、`continuity_profile`（连续帧配置）、`continuity_reference_path`（上一帧末帧）、`control_types_sent` / `provider_capabilities` / `consistency_metrics`（真实请求与验证报告）；OpenPose/Depth 字段仅作 unsupported 兼容占位。
 
 **Character** — 角色资产，包含 `visual_prompt`（英文绘画 Prompt）、`emotion_variants`（6 种情绪→Prompt 映射）、`key_features`（关键视觉特征 JSON）、`wardrobe_lock`（服装锁定）、`reference_images`（已确认参考图列表）。
 
@@ -784,7 +803,7 @@ pnpm --dir client run build:web
 
 - **端口固定使用 `127.0.0.1`**：避免 Windows / Electron 下 `localhost` 解析异常。后端 `8011`，前端 `5173`
 - **自动模式进度跳变**：自动模式复用手动模式的 WebSocket 进度百分比，数值可能出现跳变，属已知外观问题
-- **SeedDance 单次 5 秒**：SeedDance 1.5 pro 单次生成固定 5 秒时长视频
+- **视频时长按 Provider 校验**：固定时长协议超限会要求拆分镜头；其余协议按镜头时长生成
 - **分辨率降级**：2K / 4K 项目分辨率在视频生成时会降级为 1080p 调用，最终剪辑时由 FFmpeg 按镜头时长归一化
 - **RAG 暂停使用**：`chromadb` 与 `sentence-transformers` 依赖已在 `requirements.txt` 中注释，代码保留可随时启用
 - **重复解析保护**：已有已确认/已出片镜头的项目再次解析会被拒绝，避免误删既有成果

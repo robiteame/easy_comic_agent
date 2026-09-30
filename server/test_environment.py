@@ -24,6 +24,8 @@ os.environ["CHECKPOINT_PATH"] = str(TEST_ROOT / "checkpoints")
 os.environ["IMAGE_PROVIDER"] = "local"
 # 测试环境禁用失败原因的 LLM 自动识别（规则分类仍生效），避免真实外呼与长事务。
 os.environ["ERROR_ANALYSIS_LLM_ENABLED"] = "false"
+# 默认生产路径使用 VLM 验证；单元测试只验证确定性载荷指标，禁止真实外呼。
+os.environ["CONSISTENCY_VALIDATION_MODE"] = "off"
 
 atexit.register(shutil.rmtree, TEST_ROOT, ignore_errors=True)
 

@@ -218,14 +218,26 @@ export const shotApi = {
   batchRegenerate: (shotIds: string[], reason?: string) =>
     api.post('/api/shot/batch-regenerate', shotIds, { params: { reason } }).then((r) => r.data),
 
-  generateStoryboard: (projectId: string, shotIds?: string[]) =>
-    api.post(`/api/shot/${projectId}/generate-storyboard`, { shot_ids: shotIds || [] }).then((r) => r.data),
+  generateStoryboard: (projectId: string, shotIds?: string[], options?: { capability_mode?: 'manual' | 'auto'; confirm_capability_downgrade?: boolean }) =>
+    api.post(`/api/shot/${projectId}/generate-storyboard`, {
+      shot_ids: shotIds || [],
+      capability_mode: options?.capability_mode || 'manual',
+      confirm_capability_downgrade: Boolean(options?.confirm_capability_downgrade),
+    }).then((r) => r.data),
 
   approveStoryboard: (shotId: string, approved = true) =>
     api.post(`/api/shot/${shotId}/approve-storyboard`, { approved }).then((r) => r.data),
 
-  generateVideo: (shotId: string, force = false) =>
-    api.post(`/api/shot/${shotId}/generate-video`, { force }).then((r) => r.data),
+  generateVideo: (
+    shotId: string,
+    force = false,
+    options?: { capability_mode?: 'manual' | 'auto'; confirm_capability_downgrade?: boolean },
+  ) =>
+    api.post(`/api/shot/${shotId}/generate-video`, {
+      force,
+      capability_mode: options?.capability_mode || 'manual',
+      confirm_capability_downgrade: Boolean(options?.confirm_capability_downgrade),
+    }).then((r) => r.data),
 
   generateAudio: (shotId: string, force = false, reuseExisting = false) =>
     api.post(`/api/shot/${shotId}/generate-audio`, { force, reuse_existing: reuseExisting }).then((r) => r.data),
@@ -523,6 +535,9 @@ export const settingsApi = {
   updateSkillBindings: (data: Record<string, any>) => api.put('/api/settings/skill-configs/bindings', data).then((r) => r.data),
 
   modelConfigs: () => api.get('/api/settings/model-configs').then((r) => r.data),
+
+  providerCapabilities: (params?: { capability?: string; protocol?: string; model?: string }) =>
+    api.get('/api/settings/provider-capabilities', { params }).then((r) => r.data),
 
   discoverModels: (data: {
     category: 'script' | 'image' | 'video' | 'voice'

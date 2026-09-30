@@ -163,7 +163,7 @@ def _seedance_reference_shot(story: dict) -> dict:
         "storyboard_path": str(storyboard_path),
         "image_path": str(storyboard_path),
         "continuity_reference_path": str(previous_frame_path),
-        "reference_weights": {"environment": 0.45, "action": 0.30},
+        "reference_weights": {"policy": "text_only_policy", "preferences": {"environment": 0.45, "action": 0.30}},
         "reference_assets": [
             {"type": "scene_baseline", "path": str(scene_path), "weight": 0.45, "required": True},
             {"type": "character_three_view", "path": str(character_path), "weight": 0.30, "required": True},

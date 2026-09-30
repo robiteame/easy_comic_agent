@@ -42,7 +42,7 @@ def _shot_data(storyboard_path: str = "") -> dict:
         "continuity_reference_path": "",
         "pose_reference_path": "/old/openpose_ref.png",
         "depth_reference_path": "/old/depth_ref.png",
-        "reference_weights": {"action": 0.3, "environment": 0.45},
+        "reference_weights": {"policy": "text_only_policy", "preferences": {"action": 0.3, "environment": 0.45}},
         "reference_assets": [
             {"type": "openpose_source_frame", "path": "/old/openpose_ref.png", "required": True},
             {"type": "depth_source_frame", "path": "/old/depth_ref.png", "required": True},

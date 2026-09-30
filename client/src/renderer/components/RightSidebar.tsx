@@ -508,7 +508,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
       `场景描述：${(shotDraft.scene_description ?? selectedShot.scene_description) || '未填写'}`,
       (shotDraft.character_action ?? selectedShot.character_action) ? `人物动作：${shotDraft.character_action ?? selectedShot.character_action}` : '',
       (shotDraft.dialogue ?? selectedShot.dialogue) ? `对白：${shotDraft.dialogue ?? selectedShot.dialogue}` : '',
-      selectedShot.consistency_context ? `一致性约束：${selectedShot.consistency_context}` : '',
+      selectedShot.consistency_context ? `一致性提示偏好：${selectedShot.consistency_context}` : '',
       (shotDraft.visual_notes ?? selectedShot.visual_notes) ? `用户补充：${shotDraft.visual_notes ?? selectedShot.visual_notes}` : '',
     ]
     return parts.filter(Boolean).join('\n')
@@ -555,7 +555,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
 
     const shouldOnlyFillPrompt =
       selectedShot.status === 'needs_review' &&
-      !String(shotDraft.visual_notes || '').includes('NON-NEGOTIABLE AGENT CONSISTENCY SOP') &&
+      !String(shotDraft.visual_notes || '').includes('identity and style prompt preferences') &&
       !String(shotDraft.visual_notes || '').includes('locked visual style preset')
 
     if (shouldOnlyFillPrompt) {
@@ -642,22 +642,31 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
             ? `已生成 ${shots.length} 个分镜，等待逐镜审核`
             : '让 Agent 先解析剧本，再生成分镜'
 
+  const sentReferences = Array.isArray(continuityProfile.references_sent)
+    ? continuityProfile.references_sent.join(' / ') || '无'
+    : String(continuityProfile.references_sent || '无')
+  const sentControls = Array.isArray(continuityProfile.control_types_sent)
+    ? continuityProfile.control_types_sent.join(' / ') || '无'
+    : String(continuityProfile.control_types_sent || '无')
+  const visualValidation = continuityProfile.consistency_metrics?.visual_validation
   const consistencySceneRows = [
     { label: '场景组', value: selectedScene?.scene_group_key || selectedShot?.scene_group_id || '待绑定' },
-    { label: '时段', value: selectedScene?.time_of_day || '自动锁定' },
-    { label: '色温', value: selectedSceneProfile.color_temperature || '生成时固定' },
-    { label: '光源', value: selectedSceneProfile.light_source_direction || '生成时固定' },
-    { label: '环境权重', value: typeof referenceWeights.environment === 'number' ? referenceWeights.environment.toFixed(2) : '0.40-0.50' },
-    { label: '动作权重', value: typeof referenceWeights.action === 'number' ? referenceWeights.action.toFixed(2) : '0.25-0.35' },
-    { label: '续帧', value: selectedShot?.continuity_reference_path ? '上一镜头末帧' : '场景基准' },
-    { label: '姿态控制', value: continuityProfile.openpose_lock || 'unsupported（未接入）' },
+    { label: '时段', value: selectedScene?.time_of_day || '提示偏好' },
+    { label: '色温', value: selectedSceneProfile.color_temperature || '提示偏好' },
+    { label: '光源', value: selectedSceneProfile.light_source_direction || '提示偏好' },
+    { label: '权重策略', value: referenceWeights.policy || continuityProfile.reference_weight_policy || 'text_only_policy' },
+    { label: '参考已发送', value: sentReferences },
+    { label: '控制参数', value: sentControls },
+    { label: '续帧', value: selectedShot?.continuity_reference_path ? '上一镜尾帧候选' : '场景基准候选' },
+    { label: 'OpenPose / Depth', value: 'unsupported（未接入）' },
+    { label: '一致性验证', value: visualValidation?.status ? `${visualValidation.method || 'vlm'} · ${visualValidation.status}` : '未执行' },
   ]
 
   const blockingRows = [
-    { label: '轴线', value: characterBlocking.axis_line || continuityProfile.axis_rule || '180 度轴线锁定' },
-    { label: '站位', value: blockingOrder || '按场景基准固定' },
-    { label: '视线', value: characterBlocking.eye_line_target || '指向核心主体' },
-    { label: '动作', value: characterBlocking.match_on_action_policy || '动作方向连续' },
+    { label: '轴线', value: characterBlocking.axis_line || continuityProfile.axis_rule || '180 度轴线提示偏好' },
+    { label: '站位', value: blockingOrder || '按场景基准提示' },
+    { label: '视线', value: characterBlocking.eye_line_target || '指向核心主体（提示偏好）' },
+    { label: '动作', value: characterBlocking.match_on_action_policy || '动作方向连续（提示偏好）' },
   ]
 
   return (
@@ -967,7 +976,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                       disabled={selectedShot.confirmed}
                       onClick={() => void regenerateCurrentShot()}
                     >
-                      {selectedShot.status === 'needs_review' && !String(shotDraft.visual_notes || '').includes('NON-NEGOTIABLE AGENT CONSISTENCY SOP')
+                      {selectedShot.status === 'needs_review' && !String(shotDraft.visual_notes || '').includes('identity and style prompt preferences')
                         ? '回填全量 Prompt'
                         : '按 Prompt 重新生成'}
                     </Button>
@@ -997,7 +1006,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                 <DownOutlined className={`aux-arrow${consistencyExpanded ? ' expanded' : ''}`} />
               </button>
               <div id="right-panel-consistency" className={`side-panel-body${consistencyExpanded ? ' expanded' : ''}`}>
-                {!selectedShot && <div className="empty-hint">选择镜头后查看 Agent 强制规则。</div>}
+                {!selectedShot && <div className="empty-hint">选择镜头后查看一致性候选素材与真实请求报告。</div>}
                 {selectedShot && (
                   <div className="consistency-preview">
                     <div className="consistency-baseline">
@@ -1006,7 +1015,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                       </div>
                       <div className="consistency-baseline-copy">
                         <strong>{selectedScene?.name || '未绑定场景'}</strong>
-                        <span>{selectedScene?.prop_lock || '道具、光源、透视会在生成时由 Agent 强制锁定。'}</span>
+                        <span>{selectedScene?.prop_lock || '道具、光源、透视仅作为提示偏好；是否发送由 Provider Capability Matrix 决定。'}</span>
                       </div>
                     </div>
 
@@ -1024,14 +1033,14 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                         selectedCharacters.map((item) => (
                           <div className="consistency-lock-row" key={item.id}>
                             <strong>{item.name}</strong>
-                            {/* LoRA / IP-Adapter 未接入，不允许显示「自动绑定」的虚假声明 */}
+                            {/* LoRA / IP-Adapter 未接入，不显示「自动绑定」等虚假声明 */}
                             <span>LoRA：未接入（unsupported）</span>
                             <span>IP-Adapter：未接入（unsupported）</span>
-                            <em>{item.wardrobe_lock || item.default_outfit || '穿搭妆容全程锁定'}</em>
+                            <em>{item.wardrobe_lock || item.default_outfit || '穿搭妆容提示偏好'}</em>
                           </div>
                         ))
                       ) : (
-                        <div className="empty-hint">角色绑定后会显示身份与穿搭锁定。</div>
+                        <div className="empty-hint">角色绑定后显示身份参考与实际发送状态。</div>
                       )}
                     </div>
 
