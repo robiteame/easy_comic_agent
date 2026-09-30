@@ -13,8 +13,9 @@ from urllib.parse import urlparse
 
 from config import settings
 
-# 能力类别。script_fallback 是 LLM 的备用端点（主端点失败时回落）。
-CAPABILITIES = ("script", "script_fallback", "image", "video", "voice")
+# 能力类别。script_fallback 是 LLM 的备用端点（主端点失败时回落）；
+# identity 是质量审核用的角色身份 embedding 端点（多模态 /embeddings）。
+CAPABILITIES = ("script", "script_fallback", "image", "video", "voice", "identity")
 
 # 支持的鉴权方式。bearer=标准 Authorization 头；api-key-header=附加 api-key 请求头。
 AUTH_STYLES = ("bearer", "api-key-header")
@@ -29,6 +30,7 @@ KNOWN_PROTOCOLS: dict[str, tuple[str, ...]] = {
     "image": ("placeholder", "stability", "ark-seedream", "qwen-image"),
     "video": ("ark-seedance", "native-audio", "dashscope-wanx"),
     "voice": ("mimo-tts", "tencent-tts", "dashscope-tts"),
+    "identity": ("openai-embeddings",),
 }
 
 DEFAULT_PROTOCOLS = {capability: protocols[0] for capability, protocols in KNOWN_PROTOCOLS.items()}
@@ -173,6 +175,8 @@ def settings_defaults(capability: str) -> dict:
         return _video_defaults()
     if capability == "voice":
         return _voice_defaults()
+    if capability == "identity":
+        return _identity_defaults()
     raise ValueError(f"未知能力类别: {capability}，可选值: {', '.join(CAPABILITIES)}")
 
 
@@ -302,6 +306,22 @@ def _voice_defaults() -> dict:
         "model": settings.MIMO_TTS_MODEL,
         "auth_style": "bearer",
         "params": {"voice": settings.MIMO_TTS_VOICE, "format": settings.MIMO_TTS_FORMAT},
+    }
+
+
+def _identity_defaults() -> dict:
+    """角色身份 embedding 端点默认值（OpenAI 兼容多模态 /embeddings）。
+
+    三项都留空表示「能力未配置」：质量审核会如实把身份相似度证据标记为
+    unsupported，而不是跳过或伪造通过。
+    """
+    return {
+        "protocol": "openai-embeddings",
+        "base_url": settings.IDENTITY_EMBEDDING_BASE_URL,
+        "api_key": settings.IDENTITY_EMBEDDING_API_KEY,
+        "model": settings.IDENTITY_EMBEDDING_MODEL,
+        "auth_style": "bearer",
+        "params": {},
     }
 
 

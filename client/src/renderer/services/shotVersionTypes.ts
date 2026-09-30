@@ -5,7 +5,7 @@
  * 「当时镜头字段的完整字典」，字段集合随版本演进，因此用宽松的 value 类型。
  */
 
-export type ShotVersionSource = 'manual_edit' | 'regenerate' | 'restore' | 'import'
+export type ShotVersionSource = 'manual_edit' | 'regenerate' | 'restore' | 'import' | 'quality_retry'
 
 export type ShotVersionSnapshot = Record<string, unknown>
 

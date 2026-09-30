@@ -27,6 +27,11 @@ import type {
   ShotVersionListResponse,
   ShotVersionRestoreResponse,
 } from './shotVersionTypes'
+import type {
+  QualityCapabilityResponse,
+  QualityReviewRow,
+  ReviewStage,
+} from '../components/qualityReviewModel.ts'
 
 // The packaged desktop shell spawns the backend on a per-launch random
 // loopback port (main.ts reserveBackendPort) and injects the base URL here;
@@ -284,6 +289,28 @@ export function describeShotVersionError(error: unknown, fallback = '版本操�
   if (data && typeof data.detail === 'string' && data.detail) return data.detail
   const httpStatus = response?.status
   return httpStatus ? `${fallback}（HTTP ${httpStatus}）` : `${fallback}（网络不可用）`
+}
+
+// --- 质量审核（quality review）：评分 / 问题 / 证据 / 历史候选 ---
+
+export const qualityReviewApi = {
+  capability: () =>
+    api.get('/api/quality-review/capability').then((r) => r.data as QualityCapabilityResponse),
+
+  projectReviews: (projectId: string) =>
+    api
+      .get(`/api/quality-review/project/${encodeURIComponent(projectId)}`)
+      .then((r) => r.data as { project_id: string; reviews: QualityReviewRow[]; gate: Record<string, unknown> }),
+
+  shotReviews: (shotId: string) =>
+    api
+      .get(`/api/quality-review/shot/${encodeURIComponent(shotId)}`)
+      .then((r) => r.data as { shot_id: string; reviews: QualityReviewRow[] }),
+
+  rerun: (shotId: string, stage: ReviewStage) =>
+    api
+      .post(`/api/quality-review/shot/${encodeURIComponent(shotId)}/rerun`, { stage })
+      .then((r) => r.data as { shot_id: string; review: QualityReviewRow }),
 }
 
 export const assetApi = {

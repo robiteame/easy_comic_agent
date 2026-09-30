@@ -25,6 +25,7 @@ from services.error_reporter import (
 from services.image_service import ImageService
 from services.providers.base import Dialogue
 from services.providers.endpoint import get_endpoint
+from services.quality_review_service import quality_review_service
 from services.shot_version_service import (
     apply_snapshot_to_shot,
     capture_current_snapshot,
@@ -288,6 +289,60 @@ async def _run_storyboard_candidates(
             message=f"正在生成故事板候选 {index + 1}/{candidates}",
         )
         await _regenerate_single_shot(shot_id, reason, expected_version)
+
+
+def prepare_storyboard_quality_retry(shot_id: str, review) -> bool:
+    """按质量审核结果登记一轮故事板重试。
+
+    审核修正指令合入 ``visual_notes``（替换上一轮的修正块，不叠加），随后走
+    与人工重生成相同的登记口径：版本快照 + 失效下游 + 版本号 +1。返回 False
+    表示无法登记（镜头不存在 / 已确认锁定 / 没有修正指令），调用方跳过重生成。
+    """
+    from services.quality_review_service import merge_quality_fix_notes
+
+    directives = [str(item) for item in ((review.fix or {}).get("directives") or []) if str(item).strip()]
+    if not directives:
+        return False
+    db = SessionLocal()
+    try:
+        shot = db.query(Shot).filter(Shot.id == shot_id).first()
+        if shot is None or shot.confirmed:
+            return False
+        task_key = _shot_task_key(shot.id, "storyboard")
+        create_version(db, shot, "quality_retry", task_id=task_key)
+        previous_scene_key = _shot_scene_key(shot)
+        _invalidate_storyboard_outputs(shot)
+        _invalidate_downstream_media(db, shot, {previous_scene_key, _shot_scene_key(shot)}, source="regenerate")
+        shot.status = "pending"
+        shot.storyboard_status = "queued"
+        shot.version = (shot.version or 1) + 1
+        shot.visual_notes = merge_quality_fix_notes(shot.visual_notes or "", directives)
+        _mark_project_output_stale(db, shot.project_id)
+        db.commit()
+        return True
+    finally:
+        db.close()
+
+
+def prepare_video_quality_retry(shot_id: str, review) -> bool:
+    """按视频质量审核结果登记一轮视频重试（只改 prompt 指令，故事板不动）。"""
+    from services.quality_review_service import merge_quality_fix_notes
+
+    directives = [str(item) for item in ((review.fix or {}).get("directives") or []) if str(item).strip()]
+    if not directives:
+        return False
+    db = SessionLocal()
+    try:
+        shot = db.query(Shot).filter(Shot.id == shot_id).first()
+        if shot is None:
+            return False
+        create_version(db, shot, "quality_retry", task_id=_shot_task_key(shot.id, "video"))
+        shot.visual_notes = merge_quality_fix_notes(shot.visual_notes or "", directives)
+        shot.version = (shot.version or 1) + 1
+        db.commit()
+        return True
+    finally:
+        db.close()
 
 
 @router.post("/{shot_id}/regenerate")
@@ -1366,6 +1421,9 @@ def _serialize_shot(s: Shot) -> dict:
         "depth_reference_path": s.depth_reference_path or "",
         "last_frame_path": s.last_frame_path or "",
         "style_fingerprint": s.style_fingerprint or "",
+        # 质量审核摘要（最新一轮）：verdict/passed/score/degraded/未检测维度。
+        # 结构检查（storyboard_status 等）与质量审核严格分开展示。
+        "quality_review": quality_review_service.shot_review_summary(s.id),
     }
 
 
@@ -1401,6 +1459,7 @@ def _shot_update_payload(shot: Shot) -> dict:
         "provider_source": _json_dict(shot.continuity_profile).get("provider_source", ""),
         "references_unsupported": bool(_json_dict(shot.continuity_profile).get("references_unsupported")),
         "reference_capability_warning": _json_dict(shot.continuity_profile).get("reference_capability_warning", ""),
+        "quality_review": quality_review_service.shot_review_summary(shot.id),
     }
 
 

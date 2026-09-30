@@ -40,6 +40,8 @@ import {
 
 const AvWorkbench = React.lazy(() => import('./AvWorkbench'))
 import BudgetSummaryPanel from './BudgetSummaryPanel'
+import QualityReviewPanel from './QualityReviewPanel'
+import { qualityBadgeFor, verdictMeta } from './qualityReviewModel'
 import { notifyBudgetBlocked, notifyBudgetWarning, notifyProviderBlocked, useTaskEstimateGate } from './TaskEstimateModal'
 
 const { TextArea } = Input
@@ -688,6 +690,31 @@ const MainWorkspace: React.FC = () => {
         setLoading(false)
         setProgress(100, 'quality_check')
         message.success('成片已生成，可直接播放')
+        return
+      }
+
+      if (data.type === 'quality_review' && data.review) {
+        // 自动模式质量门禁每轮审核的实时回显：只记日志 + 通知面板刷新，
+        // 不在这里改 store（审核详情由面板按镜头拉取，避免部分更新）。
+        const review = data.review as {
+          shot_id: string
+          verdict: string
+          overall_score: number
+          degraded?: boolean
+          stage?: string
+        }
+        const meta = verdictMeta(review.verdict)
+        appendLog(
+          `[${ts}] 质量审核 | 镜头 ${review.shot_id} ${review.stage === 'video' ? '视频' : '故事板'} ${meta.label}` +
+            `（${Math.round(Number(review.overall_score || 0) * 100)} 分）${review.degraded ? '｜含未检测维度（降级放行）' : ''}`,
+        )
+        window.dispatchEvent(new CustomEvent('quality-review-updated', { detail: { shot_id: review.shot_id } }))
+        return
+      }
+
+      if (data.type === 'quality_gate_needs_human' && Array.isArray(data.shot_ids)) {
+        appendLog(`[${ts}] 质量门禁 | ${data.shot_ids.length} 个镜头始终未通过自动审核，已转人工（needs_review）`)
+        message.warning('部分镜头未通过自动质量审核，已转人工处理，请在「分镜审核」中查看评分与问题')
         return
       }
 
@@ -1882,6 +1909,10 @@ const MainWorkspace: React.FC = () => {
               </div>
             )}
 
+            {workspaceTab === 'review' && selectedShot && (
+              <QualityReviewPanel shot={selectedShot} />
+            )}
+
             <div
               className="preview-panel panel-enter"
               {...getWorkspacePanelAriaProps(workspaceTab)}
@@ -2101,6 +2132,15 @@ const MainWorkspace: React.FC = () => {
                   {shot.media_stale && (
                     <span className="thumb-stale-badge" title="参数已修改，素材待重新生成">待重生成</span>
                   )}
+                  {(() => {
+                    const badge = qualityBadgeFor(shot.quality_review)
+                    if (!badge) return null
+                    return (
+                      <span className={`thumb-quality-badge ${badge.className}`} title={badge.title}>
+                        {badge.label}
+                      </span>
+                    )
+                  })()}
                   {thumbUrl ? (
                     <img src={thumbUrl} alt={`镜头 ${i + 1}`} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   ) : (

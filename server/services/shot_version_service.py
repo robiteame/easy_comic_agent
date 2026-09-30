@@ -25,7 +25,7 @@ from config import settings
 from models import Project, SceneAsset, Character, Shot, ShotVersion
 from services.security import existing_file
 
-VERSION_SOURCES = ("manual_edit", "regenerate", "restore", "import")
+VERSION_SOURCES = ("manual_edit", "regenerate", "restore", "import", "quality_retry")
 
 # 快照直接取值的镜头标量字段。confirmed 也会被记录，但恢复时永远写回 False。
 _SIMPLE_FIELDS: tuple[str, ...] = (

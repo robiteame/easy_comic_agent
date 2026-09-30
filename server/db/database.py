@@ -47,6 +47,7 @@ def init_db():
         CostEstimate,
         PricingConfig,
         Project,
+        QualityReview,
         SceneAsset,
         Shot,
         ShotVersion,
@@ -264,6 +265,11 @@ def _ensure_sqlite_indexes() -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_budget_reservations_status ON budget_reservations (status)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shot_versions_shot_number ON shot_versions (shot_id, number)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shot_versions_project ON shot_versions (project_id)"))
+        # 质量审核：按镜头 + 阶段取最新一轮，按项目聚合门禁状态。
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_quality_reviews_shot_stage_created ON quality_reviews (shot_id, stage, created_at)")
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_quality_reviews_project_stage ON quality_reviews (project_id, stage)"))
         # 字幕 / 音频工作台：列表按项目读取，字幕条目按轨道 + 顺序读取。
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_subtitle_tracks_project ON subtitle_tracks (project_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_subtitle_cues_track_order ON subtitle_cues (track_id, order_index)"))

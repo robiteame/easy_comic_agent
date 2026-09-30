@@ -114,13 +114,19 @@ class AutoApproveStructuralGateTests(WorkflowTestCase):
             self.assertNotEqual(shot.status, "storyboard_approved")
 
     def test_valid_storyboards_are_approved_without_regeneration(self) -> None:
+        """结构合格 + 质量审核全通过才批准；本测试桩掉质量审核为全通过。"""
+        from tests.test_auto_quality_gate import passing_review_patch  # noqa: E402
+
         project_id = self._seed("auto_approve_valid", {1: True, 2: True})
         regenerated: list[list[str]] = []
 
         async def fake_regenerate(pid, shot_ids):  # noqa: ANN001
             regenerated.append(list(shot_ids))
 
-        with patch.object(shot_route, "_run_storyboard_generation", fake_regenerate):
+        with (
+            patch.object(shot_route, "_run_storyboard_generation", fake_regenerate),
+            passing_review_patch(),
+        ):
             result = asyncio.run(graph._auto_approve_storyboard({"project_id": project_id}))
 
         self.assertEqual(regenerated, [])
@@ -134,6 +140,8 @@ class AutoApproveStructuralGateTests(WorkflowTestCase):
 
 class PerShotVideoRetryTests(WorkflowTestCase):
     def _run(self, project_id: str, shot_ids: list[str], handler) -> tuple[dict, list]:  # noqa: ANN001
+        from tests.test_auto_quality_gate import video_gate_passing_patch  # noqa: E402
+
         calls: list[tuple[str, bool]] = []
 
         async def fake_single(shot_id, force=False, **kwargs):  # noqa: ANN001
@@ -144,6 +152,7 @@ class PerShotVideoRetryTests(WorkflowTestCase):
             patch.object(shot_route, "_run_single_shot_video", fake_single),
             patch.object(graph, "_shot_ids", lambda pid: shot_ids),
             patch.object(graph, "_has_unfinished_videos", lambda pid: False),
+            video_gate_passing_patch(),
         ):
             result = asyncio.run(graph._generate_shot_videos({"project_id": project_id}))
         return result, calls
