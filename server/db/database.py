@@ -109,6 +109,11 @@ def _ensure_sqlite_columns() -> None:
                 "last_frame_path": "VARCHAR DEFAULT ''",
                 "style_fingerprint": "VARCHAR DEFAULT ''",
                 "media_stale": "BOOLEAN DEFAULT 0",
+                "consistency_status": "VARCHAR DEFAULT 'pending'",
+                "consistency_report": "TEXT DEFAULT '{}'",
+                "storyboard_reference_manifest": "TEXT DEFAULT '[]'",
+                "video_reference_manifest": "TEXT DEFAULT '[]'",
+                "reference_capability_warning": "TEXT DEFAULT ''",
             },
         )
     if "projects" in inspector.get_table_names():
@@ -125,6 +130,7 @@ def _ensure_sqlite_columns() -> None:
                 # 字幕/音频工作台：轨道或字幕条目每次修改都会 +1，渲染任务
                 # 记录渲染时的版本，发布前不一致则丢弃成片（配置已过期）。
                 "av_config_version": "INTEGER DEFAULT 0",
+                "consistency_report": "TEXT DEFAULT '{}'",
             },
         )
     if "characters" in inspector.get_table_names():
@@ -138,6 +144,14 @@ def _ensure_sqlite_columns() -> None:
                 "wardrobe_lock": "TEXT DEFAULT ''",
                 "style_fingerprint": "VARCHAR DEFAULT ''",
                 "asset_status": "VARCHAR DEFAULT 'active'",
+                "reference_status": "VARCHAR DEFAULT 'stale'",
+                "reference_version": "INTEGER DEFAULT 1",
+                "reference_retry_count": "INTEGER DEFAULT 0",
+                "reference_failure_reason": "TEXT DEFAULT ''",
+                "reference_error_id": "VARCHAR DEFAULT ''",
+                "reference_skip_reason": "TEXT DEFAULT ''",
+                "reference_capability_warning": "TEXT DEFAULT ''",
+                "reference_impact": "TEXT DEFAULT '{}'",
             },
         )
     if "scene_assets" in inspector.get_table_names():
@@ -151,6 +165,14 @@ def _ensure_sqlite_columns() -> None:
                 "prop_lock": "TEXT DEFAULT ''",
                 "style_fingerprint": "VARCHAR DEFAULT ''",
                 "asset_status": "VARCHAR DEFAULT 'active'",
+                "reference_status": "VARCHAR DEFAULT 'stale'",
+                "reference_version": "INTEGER DEFAULT 1",
+                "reference_retry_count": "INTEGER DEFAULT 0",
+                "reference_failure_reason": "TEXT DEFAULT ''",
+                "reference_error_id": "VARCHAR DEFAULT ''",
+                "reference_skip_reason": "TEXT DEFAULT ''",
+                "reference_capability_warning": "TEXT DEFAULT ''",
+                "reference_impact": "TEXT DEFAULT '{}'",
             },
         )
     if "background_jobs" in inspector.get_table_names():
@@ -167,6 +189,7 @@ def _ensure_sqlite_columns() -> None:
                 "error_code": "VARCHAR DEFAULT '' NOT NULL",
                 "error_message": "VARCHAR DEFAULT '' NOT NULL",
                 "error_detail": "TEXT DEFAULT '' NOT NULL",
+                "report": "TEXT DEFAULT '{}' NOT NULL",
                 "attempt": "INTEGER DEFAULT 1 NOT NULL",
                 "retry_of": "VARCHAR",
                 "cancel_requested_at": "DATETIME",
@@ -184,6 +207,8 @@ def _ensure_sqlite_columns() -> None:
                 "queue_reuse_audio": "BOOLEAN DEFAULT 0 NOT NULL",
                 "queue_force_confirmed": "BOOLEAN DEFAULT 0 NOT NULL",
                 "queue_requested_version": "INTEGER DEFAULT 0 NOT NULL",
+                "debug_events": "TEXT DEFAULT '[]' NOT NULL",
+                "debug_revision": "INTEGER DEFAULT 0 NOT NULL",
             },
         )
         _backfill_background_job_metadata()

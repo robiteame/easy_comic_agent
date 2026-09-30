@@ -15,7 +15,15 @@
 
 import { create } from 'zustand'
 
-import type { JobActionResult, JobDetailDto, JobDto, JobEvent } from '../services/jobTypes.ts'
+import { mergeDebugEvents } from '../components/progressDebugModel.ts'
+
+import type {
+  JobActionResult,
+  JobDebugEvent,
+  JobDetailDto,
+  JobDto,
+  JobEvent,
+} from '../services/jobTypes.ts'
 import { createJobsWebSocket, describeJobApiError, jobApi } from '../services/api.ts'
 import {
   ACTIVE_STATUSES,
@@ -90,6 +98,8 @@ export interface TaskStoreState extends DerivedState {
   connectionState: ConnectionState
   reconnectAttempt: number
   panelOpen: boolean
+  /** 单条任务的实时调试事件；REST 全量轨迹由调试面板首次加载。 */
+  debugEventsByJob: Record<string, JobDebugEvent[]>
 
   setPanelOpen: (open: boolean) => void
   setFilters: (patch: Partial<JobFilters>) => void
@@ -104,6 +114,8 @@ export interface TaskStoreState extends DerivedState {
   cleanupHistory: () => Promise<JobActionResult>
   note: (message: string) => void
   dismissNotice: () => void
+  setDebugEvents: (jobId: string, events: JobDebugEvent[]) => void
+  appendDebugEvent: (jobId: string, event: JobDebugEvent) => void
   start: () => void
   stop: () => void
   dispose: () => void
@@ -206,6 +218,12 @@ function handleSocketMessage(epoch: number, payload: unknown): void {
   const event = payload as JobEvent
   if (event.type === 'pong') return
   if (!isJobEvent(event)) return
+  if (event.type === 'job.debug') {
+    if (event.job_id && event.event) {
+      useTaskStore.getState().appendDebugEvent(event.job_id, event.event)
+    }
+    return
+  }
   if (event.type === 'job_snapshot') {
     pendingEvents.push(event)
     flushEvents()
@@ -301,6 +319,7 @@ export const useTaskStore = create<TaskStoreState>((set, get) => ({
   connectionState: 'idle',
   reconnectAttempt: 0,
   panelOpen: false,
+  debugEventsByJob: {},
 
   setPanelOpen: (open) => set({ panelOpen: open }),
 
@@ -418,6 +437,30 @@ export const useTaskStore = create<TaskStoreState>((set, get) => ({
 
   note: (message) => set({ notice: message }),
   dismissNotice: () => set({ notice: '' }),
+
+  setDebugEvents: (jobId, events) => {
+    if (!jobId) return
+    set((state) => ({
+      debugEventsByJob: {
+        ...state.debugEventsByJob,
+        [jobId]: mergeDebugEvents(state.debugEventsByJob[jobId], events).slice(-200),
+      },
+    }))
+  },
+
+  appendDebugEvent: (jobId, event) => {
+    if (!jobId || !event?.id) return
+    set((state) => {
+      const current = state.debugEventsByJob[jobId] || []
+      if (current.some((item) => item.id === event.id)) return state
+      return {
+        debugEventsByJob: {
+          ...state.debugEventsByJob,
+          [jobId]: [...current, event].slice(-200),
+        },
+      }
+    })
+  },
 
   start: () => {
     if (started) return

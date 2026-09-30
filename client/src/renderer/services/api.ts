@@ -2,6 +2,7 @@ import axios from 'axios'
 
 import type {
   JobActionResult,
+  JobDebugLog,
   JobDetailDto,
   JobDto,
   JobListResponse,
@@ -218,8 +219,8 @@ export const shotApi = {
   batchRegenerate: (shotIds: string[], reason?: string) =>
     api.post('/api/shot/batch-regenerate', shotIds, { params: { reason } }).then((r) => r.data),
 
-  generateStoryboard: (projectId: string, shotIds?: string[]) =>
-    api.post(`/api/shot/${projectId}/generate-storyboard`, { shot_ids: shotIds || [] }).then((r) => r.data),
+  generateStoryboard: (projectId: string, shotIds?: string[], confirmDegraded = false) =>
+    api.post(`/api/shot/${projectId}/generate-storyboard`, { shot_ids: shotIds || [], confirm_degraded: confirmDegraded }).then((r) => r.data),
 
   approveStoryboard: (shotId: string, approved = true) =>
     api.post(`/api/shot/${shotId}/approve-storyboard`, { approved }).then((r) => r.data),
@@ -286,8 +287,21 @@ export function describeShotVersionError(error: unknown, fallback = '版本操�
   return httpStatus ? `${fallback}（HTTP ${httpStatus}）` : `${fallback}（网络不可用）`
 }
 
+export type ReferenceStatus = 'ready' | 'failed' | 'degraded' | 'unsupported' | 'stale'
+
+export interface ReferenceActionPayload {
+  project_id?: string
+  action: 'retry' | 'replace_prompt' | 'regenerate' | 'skip'
+  visual_prompt?: string
+  reason?: string
+  confirm_degraded?: boolean
+}
+
 export const assetApi = {
   board: (projectId: string) => api.get(`/api/asset/${projectId}/board`).then((r) => r.data),
+
+  referenceAction: (kind: 'character' | 'scene', assetId: string, data: ReferenceActionPayload) =>
+    api.post(`/api/asset/reference/${kind}/${encodeURIComponent(assetId)}/action`, data).then((r) => r.data),
 
   updateShotAssets: (
     shotId: string,
@@ -309,11 +323,46 @@ export const characterApi = {
     api.put(`/api/character/${characterId}`, data).then((r) => r.data),
 }
 
+export interface RenderCapabilityItem {
+  value: string
+  supported: boolean
+  reason?: string
+  fallback?: string
+  prompt_strategy?: string
+}
+
+export interface RenderCapabilities {
+  provider: {
+    protocol: string
+    model: string
+    camera_movement_prompt: boolean
+    timed_dialogue: boolean
+    fixed_duration: number | null
+    min_duration: number | null
+    max_duration: number | null
+    duration_step: number | null
+  }
+  ffmpeg: {
+    available: boolean
+    supported_transitions: string[]
+    camera_movement: boolean
+    burn_in_subtitles: boolean
+    white_flash: boolean
+  }
+  camera_movements: RenderCapabilityItem[]
+  transitions: RenderCapabilityItem[]
+  fallback_policy: string
+}
+
 export const renderApi = {
   start: (data: { project_id: string; output_format?: string; resolution?: string }) =>
     api.post('/api/render', data).then((r) => r.data),
 
   status: (projectId: string) => api.get(`/api/render/${projectId}/status`).then((r) => r.data),
+
+  capabilities: () => api.get('/api/render/capabilities').then((r) => r.data as RenderCapabilities),
+
+  timeline: (projectId: string) => api.get(`/api/render/${projectId}/timeline`).then((r) => r.data),
 }
 
 // --- 字幕与音频混音工作台 ---
@@ -551,6 +600,7 @@ export const jobApi = {
       .then((r) => r.data as JobStatsResponse),
 
   detail: (jobId: string) => api.get(`/api/jobs/${encodeURIComponent(jobId)}`).then((r) => r.data as JobDetailDto),
+  debug: (jobId: string) => api.get(`/api/jobs/${encodeURIComponent(jobId)}/debug`).then((r) => r.data as JobDebugLog),
 
   cancel: (jobId: string) =>
     api.post(`/api/jobs/${encodeURIComponent(jobId)}/cancel`).then((r) => r.data as JobActionResult),

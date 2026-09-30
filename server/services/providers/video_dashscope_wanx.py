@@ -23,6 +23,7 @@ wan2.7 默认生成有声视频且无 audio 参数可关，视频自带音轨由
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -49,17 +50,39 @@ _RESOLUTION_TIERS = ("480P", "720P", "1080P")
 class DashscopeWanxVideoAdapter(BaseAdapter):
     capabilities = VideoCapabilities(
         reference_image=True,
+        multiple_reference_images=False,
+        max_reference_images=4,
+        reference_parameter="input.media",
+        reference_weight_policy="text_only_policy",
+        reference_role_parameter="input.media[].type",
         native_audio=False,
         dialogue_in_prompt=False,
         voice_consistent=False,
+        camera_movement_prompt=True,
         fixed_duration=None,
-        reference_mode="first_frame_only",
+        min_duration=5,
+        max_duration=10,
+        duration_step=5,
+        reference_mode="model_conditional",
     )
 
     def __init__(self, endpoint):
         super().__init__(endpoint)
         self.storage = StorageService()
         self.reference_assets = ReferenceAssetService()
+
+    @classmethod
+    def effective_capabilities(cls, model: str = ""):
+        """r2v 模型支持多参考图；普通 i2v/t2v 仍只能驱动首帧。"""
+
+        caps = cls.capabilities
+        if "-r2v" in str(model or "").strip().lower():
+            return replace(
+                caps,
+                multiple_reference_images=True,
+                reference_mode="multi_reference",
+            )
+        return replace(caps, reference_mode="first_frame_only")
 
     def usage_for_request(
         self,
@@ -126,7 +149,7 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
         if self._uses_media_input():
             # Wan 2.7 / 3.0：首帧放 input.media 数组。
             if img_url:
-                task_input["media"] = self._media_entries(img_url)
+                task_input["media"] = self._media_entries(img_url, request)
         elif img_url:
             # Wan 2.6 及更早：首帧放 input.img_url。
             task_input["img_url"] = img_url
@@ -206,16 +229,29 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
         model = (self.endpoint.model or "").strip().lower()
         return model.startswith("wan2.6") or model.startswith("wan2.7")
 
-    def _media_entries(self, img_url: str) -> list[dict[str, str]]:
-        """构造 input.media 素材数组（首帧驱动 + r2v 参考素材契约）。"""
+    def _media_entries(self, img_url: str, request: VideoRequest | None = None) -> list[dict[str, str]]:
+        """构造 input.media 素材数组（首帧驱动 + r2v 多参考素材契约）。"""
 
         media: list[dict[str, str]] = [{"type": "first_frame", "url": img_url}]
-        if self._is_reference_to_video_model():
-            # r2v 要求参考图像/参考视频至少 1 个，仅传 first_frame 会在任务
-            # 调度阶段被判 InvalidParameter；故事板首帧已含主体，同一张图
-            # 以主体参考身份重复传入即可满足契约。
+        if not self._is_reference_to_video_model():
+            return media
+        seen: set[str] = set()
+        for asset in getattr(request, "reference_assets", None) or []:
+            if getattr(asset, "type", "") == "approved_storyboard_first_frame":
+                continue
+            url = self.reference_assets.to_image_url(
+                getattr(asset, "url", "") or getattr(asset, "source_path", ""),
+                max_bytes=settings.VIDEO_REFERENCE_INLINE_BUDGET_BYTES,
+            )
+            if not url or url == img_url or url in seen:
+                continue
+            seen.add(url)
+            media.append({"type": getattr(asset, "provider_type", "") or "reference_image", "url": url})
+        if len(media) == 1:
+            # r2v 至少需要一个 reference_image；没有额外素材时，首帧只以
+            # generic reference_image 重复一次，manifest 会如实记录重复项。
             media.append({"type": "reference_image", "url": img_url})
-        return media
+        return media[: 1 + max(0, int(self.capabilities.max_reference_images or 4))]
 
     def _is_reference_to_video_model(self) -> bool:
         """r2v（参考生视频）模型，含带日期后缀的变体（wan2.7-r2v-2026-06-12）。"""

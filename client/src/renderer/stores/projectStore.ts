@@ -10,6 +10,8 @@ interface ProjectState {
   genre: string
   style: string
   status: string
+  consistencyStatus: string
+  consistencyReport: Record<string, any>
   outputFormat: string
   resolution: string
   platform: string
@@ -30,6 +32,8 @@ const DEFAULT_PROJECT: Omit<ProjectState, 'setProject' | 'reset'> = {
   genre: '',
   style: 'anime',
   status: 'draft',
+  consistencyStatus: 'ready',
+  consistencyReport: {},
   outputFormat: '9:16',
   resolution: '1080p',
   platform: 'douyin',

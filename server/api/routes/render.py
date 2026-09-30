@@ -14,6 +14,16 @@ from config import settings
 from db import SessionLocal, get_db
 from models import Project, Shot as ShotModel
 from services.av_config_service import build_av_manifest, collect_render_config
+from services.post_production_plan import CAMERA_MOVEMENT_PROMPTS, SUPPORTED_TRANSITIONS, build_post_production_plan
+from services.providers.endpoint import get_endpoint
+from services.providers.registry import UnknownProtocolError, get_adapter
+from services.shot_dialogue import dialogue_lines_payload, parse_shot_dialogue
+from services.story_timing import (
+    StoryTimingError,
+    StoryTimingPlan,
+    estimate_action_beats,
+    provider_duration_capability,
+)
 from services.error_reporter import ERROR_RENDER, error_payload, log_failure
 from services.ffmpeg_service import FFmpegService
 from services.security import existing_file, validate_identifier
@@ -60,6 +70,73 @@ async def render_video(data: RenderRequest, db=Depends(get_db)):
     return {"status": "rendering", "project_id": data.project_id, **budget_notice(claim)}
 
 
+@router.get("/capabilities")
+async def get_render_capabilities():
+    """返回当前 Provider + FFmpeg 对镜头参数的真实支持范围。"""
+
+    ffmpeg_caps = await ffmpeg_service.capabilities()
+    try:
+        endpoint = get_endpoint("video")
+        adapter_cls = get_adapter("video", endpoint.protocol)
+        provider_caps = getattr(adapter_cls, "effective_capabilities", lambda _model="": adapter_cls.capabilities)(endpoint.model or "")
+    except (UnknownProtocolError, RuntimeError, ValueError):
+        endpoint = None
+        provider_caps = None
+    supported_movements = list(getattr(provider_caps, "supported_camera_movements", ()) or ())
+    movement_prompt = bool(getattr(provider_caps, "camera_movement_prompt", False)) if provider_caps else False
+    camera_movements = [
+        {
+            "value": value,
+            "supported": value in supported_movements and movement_prompt,
+            "reason": "" if value in supported_movements and movement_prompt else "provider_camera_movement_unsupported",
+            "prompt_strategy": prompt,
+        }
+        for value, prompt in CAMERA_MOVEMENT_PROMPTS.items()
+    ]
+    transition_items = []
+    for value in SUPPORTED_TRANSITIONS:
+        supported = value in ffmpeg_caps.get("supported_transitions", [])
+        transition_items.append({
+            "value": value,
+            "supported": supported,
+            "reason": "" if supported else "ffmpeg_transition_filter_unsupported",
+            "fallback": "cut" if not supported else "",
+        })
+    return {
+        "provider": {
+            "protocol": str(getattr(endpoint, "protocol", "") or ""),
+            "model": str(getattr(endpoint, "model", "") or ""),
+            "camera_movement_prompt": movement_prompt,
+            "timed_dialogue": bool(getattr(provider_caps, "timed_dialogue", False)) if provider_caps else False,
+            "fixed_duration": getattr(provider_caps, "fixed_duration", None) if provider_caps else None,
+            "min_duration": getattr(provider_caps, "min_duration", None) if provider_caps else None,
+            "max_duration": getattr(provider_caps, "max_duration", None) if provider_caps else None,
+            "duration_step": getattr(provider_caps, "duration_step", None) if provider_caps else None,
+        },
+        "ffmpeg": ffmpeg_caps,
+        "camera_movements": camera_movements,
+        "transitions": transition_items,
+        "fallback_policy": "unsupported_transition_falls_back_to_cut_with_reason",
+    }
+
+
+@router.get("/{project_id}/timeline")
+async def get_render_timeline(project_id: str):
+    """读取渲染前生成的可审查 PostProductionPlan JSON。"""
+
+    try:
+        validate_identifier(project_id, "项目 ID")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    timeline_path = settings.OUTPUT_DIR / "projects" / project_id / "output" / "timeline.json"
+    if not timeline_path.exists():
+        raise HTTPException(status_code=404, detail="尚未生成后期时间线")
+    try:
+        return json.loads(timeline_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="后期时间线 JSON 无法读取") from exc
+
+
 @router.get("/{project_id}/status")
 async def get_render_status(project_id: str):
     try:
@@ -98,6 +175,9 @@ async def get_render_status(project_id: str):
         payload = {"status": "completed", "progress": 100}
         if valid_final:
             payload["video_path"] = str(final_path)
+        timeline_path = settings.OUTPUT_DIR / "projects" / project_id / "output" / "timeline.json"
+        if timeline_path.exists():
+            payload["timeline_path"] = str(timeline_path)
         if memory and memory.get("status") == "completed":
             if memory.get("video_path"):
                 payload["video_path"] = memory["video_path"]
@@ -148,11 +228,12 @@ async def _render_task(project_id: str, output_format: str, resolution: str):
                     "scene_description": s.scene_description,
                     "characters_in_scene": json.loads(s.characters_in_scene) if s.characters_in_scene else [],
                     "character_action": s.character_action,
-                    "dialogue": s.dialogue,
+                    "dialogue": _render_dialogue_payload(s),
                     "camera_angle": s.camera_angle,
                     "camera_movement": s.camera_movement,
                     "emotion": s.emotion,
                     "duration": s.duration,
+                    "estimated_speech_ms": s.estimated_speech_ms or 0,
                     "transition": s.transition,
                     "image_path": s.image_path or s.storyboard_path,
                     "video_path": s.video_path,
@@ -164,6 +245,16 @@ async def _render_task(project_id: str, output_format: str, resolution: str):
                 }
                 for s in db_shots
             ]
+            for item in shots:
+                profile_timing = (item.get("continuity_profile") or {}).get("timing") or {}
+                item["timing"] = {
+                    **profile_timing,
+                    **{
+                        key: value
+                        for key, value in (item.get("continuity_profile") or {}).items()
+                        if key in {"audio_source", "audio_mode"}
+                    },
+                }
             manifest = {
                 s.id: (s.version or 1, bool(s.confirmed), s.video_path or "", s.audio_path or "")
                 for s in db_shots
@@ -172,6 +263,17 @@ async def _render_task(project_id: str, output_format: str, resolution: str):
             # 期间任何修改（av_config_version 亦会推进）都使本批成片作废。
             av_render_config = collect_render_config(db, project_id)
             av_manifest = build_av_manifest(av_render_config)
+            media_paths = {
+                str(path)
+                for item in shots
+                for path in (item.get("video_path"), item.get("audio_path"))
+                if str(path or "")
+            }
+            media_paths.update(
+                str(track.get("resolved_source_path") or track.get("source_path") or "")
+                for track in av_render_config.audio_tracks
+                if str(track.get("resolved_source_path") or track.get("source_path") or "")
+            )
             av_config_payload = {
                 "audio_tracks": av_render_config.audio_tracks,
                 "subtitle_tracks": av_render_config.subtitle_tracks,
@@ -180,7 +282,63 @@ async def _render_task(project_id: str, output_format: str, resolution: str):
             project_manifest = _project_manifest_tuple(project)
         finally:
             db.close()
+
+        media_durations_ms = await _probe_media_durations(media_paths)
+        planned_total_s = sum(float(item.get("duration") or 0) for item in shots)
+        target_duration_s = float(project_timing_target(project_id) or planned_total_s)
+        duration_capability = provider_duration_capability()
+        timing_plan = StoryTimingPlan(
+            target_duration_s=target_duration_s,
+            provider=duration_capability,
+            shot_count=len(shots),
+            planned_total_duration_s=planned_total_s,
+            action_beats=[
+                beat
+                for item in shots
+                for beat in estimate_action_beats(item.get("character_action"))
+            ],
+        )
+        timing_issues = timing_plan.validate_timeline(
+            shots,
+            audio_tracks=av_config_payload.get("audio_tracks", []),
+            media_durations_ms=media_durations_ms,
+            provider=duration_capability,
+            require_target=True,
+        )
+        zero_media_shot_ids = {
+            str(item.get("shot_id") or "")
+            for item in shots
+            if int(media_durations_ms.get(str(item.get("video_path") or ""), 0) or 0) <= 0
+        }
+        blocking_timing_issues = [
+            issue
+            for issue in timing_issues
+            if issue.code not in {"provider_duration_invalid", "target_duration_mismatch"}
+            and not (
+                issue.code == "video_shorter_than_timeline"
+                and set(issue.shot_ids).issubset(zero_media_shot_ids)
+            )
+        ]
+        if blocking_timing_issues:
+            raise StoryTimingError(blocking_timing_issues)
+
         _apply_post_profiles(shots)
+        render_capabilities = await get_render_capabilities()
+        timeline_plan = build_post_production_plan(
+            shots,
+            av_config_payload,
+            project_id=project_id,
+            fps=ffmpeg_service.fps,
+            capabilities=render_capabilities,
+        )
+        # 渲染器必须消费时间线夹定后的字幕与计划总时长，不能回头读取旧边界。
+        av_config_payload = {
+            **av_config_payload,
+            "subtitle_tracks": timeline_plan.subtitle_tracks,
+            "total_duration_s": timeline_plan.total_duration_ms / 1000,
+        }
+        timeline_path = settings.OUTPUT_DIR / "projects" / project_id / "output" / "timeline.json"
+        timeline_plan.write_json(timeline_path)
 
         staged_video = Path(
             await ffmpeg_service.compose_video(
@@ -190,6 +348,7 @@ async def _render_task(project_id: str, output_format: str, resolution: str):
             project_id=project_id,
             publish=False,
             av_config=av_config_payload,
+            plan=timeline_plan.to_dict(),
             )
         )
         final_file = existing_file(staged_video, minimum_size=1024, allowed_roots=media_roots)
@@ -220,7 +379,10 @@ async def _render_task(project_id: str, output_format: str, resolution: str):
         raise
     except Exception as exc:
         error_id = log_failure(exc, error_type=ERROR_RENDER, context={"project_id": project_id})
-        public_message = "成片导出失败，本次渲染已停止。请检查镜头素材、配音与输出设置后重试。"
+        if isinstance(exc, StoryTimingError):
+            public_message = f"成片导出已阻止，时间线不一致：{exc}"
+        else:
+            public_message = "成片导出失败，本次渲染已停止。请检查镜头素材、配音与输出设置后重试。"
         # 渲染状态会经 GET /api/render/{id}/status 回显，只保留可读提示与错误编号。
         _render_status[project_id] = {
             "status": "error",
@@ -252,6 +414,61 @@ async def _progress(project_id: str, step: str, progress: int, message: str):
     _render_status[project_id] = {"status": "rendering", "progress": progress, "message": message}
     update_job_progress(f"project:{project_id}:render", progress, current_step=step, message=message)
     await ws_manager.send_to_project(project_id, {"type": "progress", "step": step, "progress": progress, "message": message})
+
+
+async def _probe_media_durations(paths: set[str]) -> dict[str, int]:
+    """Probe exact media durations used by the render timing gate."""
+
+    durations: dict[str, int] = {}
+    for raw_path in sorted(paths):
+        path = existing_file(raw_path, minimum_size=1, allowed_roots=(settings.OUTPUT_DIR, settings.ASSETS_DIR, settings.DATA_DIR))
+        if path is None:
+            continue
+        try:
+            durations[raw_path] = int(await ffmpeg_service.probe_duration_ms(path))
+        except Exception:
+            durations[raw_path] = 0
+    return durations
+
+
+def project_timing_target(project_id: str) -> float:
+    """Read the explicit project target; legacy rows infer it from current shots."""
+
+    db = SessionLocal()
+    try:
+        row = db.query(Project).filter(Project.id == project_id).first()
+        target = float(getattr(row, "target_duration", 0) or 0) if row else 0.0
+        if target > 0:
+            return target
+        if row is not None:
+            plan = _json_dict(getattr(row, "timing_plan", "{}"))
+            planned_target = float(plan.get("target_duration_s") or 0)
+            if planned_target > 0:
+                return planned_target
+        return sum(
+            float(row[0] or 0)
+            for row in db.query(ShotModel.duration).filter(ShotModel.project_id == project_id).all()
+        )
+    finally:
+        db.close()
+
+
+def _render_dialogue_payload(shot: ShotModel) -> list[dict]:
+    """旧版纯文本迁移时保留场内首个说话人，并记录可追踪来源。"""
+
+    try:
+        speakers = json.loads(shot.characters_in_scene or "[]")
+    except (TypeError, ValueError):
+        speakers = []
+    fallback = speakers[0] if speakers and isinstance(speakers[0], str) else ""
+    return dialogue_lines_payload(
+        parse_shot_dialogue(
+            shot.dialogue,
+            fallback_speaker=fallback,
+            default_emotion=shot.emotion or "neutral",
+            warn_key=f"render shot {shot.id}",
+        )
+    )
 
 
 def _json_dict(raw: str | None) -> dict:

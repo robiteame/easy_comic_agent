@@ -8,6 +8,7 @@ from api.schemas import CharacterName, JsonText, OptionalIdentifier, ShortKey, S
 from db import get_db
 from models import Character, Project
 from services.invalidation_service import invalidate_asset_consumers
+from services.reference_readiness_service import refresh_project_reference_state
 from services.security import validate_identifier
 from services.task_registry import cancel_scopes
 
@@ -53,6 +54,14 @@ async def get_project_characters(project_id: str, db: Session = Depends(get_db))
             "ip_adapter_profile": c.ip_adapter_profile or "",
             "wardrobe_lock": c.wardrobe_lock or "",
             "seed": c.seed,
+            "reference_status": getattr(c, "reference_status", "stale"),
+            "reference_version": int(getattr(c, "reference_version", 1) or 1),
+            "reference_retry_count": int(getattr(c, "reference_retry_count", 0) or 0),
+            "reference_failure_reason": getattr(c, "reference_failure_reason", ""),
+            "reference_error_id": getattr(c, "reference_error_id", ""),
+            "reference_skip_reason": getattr(c, "reference_skip_reason", ""),
+            "reference_capability_warning": getattr(c, "reference_capability_warning", ""),
+            "reference_impact": json.loads(c.reference_impact) if getattr(c, "reference_impact", "") else {},
         }
         for c in chars
     ]
@@ -85,7 +94,17 @@ async def update_character(
     for key, value in changed.items():
         setattr(char, key, value)
     affected_scopes = invalidate_asset_consumers(db, asset_project_id, character_id=character_id) if changed else set()
+    if changed:
+        char.reference_status = "stale"
+        char.reference_failure_reason = "角色参数已修改，参考素材需重新生成"
     db.commit()
+    if changed:
+        refresh_project_reference_state(db, owner_id)
+    if affected_scopes:
+        affected_project = db.query(Project).filter(Project.id == owner_id).first()
+        if affected_project:
+            affected_project.status = "assets_ready"
+        db.commit()
     if affected_scopes:
         await cancel_scopes(affected_scopes, "character was edited")
     return {"id": result_id, "status": "updated"}

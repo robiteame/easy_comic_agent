@@ -15,7 +15,7 @@ import math
 import re
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BeforeValidator, Field, StringConstraints
+from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, StringConstraints
 
 from config import settings
 from services.security import validate_identifier
@@ -153,6 +153,41 @@ ShotText = Annotated[
     BeforeValidator(_reject_blank),
     StringConstraints(strip_whitespace=True, max_length=settings.MAX_SHOT_TEXT_CHARS),
 ]
+
+
+class ShotDialogueLine(BaseModel):
+    """镜头单句对白的输入 DTO：说话人是配音音色的唯一依据。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    speaker: Annotated[str, StringConstraints(strip_whitespace=True, max_length=60)] = ""
+    line: Annotated[
+        str,
+        BeforeValidator(_reject_blank),
+        StringConstraints(strip_whitespace=True, max_length=settings.MAX_SHOT_TEXT_CHARS),
+    ]
+    emotion: Literal["neutral", "happy", "shy", "sad", "angry", "surprised"] = "neutral"
+    action: Annotated[str, StringConstraints(strip_whitespace=True, max_length=settings.MAX_SHOT_TEXT_CHARS)] = ""
+    start_ms: int | None = Field(default=None, ge=0, le=3_600_000)
+    end_ms: int | None = Field(default=None, ge=0, le=3_600_000)
+
+
+def _coerce_shot_dialogue(value: Any) -> Any:
+    """对白输入兼容层：旧客户端发字符串时迁移为单条对白（speaker 为空）。"""
+
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [{"line": text}] if text else []
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [{"line": item.strip()} if isinstance(item, str) else item for item in value]
+    return value
+
+
+ShotDialogueList = Annotated[list[ShotDialogueLine], BeforeValidator(_coerce_shot_dialogue)]
 VisualNotes = Annotated[
     str,
     BeforeValidator(_reject_blank),

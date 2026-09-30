@@ -69,6 +69,7 @@ class FFmpegService:
         project_id: str = "",
         publish: bool = True,
         av_config: dict | None = None,
+        plan: dict | None = None,
     ) -> str:
         try:
             safe_project_id = validate_identifier(project_id, "项目 ID")
@@ -87,6 +88,7 @@ class FFmpegService:
         total_duration_s = float((av_config or {}).get("total_duration_s") or 0) or sum(
             max(0.0, float(shot.get("duration") or 0)) for shot in shots
         )
+        transition_specs = list((plan or {}).get("transitions") or self._transition_specs_from_shots(shots))
         # FFmpeg 用量：编码时长（成片秒数）+ 输出分辨率 + 真实处理耗时。
         # 本地能力默认零外部费用；若在系统设置里为 ffmpeg 配了单价，则按价目计费。
         started = time.monotonic()
@@ -95,23 +97,26 @@ class FFmpegService:
 
         try:
             clip_paths: list[Path] = []
+            clip_durations: list[float] = []
             media_roots = (settings.OUTPUT_DIR, settings.ASSETS_DIR, settings.DATA_DIR)
             for index, shot in enumerate(shots):
                 if shot.get("video_path"):
                     if existing_file(shot["video_path"], minimum_size=4096, allowed_roots=media_roots) is None:
                         raise ValueError(f"镜头视频文件不存在或无效: {shot.get('shot_id', index)}")
                     clip_paths.append(await self._normalize_video_clip(shot, width, height, index, work_dir))
+                    clip_durations.append(max(0.5, float(shot.get("duration") or 3.0)))
                     continue
                 if not shot.get("image_path"):
                     continue
                 if existing_file(shot["image_path"], minimum_size=1, allowed_roots=media_roots) is None:
                     raise ValueError(f"镜头图片文件不存在或无效: {shot.get('shot_id', index)}")
                 clip_paths.append(await self._render_shot_clip(shot, width, height, index, work_dir))
+                clip_durations.append(max(0.5, float(shot.get("duration") or 3.0)))
 
             if not clip_paths:
                 raise ValueError("没有可渲染的镜头图片")
 
-            rendered = await self._concat_clips(clip_paths, work_dir)
+            rendered = await self._concat_clips(clip_paths, work_dir, transition_specs, clip_durations)
             # 字幕/音频工作台：有任一有效音轨时，混音接管音频（环境床在混音
             # filter 内重建），否则保持旧管线（concat 音轨 + 独立环境床步骤）。
             mix_bundle = await self._prepare_mix(shots, av_tracks, total_duration_s)
@@ -177,7 +182,7 @@ class FFmpegService:
             raise ValueError("镜头图片文件不存在或无效")
         image_path = str(image_obj)
         video_filter = self._clip_filter(
-            self._zoom_filter(shot.get("shot_type", "medium"), width, height, frames),
+            self._zoom_filter(shot.get("shot_type", "medium"), width, height, frames, shot.get("camera_movement", "静止")),
             shot,
             duration,
         )
@@ -268,21 +273,80 @@ class FFmpegService:
         )
         return clip_path
 
-    async def _concat_clips(self, clip_paths: list[Path], output_dir: Path) -> Path:
+    async def _concat_clips(
+        self,
+        clip_paths: list[Path],
+        output_dir: Path,
+        transitions: list[dict] | None = None,
+        clip_durations: list[float] | None = None,
+    ) -> Path:
+        """按 PostProductionPlan 的边界拼接镜头。
+
+        cut 直接 concat；fade/dissolve/push/wipe 使用 xfade；white_flash 使用
+        dissolve 并在边界叠加白色覆盖，时长严格取计划中的 duration_ms。
+        音频随视频边界 acrossfade，避免字幕/音频和画面出现两套时间。
+        """
+
         concat_path = output_dir / "final.mp4"
+        if not clip_paths:
+            raise ValueError("没有可拼接的镜头片段")
         inputs: list[str] = []
         for path in clip_paths:
             inputs.extend(["-i", str(path)])
 
         audio_filters = []
-        concat_inputs = []
         for index in range(len(clip_paths)):
             audio_filters.append(f"[{index}:a:0]aresample=44100,aformat=channel_layouts=stereo[a{index}]")
-            concat_inputs.append(f"[{index}:v:0][a{index}]")
 
-        filter_complex = ";".join(audio_filters)
-        filter_complex += ";" + "".join(concat_inputs)
-        filter_complex += f"concat=n={len(clip_paths)}:v=1:a=1[v][a]"
+        specs = list(transitions or [])
+        durations = list(clip_durations or [3.0] * len(clip_paths))
+        statements: list[str] = []
+        flash_filters: list[str] = []
+        current_v = "[0:v:0]"
+        current_a = "[a0]"
+        current_duration = max(0.0, float(durations[0] if durations else 3.0))
+        for index in range(1, len(clip_paths)):
+            spec = specs[index - 1] if index - 1 < len(specs) else {}
+            duration = max(0.0, float(durations[index] if index < len(durations) else 3.0))
+            transition_duration = max(0.0, float(spec.get("duration_ms") or 0) / 1000.0)
+            effective = str(spec.get("effective") or "cut")
+            if effective == "cut" or transition_duration <= 0:
+                next_v = f"[{index}:v:0]"
+                next_a = f"[a{index}]"
+                out_v = f"[cv{index}]"
+                out_a = f"[ca{index}]"
+                statements.append(f"{current_v}{current_a}{next_v}{next_a}concat=n=2:v=1:a=1{out_v}{out_a}")
+                current_v, current_a = out_v, out_a
+                current_duration += duration
+                continue
+
+            offset = max(0.0, current_duration - transition_duration)
+            transition_name = str(spec.get("renderer") or "dissolve")
+            if transition_name == "cut":
+                transition_name = "dissolve"
+            next_v = f"[{index}:v:0]"
+            next_a = f"[a{index}]"
+            out_v = f"[xv{index}]"
+            out_a = f"[xa{index}]"
+            statements.append(
+                f"{current_v}{next_v}xfade=transition={transition_name}:"
+                f"duration={transition_duration:.3f}:offset={offset:.3f}{out_v}"
+            )
+            statements.append(
+                f"{current_a}{next_a}acrossfade=d={transition_duration:.3f}{out_a}"
+            )
+            current_v, current_a = out_v, out_a
+            current_duration = current_duration + duration - transition_duration
+            if effective == "white_flash":
+                flash_start = offset
+                flash_end = offset + transition_duration
+                flash_filters.append(
+                    f"{current_v}drawbox=x=0:y=0:w=iw:h=ih:color=white@1:t=fill:"
+                    f"enable='between(t,{flash_start:.3f},{flash_end:.3f})'[wf{index}]"
+                )
+                current_v = f"[wf{index}]"
+
+        filter_complex = ";".join([*audio_filters, *statements, *flash_filters])
         await self._run(
             [
                 "ffmpeg",
@@ -291,9 +355,9 @@ class FFmpegService:
                 "-filter_complex",
                 filter_complex,
                 "-map",
-                "[v]",
+                current_v,
                 "-map",
-                "[a]",
+                current_a,
                 "-c:v",
                 "libx264",
                 "-pix_fmt",
@@ -306,6 +370,27 @@ class FFmpegService:
             ]
         )
         return concat_path
+
+    @staticmethod
+    def _transition_specs_from_shots(shots: list[dict]) -> list[dict]:
+        """未传 PostProductionPlan 时的兼容入口：仍尊重 shot.transition。"""
+
+        specs: list[dict] = []
+        for index in range(max(0, len(shots) - 1)):
+            previous = shots[index]
+            requested = str(previous.get("transition") or "cut")
+            supported = requested in {"cut", "fade", "dissolve", "white_flash", "push", "wipe"}
+            effective = requested if supported else "cut"
+            default_duration = {"cut": 0, "fade": 500, "dissolve": 500, "white_flash": 350, "push": 500, "wipe": 500}
+            specs.append(
+                {
+                    "effective": effective,
+                    "duration_ms": default_duration.get(effective, 0),
+                    "renderer": {"fade": "fade", "dissolve": "dissolve", "white_flash": "dissolve", "push": "slideleft", "wipe": "wipeleft"}.get(effective, "cut"),
+                    "fallback_reason": "" if supported else f"unsupported_transition:{requested}",
+                }
+            )
+        return specs
 
     async def _add_continuous_ambient_bed(self, video_path: Path, output_dir: Path) -> Path:
         mixed_path = output_dir / "final_with_ambient.mp4"
@@ -389,6 +474,36 @@ class FFmpegService:
         except FileNotFoundError:
             logger.warning("ffprobe 与 ffmpeg 均不可用，无法探测 %s 的时长", target)
         return 0
+
+    async def concat_audio_clips(self, clip_paths: list[Path], output_path: Path) -> None:
+        """把逐句 TTS 音频拼接为单条镜头配音（重编码为项目统一的 44.1kHz 立体声）。
+
+        调用方（dialogue_audio）已经逐段探测过时长，这里只负责顺序拼接：
+        concat 滤镜按输入顺序串接，天然保证「多句对白按时间顺序播放」。
+        """
+
+        if not clip_paths:
+            raise RuntimeError("没有可拼接的配音音频")
+        inputs: list[str] = []
+        statements: list[str] = []
+        labels: list[str] = []
+        for index, path in enumerate(clip_paths):
+            inputs.extend(["-i", str(path)])
+            statements.append(f"[{index}:a:0]aresample={SAMPLE_RATE},aformat=channel_layouts=stereo[a{index}]")
+            labels.append(f"[a{index}]")
+        statements.append(f"{''.join(labels)}concat=n={len(clip_paths)}:v=0:a=1[aout]")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        await self._run(
+            [
+                "ffmpeg", "-y",
+                *inputs,
+                "-filter_complex", ";".join(statements),
+                "-map", "[aout]",
+                "-c:a", "pcm_s16le",
+                "-ar", str(SAMPLE_RATE),
+                str(output_path),
+            ]
+        )
 
     async def _prepare_mix(
         self,
@@ -617,6 +732,32 @@ class FFmpegService:
 
         return {"max_volume_db": parse("max_volume"), "mean_volume_db": parse("mean_volume")}
 
+    async def capabilities(self) -> dict:
+        """探测当前 FFmpeg 的真实滤镜能力，供 UI 禁用/提示不支持参数。"""
+
+        binary = shutil.which("ffmpeg")
+        filters: set[str] = set()
+        if binary:
+            try:
+                stdout, _ = await self._run_capture([binary, "-hide_banner", "-filters"])
+                for line in stdout.decode("utf-8", errors="ignore").splitlines():
+                    match = re.match(r"^\s*[TSC.][A-Z.]+\s+([A-Za-z0-9_]+)", line)
+                    if match:
+                        filters.add(match.group(1))
+            except (RuntimeError, TimeoutError, OSError):
+                filters.clear()
+        has_xfade = "xfade" in filters
+        supported_transitions = ["cut"] + (["fade", "dissolve", "white_flash", "push", "wipe"] if has_xfade else [])
+        return {
+            "available": bool(binary),
+            "binary": binary or "",
+            "filters": sorted(filters),
+            "supported_transitions": supported_transitions,
+            "camera_movement": "zoompan" in filters,
+            "burn_in_subtitles": "subtitles" in filters,
+            "white_flash": has_xfade and "drawbox" in filters,
+        }
+
     async def _supports_subtitles_filter(self) -> bool:
         """探测当前 ffmpeg 是否带 subtitles 滤镜（依赖 libass；结果进程内缓存）。
 
@@ -629,7 +770,7 @@ class FFmpegService:
         if FFmpegService._subtitles_filter_available is None:
             available = True
             try:
-                _, stdout = await self._run_capture(["ffmpeg", "-hide_banner", "-filters"])
+                stdout, _ = await self._run_capture(["ffmpeg", "-hide_banner", "-filters"])
                 lines = stdout.decode("utf-8", errors="ignore").splitlines()
                 available = any(
                     line.split() and line.split()[-1] == "subtitles" for line in lines
@@ -761,29 +902,62 @@ class FFmpegService:
         profile = shot.get("continuity_profile") or {}
         return isinstance(profile, dict) and str(profile.get("audio_source") or "").lower() == "native"
 
-    def _zoom_filter(self, shot_type: str, width: int, height: int, frames: int) -> str:
-        if shot_type == "wide":
-            zoom = "min(zoom+0.001,1.25)"
-        elif shot_type in {"close-up", "extreme_close"}:
-            zoom = "1.35"
+    def _zoom_filter(
+        self,
+        shot_type: str,
+        width: int,
+        height: int,
+        frames: int,
+        camera_movement: str = "静止",
+    ) -> str:
+        """把镜头运动映射到 zoompan 的真实运动策略。
+
+        生成视频的镜头运动由视频 Prompt 驱动；静态图片回填时由 FFmpeg
+        zoompan 执行同一语义，避免 camera_movement 只存在于数据里。
+        """
+
+        movement = str(camera_movement or "静止")
+        if movement in {"推", "缓慢推进"}:
+            zoom = "min(zoom+0.0015,1.28)" if movement == "推" else "min(zoom+0.0007,1.18)"
+            x_expr, y_expr = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
+        elif movement == "拉":
+            zoom = "max(zoom-0.0012,0.88)"
+            x_expr, y_expr = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
+        elif movement == "摇":
+            zoom = "1.08"
+            x_expr, y_expr = "(iw-iw/zoom)*on/{frames}".format(frames=max(1, frames)), "ih/2-(ih/zoom/2)"
+        elif movement == "移":
+            zoom = "1.08"
+            x_expr, y_expr = "(iw-iw/zoom)*(0.25+0.5*on/{frames})".format(frames=max(1, frames)), "ih/2-(ih/zoom/2)"
+        elif movement == "跟":
+            zoom = "1.12"
+            x_expr, y_expr = "(iw-iw/zoom)*(0.35+0.3*on/{frames})".format(frames=max(1, frames)), "ih/2-(ih/zoom/2)"
+        elif movement == "升降":
+            zoom = "1.08"
+            x_expr, y_expr = "iw/2-(iw/zoom/2)", "(ih-ih/zoom)*on/{frames}".format(frames=max(1, frames))
+        elif movement == "环绕":
+            zoom = "1.12"
+            x_expr = "iw/2-(iw/zoom/2)+sin(2*PI*on/{frames})*(iw/zoom/6)".format(frames=max(1, frames))
+            y_expr = "ih/2-(ih/zoom/2)+cos(2*PI*on/{frames})*(ih/zoom/8)".format(frames=max(1, frames))
         else:
-            zoom = "1.10"
+            if shot_type == "wide":
+                zoom = "min(zoom+0.001,1.25)"
+            elif shot_type in {"close-up", "extreme_close"}:
+                zoom = "1.35"
+            else:
+                zoom = "1.10"
+            x_expr, y_expr = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
         return (
             f"scale={width}:{height}:force_original_aspect_ratio=increase,"
             f"crop={width}:{height},"
-            f"zoompan=z='{zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            f"zoompan=z='{zoom}':x='{x_expr}':y='{y_expr}':"
             f"d={frames}:s={width}x{height}:fps={self.fps}"
         )
 
     def _clip_filter(self, base_filter: str, shot: dict, duration: float) -> str:
+        # 边界转场统一交给 _concat_clips 的 PostProductionPlan；
+        # 这里只保留单镜头后处理，避免白闪/叠化被重复应用。
         filters = [base_filter, self._post_filter(shot)]
-        profile = shot.get("post_profile") or {}
-        transition_duration = self._cross_scene_transition_duration(profile, duration)
-        if profile.get("cross_scene_in") and transition_duration > 0:
-            filters.append(f"fade=t=in:st=0:d={transition_duration:.2f}:color=white")
-        if profile.get("cross_scene_out") and transition_duration > 0:
-            start = max(0.0, duration - transition_duration)
-            filters.append(f"fade=t=out:st={start:.2f}:d={transition_duration:.2f}:color=white")
         return ",".join(part for part in filters if part)
 
     def _post_filter(self, shot: dict) -> str:

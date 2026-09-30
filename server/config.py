@@ -107,6 +107,8 @@ class Settings(BaseSettings):
     #   strict        —— 直接阻止生成，要求先切换到支持参考图的 Provider。
     # 两种取值都不会静默丢弃参考图。
     IMAGE_REFERENCE_ENFORCEMENT: str = "prefer"
+    # 视觉一致性验证：vlm=调用已配置的视觉模型复核生成结果；off=只记录载荷指标。
+    CONSISTENCY_VALIDATION_MODE: str = "vlm"
     # provider 出站请求是否继承系统/环境代理（httpx trust_env）。
     # 全部端点都在国内直连可达的部署建议在 .env 里关闭，避免本机代理
     # 把 API 请求绕到不稳定链路上。

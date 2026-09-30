@@ -336,6 +336,27 @@ def endpoint_from_stored(capability: str, stored: dict | None) -> EndpointConfig
     )
 
 
+def video_protocol_defaults(protocol: str) -> EndpointConfig:
+    """按显式视频协议构造端点，供 Agent ``switch_provider`` 使用。"""
+
+    normalized = normalize_protocol("video", protocol)
+    if normalized == "dashscope-wanx":
+        return _endpoint_from_merged(
+            "video",
+            {
+                "protocol": normalized,
+                "base_url": settings.DASHSCOPE_BASE_URL,
+                "api_key": settings.DASHSCOPE_API_KEY,
+                "model": settings.DASHSCOPE_VIDEO_MODEL,
+                "auth_style": "bearer",
+                "params": {},
+            },
+        )
+    if normalized == "native-audio":
+        return _endpoint_from_merged("video", {"protocol": normalized, "auth_style": "bearer", "params": {}})
+    return _endpoint_from_merged("video", _video_defaults())
+
+
 def image_protocol_defaults(protocol: str) -> EndpointConfig:
     """按显式协议构造图像端点（只用 settings / .env，不读持久化选择）。
 
@@ -384,4 +405,5 @@ __all__ = [
     "normalize_protocol",
     "protocol_family",
     "settings_defaults",
+    "video_protocol_defaults",
 ]

@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from config import settings
 from models import Project, SceneAsset, Character, Shot, ShotVersion
 from services.security import existing_file
+from services.shot_dialogue import dialogue_lines_payload, parse_shot_dialogue, serialize_dialogue_lines
 
 VERSION_SOURCES = ("manual_edit", "regenerate", "restore", "import")
 
@@ -32,10 +33,10 @@ _SIMPLE_FIELDS: tuple[str, ...] = (
     "shot_type",
     "scene_description",
     "character_action",
-    "dialogue",
     "camera_angle",
     "camera_movement",
     "duration",
+    "estimated_speech_ms",
     "emotion",
     "transition",
     "visual_notes",
@@ -72,6 +73,7 @@ _DIFF_FIELD_ORDER: tuple[str, ...] = (
     "camera_angle",
     "camera_movement",
     "duration",
+    "estimated_speech_ms",
     "emotion",
     "transition",
     "scene_asset_id",
@@ -137,17 +139,46 @@ def _resolve_negative_prompt(db: Session, shot: Shot, override: str | None) -> s
 
 
 def capture_snapshot(shot: Shot, *, negative_prompt: str = "") -> dict:
-    """捕获镜头的完整字段快照（含生成 Prompt 与资产绑定）。"""
+    """捕获镜头的完整字段快照（含生成 Prompt 与资产绑定）。
+
+    dialogue 以结构化列表入快照（说话人、逐句时间轴完整保留）；旧版纯文本
+    镜头读取时迁移为单条对白，说话人如实取场内第一个角色。
+    """
 
     data: dict[str, Any] = {}
     for field in _SIMPLE_FIELDS:
         value = getattr(shot, field, None)
         if field == "duration":
             data[field] = float(value if value is not None else 3.0)
+        elif field == "estimated_speech_ms":
+            data[field] = int(value or 0)
         elif field == "confirmed":
             data[field] = bool(value)
         else:
             data[field] = str(value or "")
+    raw_dialogue = getattr(shot, "dialogue", None)
+    if isinstance(raw_dialogue, str) and raw_dialogue.strip() and not raw_dialogue.lstrip().startswith(("[", "{")):
+        # 旧版纯文本快照保持原样，版本历史是不可变记录，不在读取/恢复时偷偷改写。
+        data["dialogue"] = raw_dialogue
+    else:
+        speakers = _json_list(getattr(shot, "characters_in_scene", None))
+        fallback_speaker = speakers[0] if speakers and isinstance(speakers[0], str) else ""
+        parsed_dialogue = parse_shot_dialogue(
+            raw_dialogue,
+            fallback_speaker=fallback_speaker,
+            default_emotion=str(getattr(shot, "emotion", "") or "neutral"),
+            warn_key=f"snapshot shot {shot.id}",
+        )
+        if (
+            len(parsed_dialogue) == 1
+            and not parsed_dialogue[0].speaker
+            and not parsed_dialogue[0].action
+            and parsed_dialogue[0].start_ms is None
+            and parsed_dialogue[0].end_ms is None
+        ):
+            data["dialogue"] = str(parsed_dialogue[0].line)
+        else:
+            data["dialogue"] = dialogue_lines_payload(parsed_dialogue)
     for field in _JSON_LIST_FIELDS:
         data[field] = _json_list(getattr(shot, field, None))
     for field in _JSON_DICT_FIELDS:
@@ -272,8 +303,9 @@ def diff_snapshots(a: dict, b: dict) -> list[dict]:
     extras = sorted((set(a) | set(b)) - set(ordered))
     rows = []
     for key in ordered + extras:
-        value_a = a.get(key, "" if key not in _JSON_LIST_FIELDS and key not in _JSON_DICT_FIELDS else ({} if key in _JSON_DICT_FIELDS else []))
-        value_b = b.get(key, "" if key not in _JSON_LIST_FIELDS and key not in _JSON_DICT_FIELDS else ({} if key in _JSON_DICT_FIELDS else []))
+        default: Any = [] if (key in _JSON_LIST_FIELDS or key == "dialogue") else ({} if key in _JSON_DICT_FIELDS else "")
+        value_a = a.get(key, default)
+        value_b = b.get(key, default)
         changed = _canonical(value_a) != _canonical(value_b)
         rows.append({"field": key, "a": value_a, "b": value_b, "changed": bool(changed)})
     return rows
@@ -344,6 +376,22 @@ def apply_snapshot_to_shot(shot: Shot, snapshot: dict) -> list[str]:
             continue
         setattr(shot, field, snapshot[field])
         restored.append(field)
+    # 对白恢复：快照可能是结构化列表（新）或旧版纯文本（迁移为单条），
+    # 说话人与逐句时间轴原样写回，不做任何「第一个角色」兜底改写。
+    snapshot_dialogue = snapshot.get("dialogue")
+    if isinstance(snapshot_dialogue, str):
+        shot.dialogue = snapshot_dialogue
+    else:
+        speakers = _json_list(snapshot.get("characters_in_scene"))
+        fallback_speaker = speakers[0] if speakers and isinstance(speakers[0], str) else ""
+        shot.dialogue = serialize_dialogue_lines(
+            parse_shot_dialogue(
+                snapshot_dialogue,
+                fallback_speaker=fallback_speaker,
+                warn_key=f"restore shot {shot.id}",
+            )
+        )
+    restored.append("dialogue")
     shot.characters_in_scene = json.dumps(_json_list(snapshot.get("characters_in_scene")), ensure_ascii=False)
     shot.character_asset_ids = json.dumps(_json_list(snapshot.get("character_asset_ids")), ensure_ascii=False)
     shot.reference_weights = json.dumps(_json_dict(snapshot.get("reference_weights")), ensure_ascii=False)

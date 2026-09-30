@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import asyncio
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -180,7 +181,10 @@ class SelectiveRegenerationQueueTests(unittest.TestCase):
             video_id = next(item["id"] for item in submission.items if item["stage"] == "video")
             asyncio.run(regeneration_queue._run_item(video_id))
 
-        self.assertEqual(seen, [("storyboard", "历史对白"), ("video", "新故事板对白")])
+        # 恢复后的对白是结构化 JSON（旧字符串迁移为单条），语义仍是历史台词。
+        self.assertEqual([stage for stage, _ in seen], ["storyboard", "video"])
+        self.assertEqual(json.loads(seen[0][1])[0]["line"], "历史对白")
+        self.assertEqual(seen[1][1], "新故事板对白")
 
     def test_cancel_batch_only_cancels_its_queue_items(self):
         result = self._submit(["queue-shot-2", "queue-shot-7"], stages=("audio",))

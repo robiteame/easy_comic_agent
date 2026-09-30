@@ -53,6 +53,12 @@ class BackgroundJob(Base):
     # 失败原因分析结果（JSON 字符串）：{"summary","suggestion","source","model","analyzed_at"}。
     # source 为 "rule" 或 "llm"；类别本身不在这里重复存，始终以 error_code 为准。
     error_detail = Column(Text, nullable=False, default="")
+    # 任务完成后可复核的结果报告（如一致性降级影响范围），JSON 字符串。
+    report = Column(Text, nullable=False, default="{}")
+    # 调试日志（JSON 数组）：进度事件、API 请求参数、提示词与请求结果。
+    # 内容写入前统一脱敏/限长；debug_revision 用于 WebSocket 增量事件去重。
+    debug_events = Column(Text, nullable=False, default="[]")
+    debug_revision = Column(Integer, nullable=False, default=0)
     # 第几次尝试；重试会新建一行 attempt+1 并保留原行，绝不覆盖历史。
     attempt = Column(Integer, nullable=False, default=1)
     retry_of = Column(String, nullable=True)

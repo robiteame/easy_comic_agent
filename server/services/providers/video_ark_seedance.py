@@ -30,10 +30,18 @@ from services.storage_service import StorageQuotaExceeded, StorageService
 class ArkSeedanceVideoAdapter(BaseAdapter):
     capabilities = VideoCapabilities(
         reference_image=True,
+        multiple_reference_images=False,
+        reference_parameter="content",
+        reference_weight_policy="text_only_policy",
+        reference_role_parameter="content[].role",
         native_audio=False,
         dialogue_in_prompt=False,
         voice_consistent=False,
+        camera_movement_prompt=True,
         fixed_duration=5,
+        min_duration=5,
+        max_duration=5,
+        duration_step=5,
         reference_mode="first_frame_only",
         # 方舟内容生成接口允许 MB 级 base64 图片内联；参考图按此预算压缩，
         # 尽量保留首帧里的人脸、服装与材质细节。

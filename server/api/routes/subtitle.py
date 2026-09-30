@@ -22,6 +22,7 @@ from models import Project, Shot, SubtitleCue, SubtitleTrack
 from services.av_config_service import bump_av_config_version
 from services.ffmpeg_service import FFmpegService
 from services.security import validate_identifier
+from services.shot_dialogue import dialogue_plain_text, parse_shot_dialogue
 from services.subtitle_service import (
     SubtitleCueData,
     SubtitleStyle,
@@ -370,7 +371,7 @@ async def export_subtitle(track_id: str, project_id: str, format: str = "srt", d
 async def generate_subtitle_from_shots(track_id: str, data: SubtitleGenerateRequest, db: Session = Depends(get_db)):
     """从镜头对白生成字幕：时长优先取 TTS 配音实际时长，且不越过镜头边界。"""
 
-    from services.subtitle_service import ShotDialogueInput
+    from services.subtitle_service import DialogueLineInput, ShotDialogueInput
 
     _validate_track_id(track_id)
     project = _project_or_404(db, data.project_id)
@@ -390,15 +391,32 @@ async def generate_subtitle_from_shots(track_id: str, data: SubtitleGenerateRequ
         except (TypeError, ValueError):
             speakers = []
         speaker = speakers[0] if speakers and isinstance(speakers[0], str) else ""
+        # 结构化对白逐句出字幕：说话人 + 实测时间轴；旧版纯文本自动迁移为
+        # 单条（说话人为场内第一个角色，与旧配音行为一致）。
+        lines = parse_shot_dialogue(
+            shot.dialogue,
+            fallback_speaker=speaker,
+            default_emotion=shot.emotion or "neutral",
+            warn_key=f"subtitle shot {shot.id}",
+        )
         inputs.append(
             ShotDialogueInput(
                 shot_id=shot.id,
                 sequence=int(shot.sequence or 0),
                 start_ms=cursor_ms,
                 duration_ms=duration_ms,
-                dialogue=shot.dialogue or "",
-                character_name=speaker,
+                dialogue=dialogue_plain_text(lines),
+                character_name=lines[0].speaker if lines else speaker,
                 tts_duration_ms=tts_duration_ms,
+                lines=[
+                    DialogueLineInput(
+                        speaker=line.speaker,
+                        line=line.line,
+                        start_ms=line.start_ms,
+                        end_ms=line.end_ms,
+                    )
+                    for line in lines
+                ],
             )
         )
         cursor_ms += duration_ms

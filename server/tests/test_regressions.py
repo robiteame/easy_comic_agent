@@ -38,6 +38,7 @@ from api.routes import character as character_route  # noqa: E402
 from api.routes import project as project_route  # noqa: E402
 from api.routes import render as render_route  # noqa: E402
 from api.routes import script as script_route  # noqa: E402
+from services import dialogue_audio  # noqa: E402
 from api.routes import shot as shot_route  # noqa: E402
 from api.routes.shot import _can_reuse_existing_video  # noqa: E402
 from config import settings  # noqa: E402
@@ -1125,7 +1126,7 @@ class BackgroundJobRegressionTests(DatabaseTestCase):
             }
 
         with (
-            patch.object(shot_route.tts_service, "generate_dialogue", side_effect=fake_tts),
+            patch.object(dialogue_audio.tts_service, "generate_dialogue", side_effect=fake_tts),
             patch.object(shot_route.seedance_service, "generate_shot_video", side_effect=fake_video),
         ):
             asyncio.run(shot_route._run_single_shot_video(shot.id, expected_version=7))

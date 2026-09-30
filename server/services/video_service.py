@@ -15,21 +15,42 @@ from pathlib import Path
 
 from config import settings
 from services import usage_service
+from services.job_debug import record_api_request, record_api_result
 from services.consistency_service import ConsistencyService
-from services.providers.base import Dialogue, VideoRequest
-from services.providers.endpoint import get_endpoint
+from services.providers.base import Dialogue, ReferenceAsset, VideoRequest
+from services.providers.endpoint import get_endpoint, video_protocol_defaults, video_protocol_defaults
 from services.providers.registry import get_adapter
+from services.providers.capability_matrix import (
+    CapabilityDowngradeRequiredError,
+    capability_report,
+    payload_control_types,
+)
 from services.providers.usage import (
     CAPABILITY_VIDEO,
     ERROR_CODE_PROVIDER_CALL_FAILED,
     adapter_usage_for_request,
 )
+from services.post_production_plan import CAMERA_MOVEMENT_PROMPTS
 from services.prompt_budget import assemble_prompt, ensure_critical_fields
 from services.reference_asset_service import ReferenceAssetService
+from services.consistency_metrics import combine_report, payload_metrics
 from services.security import safe_path, validate_identifier
+from services.story_timing import (
+    StoryTimingError,
+    dialogue_text,
+    estimate_speech_ms,
+    provider_duration_capability,
+)
 from services.style_templates import style_prompt_params
 
 logger = logging.getLogger(__name__)
+
+
+def get_video_generation_duration_s(requested_duration_s: float) -> float:
+    """Resolve the exact clip duration the active provider will generate."""
+
+    capability = provider_duration_capability()
+    return float(capability.fixed_duration or requested_duration_s)
 
 
 class VideoService:
@@ -57,15 +78,19 @@ class VideoService:
         resolution: str = "720p",
         content: list[dict] | None = None,
         dialogues: list[Dialogue] | None = None,
+        reference_assets: list[ReferenceAsset] | None = None,
+        provider_override: str = "",
     ) -> dict[str, str]:
-        endpoint = get_endpoint("video")
-        adapter = get_adapter("video", endpoint.protocol)(endpoint)
+        endpoint = video_protocol_defaults(provider_override) if provider_override else get_endpoint("video")
+        adapter_cls = get_adapter("video", endpoint.protocol)
+        adapter = adapter_cls(endpoint)
         if not prompt.strip():
             raise RuntimeError("视频生成提示词为空")
 
         if content is None:
             content = [{"type": "text", "text": prompt}]
-        reference_image, content_payload_mode = self._reference_from_content(content)
+        reference_image, content_reference_assets, content_payload_mode = self._reference_from_content(content)
+        request_reference_assets = list(reference_assets or content_reference_assets)
 
         try:
             safe_project_id = validate_identifier(project_id, "项目 ID")
@@ -76,61 +101,136 @@ class VideoService:
         video_path = output_dir / f"{safe_shot_id}.mp4"
         frame_path = output_dir / f"{safe_shot_id}_frame.png"
 
-        fixed_duration = getattr(adapter.capabilities, "fixed_duration", None)
-        requested_duration = int(duration or 5)
-        if fixed_duration and requested_duration > int(fixed_duration):
-            # 固定时长协议不接受更长镜头：明确报错要求拆分，而不是静默截短。
-            raise RuntimeError(
-                f"镜头时长 {requested_duration} 秒超过视频 Provider {endpoint.protocol} "
-                f"的固定时长 {int(fixed_duration)} 秒；请把该镜头拆分为多个短镜头，"
-                "或把时长调整到固定时长以内"
+        duration_capability = provider_duration_capability(
+            endpoint.protocol,
+            capabilities=getattr(adapter_cls, "capabilities", None),
+            model=endpoint.model,
+        )
+        requested_duration = float(duration or duration_capability.max_duration)
+        try:
+            duration_capability.validate(requested_duration, shot_id=shot_id)
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+        generation_duration = float(duration_capability.fixed_duration or requested_duration)
+        if "actual generated clip duration:" not in prompt:
+            prompt = (
+                f"{prompt.rstrip()}\n"
+                f"actual generated clip duration: {generation_duration:g} seconds; "
+                "complete the full action and all dialogue within this exact duration"
             )
         request = VideoRequest(
             prompt=prompt,
             reference_image=reference_image,
+            reference_assets=request_reference_assets,
             dialogues=dialogues,
-            duration=int(fixed_duration or requested_duration),
+            duration=int(round(generation_duration)),
             ratio=ratio,
             resolution=resolution,
             project_id=safe_project_id,
             output_video_path=video_path,
             output_frame_path=frame_path,
         )
+        effective_factory = getattr(adapter, "effective_capabilities", None)
+        effective_caps = effective_factory(endpoint.model) if effective_factory else getattr(adapter, "capabilities", None)
+        report = capability_report("video", endpoint.protocol, model=endpoint.model, adapter_cls=adapter_cls)
+        sent_items: list[dict] = []
+        if reference_image:
+            sent_items.append({"type": "approved_storyboard_first_frame", "role": "first_frame", "parameter": "content[].role"})
+        if getattr(effective_caps, "multiple_reference_images", False):
+            sent_items.extend(
+                {
+                    "type": item.type,
+                    "role": item.role or item.type,
+                    "parameter": getattr(effective_caps, "reference_role_parameter", "") or "content[].role",
+                    "weight_policy": report.get("reference_weight_policy", "text_only_policy"),
+                }
+                for item in request_reference_assets
+                if item.type != "approved_storyboard_first_frame"
+            )
+        control_types = payload_control_types("video", report, has_first_frame=bool(reference_image))
+        validated_count = len(request_reference_assets)
+        if reference_image and not any(item.type == "approved_storyboard_first_frame" for item in request_reference_assets):
+            validated_count += 1
         self.last_generation_metadata = {
             "provider": endpoint.protocol,
             "model": endpoint.model,
-            "reference_mode": adapter.capabilities.reference_mode if reference_image else "text_only",
-            "references_validated": 1 if reference_image else 0,
-            "references_sent": ["approved_storyboard_first_frame"] if reference_image else [],
+            "generation_duration_s": generation_duration,
+            "estimated_speech_ms": estimate_speech_ms("\n".join(str(item.text or "") for item in (request.dialogues or []))),
+            "reference_mode": "multi_reference" if len(sent_items) > 1 else ("first_frame_reference" if reference_image else "text_only"),
+            "references_validated": validated_count,
+            "references_sent": [item["type"] for item in sent_items],
+            "references_sent_detail": sent_items,
+            "control_types_sent": control_types,
+            "provider_capabilities": report,
+            "reference_weight_policy": report.get("reference_weight_policy", "text_only_policy"),
         }
+        if reference_image and str(getattr(effective_caps, "reference_mode", "") or "") == "first_frame_only":
+            self.last_generation_metadata["reference_mode"] = "first_frame_only"
+        self.last_generation_metadata["consistency_metrics"] = combine_report(
+            payload_metrics(
+                references_validated=validated_count,
+                references_sent=sent_items,
+                required_roles=[item.get("role") or item.get("type") for item in sent_items],
+                control_types_sent=control_types,
+                provider_capabilities=report,
+            ),
+            {"status": "not_run"},
+        )
         logger.info(
-            "视频生成请求: provider=%s model=%s reference_mode=%s duration=%s shot=%s",
+            "视频生成请求: provider=%s model=%s reference_mode=%s duration=%s shot=%s "
+            "references_validated=%s references_sent=%s control_types_sent=%s reference_weight_policy=%s",
             endpoint.protocol,
             endpoint.model or "default",
             self.last_generation_metadata["reference_mode"],
             request.duration,
             safe_shot_id,
+            self.last_generation_metadata["references_validated"],
+            self.last_generation_metadata["references_sent"],
+            control_types,
+            self.last_generation_metadata["reference_weight_policy"],
         )
-        # 视频按「秒 x 分辨率」记账；轮询式协议耗时很长，调用耗时单独记录。
         metadata = adapter_usage_for_request(adapter, CAPABILITY_VIDEO, request)
+        debug_request_id = record_api_request(
+            api="Video Generate",
+            provider=endpoint.protocol,
+            model=endpoint.model or "default",
+            params={
+                "duration": request.duration,
+                "ratio": request.ratio,
+                "resolution": request.resolution,
+                "dialogues": [
+                    {"role": item.role, "text": item.text, "emotion": item.emotion}
+                    for item in (request.dialogues or [])
+                ],
+                "reference_count": validated_count,
+                "reference_mode": self.last_generation_metadata.get("reference_mode", "text_only"),
+                "control_types_sent": control_types,
+            },
+            prompt=request.prompt,
+        )
         scope = usage_service.current_scope().merged(project_id=safe_project_id, shot_id=safe_shot_id)
         started = time.monotonic()
         try:
             result = await adapter.generate(request)
         except asyncio.CancelledError:
-            # 轮询式视频任务被取消：调用确实发生过，留痕但不虚增金额。
             usage_service.record_cancelled(
                 metadata,
                 duration_ms=int((time.monotonic() - started) * 1000),
                 scope=scope,
             )
             raise
-        except Exception:
+        except Exception as exc:
             usage_service.record_failure(
                 metadata,
                 error_code=ERROR_CODE_PROVIDER_CALL_FAILED,
                 duration_ms=int((time.monotonic() - started) * 1000),
                 scope=scope,
+            )
+            record_api_result(
+                debug_request_id,
+                api="Video Generate",
+                status="error",
+                message=f"视频 API 调用失败：{exc}",
             )
             raise
         usage_service.record_metadata(
@@ -139,17 +239,26 @@ class VideoService:
             extra_units={"task_id": str(result.task_id or "")},
             scope=scope,
         )
-
+        record_api_result(
+            debug_request_id,
+            api="Video Generate",
+            status="success",
+            message="视频 API 返回成功",
+            detail={
+                "task_id": str(result.task_id or ""),
+                "payload_mode": str(result.payload_mode or ""),
+                "native_audio": bool(result.native_audio),
+            },
+        )
         if result.native_audio:
-            # 原生音频契约校验：不允许产出无声成品。
             await self._assert_stream_has_audio(result.video_path)
-
         return {
             "video_path": result.video_path,
             "frame_path": result.frame_path,
             "task_id": result.task_id,
-            "reference_payload_mode": result.payload_mode or content_payload_mode,
+            "reference_payload_mode": result.payload_mode or content_payload_mode or self.last_generation_metadata.get("reference_mode", "text_only"),
             "native_audio": bool(result.native_audio),
+            "generation_report": dict(self.last_generation_metadata),
         }
 
     async def generate_shot_video(
@@ -158,41 +267,81 @@ class VideoService:
         characters: list[dict],
         scenes: dict[str, dict],
         project_id: str,
+        capability_mode: str = "manual",
+        confirm_capability_downgrade: bool = False,
+        provider_override: str = "",
+        resolution_override: str = "",
     ) -> dict[str, str]:
-        endpoint = get_endpoint("video")
+        endpoint = video_protocol_defaults(provider_override) if provider_override else get_endpoint("video")
         adapter_cls = get_adapter("video", endpoint.protocol)
-        capabilities = adapter_cls.capabilities
+        capabilities_factory = getattr(adapter_cls, "effective_capabilities", None)
+        capabilities = capabilities_factory(endpoint.model) if capabilities_factory else getattr(adapter_cls, "capabilities", None)
+        reference_assets = self._video_reference_assets(shot, capabilities)
+        multi_required = any(item.type != "approved_storyboard_first_frame" for item in reference_assets)
+        if multi_required and not getattr(capabilities, "multiple_reference_images", False):
+            warning = (
+                f"视频 Provider {endpoint.protocol}/{endpoint.model or 'default'} 为 first_frame_only，"
+                "角色三视图、场景基准图和连续性参考不会发送；自动模式禁止静默降级，手动模式需显式确认。"
+            )
+            if str(capability_mode or "manual").lower() == "auto" or not confirm_capability_downgrade:
+                raise CapabilityDowngradeRequiredError(warning)
+            logger.warning("视频参考能力降级已获人工确认: %s", warning)
+            reference_assets = [item for item in reference_assets if item.type == "approved_storyboard_first_frame"]
 
-        reference_manifest: list[dict] = []
-        if capabilities.reference_image:
-            reference_manifest = self._validate_video_references(shot)
-            shot["seedance_reference_manifest"] = reference_manifest
+        reference_manifest = [self._manifest_item(item, capabilities) for item in reference_assets]
+        requires_first_frame = bool(getattr(capabilities, "reference_image", True))
+        if requires_first_frame and not any(item.get("type") == "approved_storyboard_first_frame" and item.get("loaded") for item in reference_manifest):
+            raise RuntimeError("视频生成缺少 approved_storyboard_first_frame（已审核分镜首帧参考图），已阻止纯文本生成")
+        shot["seedance_reference_manifest"] = reference_manifest
+
+        duration_capability = provider_duration_capability(endpoint.protocol, capabilities=capabilities, model=endpoint.model)
+        requested_duration = float(shot.get("duration") or duration_capability.max_duration)
+        # 固定档 Provider 可把 4.5s 叙事时间线用 5s 生成后剪辑；只有明显超出
+        # 固定档/上限的镜头才要求先拆分，避免一刀切拒绝合法短镜头。
+        if requested_duration <= 0 or requested_duration > float(duration_capability.max_duration or 0) + duration_capability.tolerance_s:
+            try:
+                duration_capability.validate(requested_duration, shot_id=str(shot.get("shot_id") or shot.get("id") or ""))
+            except StoryTimingError as exc:
+                raise RuntimeError(f"{exc}；请拆分镜头到 Provider 允许的时长后逐镜生成") from exc
+        generation_duration = float(duration_capability.fixed_duration or requested_duration)
+        shot["generation_duration_s"] = generation_duration
+        shot["estimated_speech_ms"] = estimate_speech_ms(dialogue_text(shot.get("dialogue")))
+
         prompt = self._build_prompt(shot, characters, scenes)
-        content = self._build_content(prompt, shot, capabilities)
-        shot["reference_mode"] = capabilities.reference_mode if capabilities.reference_image else "text_only"
-        shot["references_validated"] = len(reference_manifest)
-        shot["references_sent"] = ["approved_storyboard_first_frame"] if self._has_image_content(content) else []
-        if capabilities.reference_image and not self._has_image_content(content):
-            raise RuntimeError("视频生成缺少已审核分镜首帧参考图，已阻止纯文本生成")
-        logger.info(
-            "镜头视频参考: provider=%s model=%s reference_mode=%s "
-            "references_validated=%s references_sent=%s（场景基准图/角色三视图/OpenPose/Depth 均不发送）",
-            endpoint.protocol,
-            endpoint.model or "default",
-            shot["reference_mode"],
-            shot["references_validated"],
-            shot["references_sent"],
-        )
-        return await self.generate_single_shot(
+        content = self._build_content(prompt, shot, capabilities, reference_assets)
+        result = await self.generate_single_shot(
             prompt=prompt,
             project_id=project_id,
             shot_id=shot.get("shot_id", "seedance_shot"),
-            duration=int(shot.get("duration") or 5),
+            duration=int(round(generation_duration)),
             ratio=shot.get("output_format", "9:16"),
-            resolution=self._resolution(shot.get("resolution")),
+            resolution=self._resolution(resolution_override or shot.get("resolution")),
             content=content,
             dialogues=self._dialogues_from_shot(shot),
+            reference_assets=reference_assets,
+            provider_override=provider_override,
         )
+        report = dict(result.get("generation_report") or self.last_generation_metadata or {})
+        shot["reference_mode"] = str(getattr(capabilities, "reference_mode", "") or report.get("reference_mode") or ("multi_reference" if multi_required else "first_frame_only"))
+        shot["references_validated"] = len(reference_manifest)
+        shot["references_sent"] = list(report.get("references_sent") or [item.get("type") for item in reference_manifest if item.get("loaded")])
+        shot["references_sent_detail"] = list(report.get("references_sent_detail") or [])
+        shot["control_types_sent"] = list(report.get("control_types_sent") or [])
+        shot["provider_capabilities"] = dict(report.get("provider_capabilities") or {})
+        shot["reference_weight_policy"] = str(report.get("reference_weight_policy") or "text_only_policy")
+        shot["consistency_metrics"] = dict(report.get("consistency_metrics") or {})
+        logger.info(
+            "镜头视频参考: provider=%s model=%s reference_mode=%s references_validated=%s references_sent=%s "
+            "control_types_sent=%s reference_weight_policy=%s",
+            report.get("provider", endpoint.protocol),
+            report.get("model", endpoint.model or "default"),
+            shot["reference_mode"],
+            shot["references_validated"],
+            shot["references_sent"],
+            shot["control_types_sent"],
+            shot["reference_weight_policy"],
+        )
+        return result
 
     # ------------------------------------------------------------------
     # 台词与参考图策略
@@ -210,20 +359,31 @@ class VideoService:
             elif isinstance(item, dict):
                 normalized.append(
                     Dialogue(
-                        role=str(item.get("role") or ""),
-                        text=str(item.get("text") or ""),
+                        role=str(item.get("role") or item.get("speaker") or ""),
+                        text=str(item.get("text") or item.get("line") or ""),
                         emotion=str(item.get("emotion") or "neutral"),
+                        start_ms=int(item.get("start_ms") or 0),
+                        end_ms=int(item.get("end_ms") or 0),
                     )
                 )
         return normalized or None
 
-    def _reference_from_content(self, content: list[dict]) -> tuple[str | None, str]:
-        """从内容列表中取首帧参考图；payload 模式由适配器按内容判定。"""
+    def _reference_from_content(self, content: list[dict]) -> tuple[str | None, list[ReferenceAsset], str]:
+        """从内容列表中取首帧参考图和结构化参考素材；payload 模式由适配器按内容判定。"""
+        first_frame = ""
+        assets: list[ReferenceAsset] = []
         for item in content or []:
-            if item.get("type") == "image_url":
-                url = (item.get("image_url") or {}).get("url") if isinstance(item.get("image_url"), dict) else None
-                return (url or None), ""
-        return None, "text_only"
+            if item.get("type") != "image_url":
+                continue
+            url = (item.get("image_url") or {}).get("url") if isinstance(item.get("image_url"), dict) else None
+            if not url:
+                continue
+            role = str(item.get("role") or "")
+            if role == "first_frame" or not first_frame:
+                first_frame = first_frame or str(url)
+            else:
+                assets.append(ReferenceAsset(url=str(url), type=role or "reference_image", role=role or "reference_image"))
+        return (first_frame or None), assets, ("first_frame_reference" if first_frame else "text_only")
 
     def _resolution(self, resolution: str | None) -> str:
         # 项目分辨率可为 720p/1080p/2k/4k；Seedance 1.5 pro 仅支持到 1080p，
@@ -254,7 +414,21 @@ class VideoService:
         style_params = style_prompt_params(shot.get("style") or shot.get("style_id"))
         provider_label = get_endpoint("video").protocol or "video provider"
 
+        generation_duration = float(
+            shot.get("generation_duration_s")
+            or get_video_generation_duration_s(float(shot.get("duration") or 0))
+        )
+        estimated_speech_ms = int(shot.get("estimated_speech_ms") or estimate_speech_ms(dialogue_text(shot.get("dialogue"))))
         fields: list[tuple[str, str]] = [
+            (
+                "duration_policy",
+                f"actual generated clip duration: {generation_duration:g} seconds; "
+                "stage the complete action and dialogue within this exact duration",
+            ),
+            (
+                "speech_timing",
+                f"estimated speech duration: {estimated_speech_ms} ms; dialogue must finish inside the shot without rushing or truncation",
+            ),
             ("effective_style", style_params.get("video_prompt", "")),
             ("style_label", f"locked visual style preset: {style_params.get('style_label', '')}"),
             ("identity_policy", "NON-NEGOTIABLE identity and style consistency policy"),
@@ -296,8 +470,40 @@ class VideoService:
             ("camera_movement", f"camera movement: {shot.get('camera_movement', '静止')}"),
             ("camera_angle", f"camera angle: {shot.get('camera_angle', '正面')}"),
             ("shot_type", f"shot size: {shot.get('shot_type', 'medium')}"),
+            (
+                "camera_strategy",
+                CAMERA_MOVEMENT_PROMPTS.get(
+                    str(shot.get("camera_movement") or "静止"),
+                    f"camera movement: {shot.get('camera_movement') or '静止'}",
+                ),
+            ),
+            (
+                "shot_timing",
+                (
+                    f"shot sequence {int(shot.get('sequence') or 0)}; "
+                    f"requested source duration {float(shot.get('duration') or 3.0):.3f}s; "
+                    f"estimated speech {int(shot.get('estimated_speech_ms') or estimated_speech_ms)}ms; "
+                    f"dialogue and action must remain inside this shot; "
+                    f"timeline {int(shot.get('timeline_start_ms') or 0)}-{int(shot.get('timeline_end_ms') or 0)}ms; "
+                    f"timing metadata {shot.get('timing') or {}}"
+                ),
+            ),
             ("motion_policy", "cinematic short drama video, coherent motion, no subtitles, no watermark"),
         ])
+        dialogue_timing = shot.get("dialogue_timing") or shot.get("dialogues") or shot.get("dialogue")
+        if dialogue_timing:
+            timed_parts = []
+            for item in dialogue_timing if isinstance(dialogue_timing, list) else [dialogue_timing]:
+                if not isinstance(item, dict):
+                    continue
+                timed_parts.append(
+                    f"{item.get('speaker') or item.get('role') or '角色'} "
+                    f"[{int(item.get('start_ms') or 0)}-{int(item.get('end_ms') or 0)}ms] "
+                    f"{item.get('emotion') or shot.get('emotion') or 'neutral'}: "
+                    f"{item.get('text') or item.get('line') or ''}"
+                )
+            if timed_parts:
+                fields.append(("dialogue_timing", "; ".join(timed_parts)))
         # --- 5. 连续性规则与低优先级 SOP ---
         if shot.get("continuity_reference_path"):
             fields.append(("continuity", "previous shot final frame may inform eye-line and action continuity in text"))
@@ -350,14 +556,28 @@ class VideoService:
 
     @staticmethod
     def _critical_fields(selected_characters: list[dict], shot: dict) -> list[tuple[str, str]]:
-        """人物身份、动作、情绪、运镜：裁剪后必须仍然存在的关键字段。"""
+        """人物身份、动作、情绪、运镜、时长：裁剪后必须仍然存在的关键字段。"""
         critical: list[tuple[str, str]] = []
+        generation_duration = float(
+            shot.get("generation_duration_s")
+            or get_video_generation_duration_s(float(shot.get("duration") or 0))
+        )
+        critical.append((
+            "duration_policy",
+            f"actual generated clip duration: {generation_duration:g} seconds",
+        ))
+        critical.append((
+            "speech_timing",
+            f"estimated speech duration: {int(shot.get('estimated_speech_ms') or 0)} ms",
+        ))
         for char in selected_characters[:2]:
             critical.append(("character_identity", str(char.get("visual_prompt", "") or char.get("name", ""))))
         critical.extend([
             ("character_action", str(shot.get("character_action", "") or "")),
             ("emotion", f"emotional tone: {shot.get('emotion', 'neutral')}"),
-            ("camera_movement", f"camera movement: {shot.get('camera_movement', '静止')}"),
+            ("camera_movement", CAMERA_MOVEMENT_PROMPTS.get(str(shot.get('camera_movement') or '静止'), f"camera movement: {shot.get('camera_movement', '静止')}")),
+            ("camera_angle", f"camera angle: {shot.get('camera_angle', '正面')}"),
+            ("shot_timing", f"requested duration {float(shot.get('duration') or 3.0):.3f}s"),
         ])
         return critical
 
@@ -404,7 +624,7 @@ class VideoService:
         text = text.replace("{", "").replace("}", "")
         return " ".join(text.split())
 
-    def _build_content(self, prompt: str, shot: dict, capabilities=None) -> list[dict]:
+    def _build_content(self, prompt: str, shot: dict, capabilities=None, reference_assets: list[ReferenceAsset] | None = None) -> list[dict]:
         content: list[dict] = [{"type": "text", "text": prompt}]
 
         if capabilities is not None and not getattr(capabilities, "reference_image", False):
@@ -446,6 +666,52 @@ class VideoService:
         if roles:
             return "image_reference"
         return "text_only"
+
+    def _video_reference_assets(self, shot: dict, capabilities=None) -> list[ReferenceAsset]:
+        """收集视频请求候选参考，并只保留可读文件。首帧永远单独建模。"""
+
+        assets: list[ReferenceAsset] = []
+        first = str(shot.get("storyboard_path") or shot.get("image_path") or "")
+        first_url = self.reference_assets.to_image_url(first) if first else ""
+        if first_url:
+            assets.append(ReferenceAsset(url=first_url, type="approved_storyboard_first_frame", role="first_frame", provider_type="first_frame", source_path=first))
+        candidates: list[tuple[str, str, str]] = []
+        for item in shot.get("reference_assets") or []:
+            if isinstance(item, dict) and item.get("path"):
+                candidates.append((str(item.get("type") or "reference_image"), str(item.get("role") or ""), str(item["path"])))
+        for path in shot.get("scene_reference_images") or []:
+            if path:
+                candidates.append(("scene_baseline", "environment_props_lighting_perspective", str(path)))
+        for path in shot.get("character_reference_images") or []:
+            if path:
+                candidates.append(("character_three_view", "identity_outfit_face_body_hair", str(path)))
+        if shot.get("continuity_reference_path"):
+            candidates.append(("continuity_frame", "eye_line_axis_motion", str(shot["continuity_reference_path"])))
+        seen = {(item.type, item.source_path) for item in assets}
+        for kind, role, path in candidates:
+            key = (kind, path)
+            if key in seen:
+                continue
+            seen.add(key)
+            url = self.reference_assets.to_image_url(path)
+            if not url:
+                continue
+            assets.append(ReferenceAsset(url=url, type=kind, role=role or kind, provider_type="reference_image", source_path=path))
+        return assets
+
+    @staticmethod
+    def _manifest_item(asset: ReferenceAsset, capabilities=None) -> dict:
+        multi = bool(getattr(capabilities, "multiple_reference_images", False))
+        sent = asset.type == "approved_storyboard_first_frame" or multi
+        return {
+            "type": asset.type,
+            "role": asset.role or asset.type,
+            "path": asset.source_path,
+            "loaded": True,
+            "validated": True,
+            "sent": sent,
+            "not_sent_reason": "" if sent else "provider_first_frame_only",
+        }
 
     def _validate_video_references(self, shot: dict) -> list[dict]:
         missing: list[str] = []

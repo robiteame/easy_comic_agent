@@ -30,6 +30,12 @@ async def run(state: AgentState) -> dict:
 
     project_id = state["project_id"]
     user_input = (state.get("user_input") or "").strip()
+    prompt_revisions = [str(item.get("instruction") or item) for item in state.get("prompt_revisions") or [] if item]
+    prompt_revision = str(state.get("prompt_revision") or "").strip()
+    if prompt_revision:
+        prompt_revisions.append(prompt_revision)
+    if prompt_revisions:
+        user_input = user_input + "\n\n自动 Critic 修订要求：\n- " + "\n- ".join(prompt_revisions[-3:])
     rag_context: list[str] = []
 
     if state.get("input_type") == "file" and state.get("uploaded_file_path"):

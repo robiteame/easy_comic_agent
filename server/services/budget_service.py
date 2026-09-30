@@ -90,7 +90,17 @@ _CHARS_PER_TOKEN = 4
 _MIN_INPUT_TOKENS = 400
 
 
+def _dialogue_chars(shot) -> int:
+    """TTS 字符口径：结构化对白逐句求和（兼容旧版纯文本镜头）。"""
+
+    from services.shot_dialogue import dialogue_total_chars, parse_shot_dialogue
+
+    return dialogue_total_chars(parse_shot_dialogue(getattr(shot, "dialogue", "") or ""))
+
+
 @dataclass(frozen=True)
+
+
 class WorkloadComponent:
     """任务在某一能力上的预计工作量。"""
 
@@ -412,7 +422,7 @@ def job_workload(
             )
 
     elif job_type == JOB_TYPE_SHOT_AUDIO:
-        characters = sum(len(str(shot.dialogue or "").strip()) for shot in shots)
+        characters = sum(_dialogue_chars(shot) for shot in shots)
         if characters:
             components.append(
                 WorkloadComponent(
@@ -427,7 +437,7 @@ def job_workload(
 
     elif job_type == JOB_TYPE_SHOT_VIDEO:
         seconds = sum(max(0.0, float(shot.duration or 0)) for shot in shots)
-        characters = sum(len(str(shot.dialogue or "").strip()) for shot in shots)
+        characters = sum(_dialogue_chars(shot) for shot in shots)
         if seconds:
             components.append(
                 WorkloadComponent(
@@ -974,7 +984,7 @@ def _remaining_workload(db: Session, project_id: str) -> list[WorkloadComponent]
         )
     if pending_video:
         seconds = int(round(sum(max(0.0, float(shot.duration or 0)) for shot in pending_video)))
-        characters = sum(len(str(shot.dialogue or "").strip()) for shot in pending_video)
+        characters = sum(_dialogue_chars(shot) for shot in pending_video)
         components.append(
             WorkloadComponent(
                 capability=CAPABILITY_VIDEO,

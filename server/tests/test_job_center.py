@@ -828,8 +828,9 @@ class JobEventTests(JobCenterTestCase):
             return socket.sent
 
         sent = asyncio.run(scenario())
-        self.assertEqual([item["type"] for item in sent], ["job.retry_started"])
-        self.assertEqual(sent[0]["job"]["attempt"], 2)
+        self.assertEqual([item["type"] for item in sent], ["job.debug", "job.retry_started"])
+        retry_event = next(item for item in sent if item["type"] == "job.retry_started")
+        self.assertEqual(retry_event["job"]["attempt"], 2)
 
     def test_snapshot_payload_has_no_run_token(self) -> None:
         self.make_job("project:p-snap:render", "project:p-snap", status="running", progress=30)
@@ -839,6 +840,47 @@ class JobEventTests(JobCenterTestCase):
         self.assertNotIn("run_token", json.dumps(snapshot, ensure_ascii=False))
         self.assertIn("active_count", snapshot)
         self.assertIn("status_counts", snapshot)
+
+
+class JobDebugLogTests(JobCenterTestCase):
+    def test_debug_log_tracks_progress_and_redacts_secrets(self) -> None:
+        from services.job_debug import make_event
+
+        key = "project:p-debug:render"
+        self.assertTrue(task_registry.claim(key, "project:p-debug", current_step="rendering", message="开始"))
+        token = task_registry.snapshot(key)["run_token"]
+        self.assertTrue(
+            task_registry.update_progress(
+                key,
+                35,
+                run_token=token,
+                current_step="rendering",
+                message="正在调用图像 API",
+            )
+        )
+        db = SessionLocal()
+        try:
+            job_id = str(db.query(BackgroundJob.id).filter(BackgroundJob.idempotency_key == key).scalar())
+        finally:
+            db.close()
+        body = self.client.get(f"/api/jobs/{job_id}/debug").json()
+        self.assertEqual(body["current_step"], "rendering")
+        self.assertEqual(body["progress"], 35)
+        self.assertGreaterEqual(body["debug_revision"], 2)
+        self.assertTrue(any(item["kind"] == "progress" for item in body["events"]))
+
+        event = make_event(
+            "api_request",
+            "发起请求",
+            api="Image Generate",
+            provider="qwen",
+            model="test-model",
+            params={"api_key": "sk-secret-value", "reference_images": ["data:image/png;base64,AAAA"]},
+            prompt={"system": "system prompt", "user": "user prompt"},
+        )
+        self.assertEqual(event["params"]["api_key"], "[已脱敏]")
+        self.assertIn("不记录内容", event["params"]["reference_images"])
+        self.assertEqual(event["prompt"]["user"], "user prompt")
 
 
 class JobWebSocketTests(JobCenterTestCase):
@@ -900,6 +942,8 @@ def websocket_payload_keys(job: dict) -> None:
         # 成本快照（实际金额 + 启动前估算）：只含归一化后的金额与数量，
         # 不含密钥、供应商原始响应或本地路径，因此属于可公开字段。
         "cost",
+        # 调试日志版本号：前端据此识别是否需要补齐日志，不含日志正文。
+        "debug_revision",
     }
     unexpected = set(job) - allowed
     assert not unexpected, f"unexpected job fields: {sorted(unexpected)}"

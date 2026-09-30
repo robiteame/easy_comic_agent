@@ -746,6 +746,27 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
                       : ''}
                   </dd>
                 </dl>
+                {selectedJob.report?.items && (
+                  <div className="task-report-block" role="note">
+                    <div className="task-report-title">一致性参考结果</div>
+                    <div className="task-report-summary">
+                      状态：{selectedJob.report.status || '未知'}
+                      {selectedJob.report.shot_range ? ` · ${selectedJob.report.shot_range}` : ''}
+                      {selectedJob.report.affected_shot_count ? ` · 影响 ${selectedJob.report.affected_shot_count} 个镜头` : ''}
+                    </div>
+                    <ul>
+                      {(selectedJob.report.items as any[]).filter((item) => item.status !== 'ready').map((item) => (
+                        <li key={`${item.kind}:${item.asset_id}`}>
+                          <strong>{item.name || item.asset_id}</strong>
+                          <span>：{item.status}</span>
+                          {item.shot_range ? <span>，{item.shot_range}</span> : null}
+                          {item.failure_reason ? <span>，{item.failure_reason}</span> : null}
+                          {item.error_id ? <span>（错误编号 {item.error_id}）</span> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 {(selectedJob.error_message || selectedJob.error_detail) && (
                   <div className="task-error-block" role="note">
                     <div className="task-error-block-head">

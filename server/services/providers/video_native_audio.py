@@ -29,6 +29,11 @@ class NativeAudioVideoAdapter(BaseAdapter):
         native_audio=True,
         dialogue_in_prompt=True,
         voice_consistent=False,
+        min_duration=2,
+        max_duration=8,
+        duration_step=1,
+        camera_movement_prompt=True,
+        timed_dialogue=True,
     )
     production_ready = False
 
@@ -66,7 +71,10 @@ class NativeAudioVideoAdapter(BaseAdapter):
                 continue
             emotion = EMOTION_LABELS.get(str(dialogue.emotion or "neutral"), "平静")
             role = str(dialogue.role or "角色").strip() or "角色"
-            parts.append(f'{role}以{emotion}的语气开口说：「{str(dialogue.text).strip()}」')
+            timing = ""
+            if dialogue.end_ms > dialogue.start_ms:
+                timing = f"（时间线 {int(dialogue.start_ms)}-{int(dialogue.end_ms)}ms）"
+            parts.append(f'{role}以{emotion}的语气开口说{timing}：「{str(dialogue.text).strip()}」')
         if request.dialogues:
             parts.append("对白必须由画面角色原生开口说出，口型与台词同步，音频随视频一次性生成")
         return "\n".join(part for part in parts if part)

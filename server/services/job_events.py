@@ -22,6 +22,7 @@ EVENT_JOB_FAILED = "job.failed"
 EVENT_JOB_CANCELLED = "job.cancelled"
 EVENT_JOB_INTERRUPTED = "job.interrupted"
 EVENT_JOB_RETRY_STARTED = "job.retry_started"
+EVENT_JOB_DEBUG = "job.debug"
 
 JOB_EVENT_TYPES = (
     EVENT_JOB_CREATED,
@@ -32,6 +33,7 @@ JOB_EVENT_TYPES = (
     EVENT_JOB_CANCELLED,
     EVENT_JOB_INTERRUPTED,
     EVENT_JOB_RETRY_STARTED,
+    EVENT_JOB_DEBUG,
 )
 
 _TERMINAL_EVENT_BY_STATUS = {
@@ -56,6 +58,48 @@ def event_envelope(event_type: str, job_payload: dict[str, Any]) -> dict[str, An
         "project_id": job_payload.get("project_id", ""),
         "sent_at": datetime.utcnow().isoformat(),
     }
+
+
+def debug_event_envelope(
+    job_id: str,
+    project_id: str,
+    event: dict[str, Any],
+    revision: int,
+) -> dict[str, Any]:
+    """调试日志事件只携带单条脱敏记录，不复制完整任务 DTO。"""
+
+    return {
+        "type": EVENT_JOB_DEBUG,
+        "job_id": str(job_id or ""),
+        "project_id": str(project_id or ""),
+        "event": event,
+        "debug_revision": max(0, int(revision or 0)),
+        "sent_at": datetime.utcnow().isoformat(),
+    }
+
+
+def publish_job_debug_event(
+    *,
+    job_id: str,
+    project_id: str,
+    event: dict[str, Any],
+    revision: int,
+) -> None:
+    """推送一条任务调试日志；失败只记录 debug，不影响生成任务。"""
+
+    if not job_id or not event:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    envelope = debug_event_envelope(job_id, project_id, event, revision)
+    try:
+        from api.websocket import jobs_manager
+
+        loop.create_task(jobs_manager.broadcast(envelope))
+    except Exception:  # noqa: BLE001
+        logger.debug("任务调试事件推送失败", exc_info=True)
 
 
 def has_job_listeners() -> bool:
@@ -95,14 +139,17 @@ __all__ = [
     "EVENT_JOB_CANCELLED",
     "EVENT_JOB_COMPLETED",
     "EVENT_JOB_CREATED",
+    "EVENT_JOB_DEBUG",
     "EVENT_JOB_FAILED",
     "EVENT_JOB_INTERRUPTED",
     "EVENT_JOB_PROGRESS",
     "EVENT_JOB_RETRY_STARTED",
     "EVENT_JOB_UPDATED",
     "JOB_EVENT_TYPES",
+    "debug_event_envelope",
     "event_envelope",
     "has_job_listeners",
+    "publish_job_debug_event",
     "publish_job_event",
     "terminal_event_for",
 ]

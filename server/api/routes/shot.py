@@ -14,7 +14,20 @@ from db import SessionLocal, get_db
 from models import Character, Project, SceneAsset, Shot, ShotVersion
 from services.audio_routing import resolve_audio_mode
 from services.consistency_service import ConsistencyService
+from services.dialogue_audio import generate_dialogue_track
 from services.invalidation_service import clear_shot_media_stale, mark_shot_media_stale
+from services.reference_readiness_service import (
+    blocking_report,
+    build_manifest_for_shot,
+    ensure_generation_gate,
+    refresh_project_reference_state,
+)
+from services.shot_dialogue import (
+    dialogue_lines_payload,
+    parse_shot_dialogue,
+    serialize_dialogue_lines,
+    warn_unknown_speakers,
+)
 from services.error_reporter import (
     ERROR_SHOT_VIDEO,
     ERROR_STORYBOARD,
@@ -25,6 +38,7 @@ from services.error_reporter import (
 from services.image_service import ImageService
 from services.providers.base import Dialogue
 from services.providers.endpoint import get_endpoint
+from services.providers.registry import UnknownProtocolError, get_adapter
 from services.shot_version_service import (
     apply_snapshot_to_shot,
     capture_current_snapshot,
@@ -36,6 +50,13 @@ from services.shot_version_service import (
     missing_media,
     parse_snapshot,
     version_detail,
+)
+from services.story_timing import (
+    StoryTimingError,
+    dialogue_text,
+    estimate_speech_ms,
+    provider_duration_capability,
+    usable_speech_ms,
 )
 from services.skill_config_service import (
     apply_agent_config_to_shot,
@@ -74,7 +95,7 @@ class ShotUpdate(BaseModel):
     shot_type: schemas.ShotType | None = None
     scene_description: schemas.ShotText | None = None
     character_action: schemas.ShotText | None = None
-    dialogue: schemas.ShotText | None = None
+    dialogue: schemas.ShotDialogueList | None = None
     camera_angle: schemas.CameraAngle | None = None
     camera_movement: schemas.CameraMovement | None = None
     duration: schemas.ShotDuration | None = None
@@ -95,7 +116,7 @@ class RegenerateRequest(BaseModel):
     new_camera_angle: schemas.CameraAngle | None = None
     shot_type: schemas.ShotType | None = None
     character_action: schemas.ShotText | None = None
-    dialogue: schemas.ShotText | None = None
+    dialogue: schemas.ShotDialogueList | None = None
     duration: schemas.ShotDuration | None = None
     force_confirmed: bool = False
     # 关键镜头可一次生成 2 个候选：每个候选各自进入版本历史，人工对比后选用。
@@ -104,6 +125,8 @@ class RegenerateRequest(BaseModel):
 
 class StoryboardGenerateRequest(BaseModel):
     shot_ids: schemas.ShotIdList = Field(default_factory=list)
+    # 手动模式专用：用户必须在 UI 明确确认后才允许参考素材降级。
+    confirm_degraded: bool = False
 
 
 class StoryboardApprovalRequest(BaseModel):
@@ -186,6 +209,7 @@ async def update_shot(shot_id: str, data: ShotUpdate, db: Session = Depends(get_
     result_id = shot.id
     previous_scene_key = _shot_scene_key(shot)
     changed = data.model_dump(exclude_unset=True)
+    estimated_speech_ms = _validate_timing_edit(shot, changed, db)
     if "scene_asset_id" in changed or "character_asset_ids" in changed:
         scene_value = changed.get("scene_asset_id", shot.scene_asset_id) or ""
         character_value = changed.get("character_asset_ids", _json_list(shot.character_asset_ids))
@@ -208,10 +232,14 @@ async def update_shot(shot_id: str, data: ShotUpdate, db: Session = Depends(get_
             else:
                 profile.pop("audio_mode", None)
             shot.continuity_profile = json.dumps(profile, ensure_ascii=False)
+        elif key == "dialogue":
+            shot.dialogue = _serialize_dialogue_input(value, shot, db)
         else:
             setattr(shot, key, value)
 
     if changed:
+        if "dialogue" in changed or "duration" in changed:
+            shot.estimated_speech_ms = estimated_speech_ms
         _invalidate_storyboard_outputs(shot)
         _invalidate_downstream_media(db, shot, {previous_scene_key, _shot_scene_key(shot)}, source="manual_edit")
         shot.version = (shot.version or 1) + 1
@@ -229,6 +257,33 @@ async def update_shot(shot_id: str, data: ShotUpdate, db: Session = Depends(get_
     return {"id": result_id, "status": "updated", "needs_render": bool(changed)}
 
 
+def _validate_timing_edit(shot: Shot, changed: dict, db: Session) -> int:
+    """Validate dialogue capacity before an edit is recorded.
+
+    Manual edits may temporarily describe an out-of-provider duration so version
+    comparison/restore remains lossless; actual video generation and rendering
+    enforce the live Provider contract and refuse such shots.
+    """
+
+    duration = float(changed.get("duration") if changed.get("duration") is not None else shot.duration or 0)
+    if "dialogue" in changed:
+        dialogue_raw = _serialize_dialogue_input(changed.get("dialogue"), shot, db)
+    else:
+        dialogue_raw = shot.dialogue
+    estimated_speech_ms = estimate_speech_ms(dialogue_text(dialogue_raw))
+    action = str(changed.get("character_action") if changed.get("character_action") is not None else shot.character_action or "")
+    available_ms = usable_speech_ms({"character_action": action}, duration)
+    if estimated_speech_ms > available_ms:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"镜头 {shot.id} 对白预计 {estimated_speech_ms} 毫秒，超过镜头可用时长 "
+                f"{available_ms} 毫秒；请拆分台词、合并镜头或在 Provider 能力内延长该镜头"
+            ),
+        )
+    return estimated_speech_ms
+
+
 def _prepare_storyboard_candidate(shot: Shot, db: Session, data: RegenerateRequest) -> tuple[int, str]:
     """登记一版故事板候选：版本快照 + 失效下游 + 应用本次参数。
 
@@ -236,6 +291,8 @@ def _prepare_storyboard_candidate(shot: Shot, db: Session, data: RegenerateReque
     因此第 2 个候选与第 1 个候选一样会进入版本历史，可对比后再选用。
     """
     task_key = _shot_task_key(shot.id, "storyboard")
+    candidate_changes = data.model_dump(exclude_unset=True)
+    estimated_speech_ms = _validate_timing_edit(shot, candidate_changes, db)
     create_version(db, shot, "regenerate", task_id=task_key)
     previous_scene_key = _shot_scene_key(shot)
     _invalidate_storyboard_outputs(shot)
@@ -254,9 +311,11 @@ def _prepare_storyboard_candidate(shot: Shot, db: Session, data: RegenerateReque
     if data.character_action is not None:
         shot.character_action = data.character_action
     if data.dialogue is not None:
-        shot.dialogue = data.dialogue
+        shot.dialogue = _serialize_dialogue_input(data.dialogue, shot, db)
     if data.duration is not None:
         shot.duration = data.duration
+    if data.dialogue is not None or data.duration is not None:
+        shot.estimated_speech_ms = estimated_speech_ms
     prompt = data.prompt if data.prompt is not None else data.visual_notes
     if prompt is not None:
         shot.visual_notes = prompt
@@ -407,6 +466,31 @@ async def generate_storyboard_images(project_id: str, data: StoryboardGenerateRe
     if not shots:
         raise HTTPException(status_code=404, detail="No shots available for storyboard generation")
 
+    gate = ensure_generation_gate(db, project_id, allow_degraded=bool(getattr(data, "confirm_degraded", False)), shot_ids=[shot.id for shot in shots])
+    if gate.get("blocking"):
+        if not bool(getattr(data, "confirm_degraded", False)):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "一致性参考素材未就绪，故事板生成已阻止",
+                    "requires_manual_review": True,
+                    "consistency_report": gate,
+                    "affected_shot_ids": gate.get("affected_shot_ids", []),
+                    "shot_range": gate.get("shot_range", ""),
+                },
+            )
+        # 手动模式只有在显式确认后才允许降级；每个未就绪项都留下 degraded 状态。
+        from services.reference_readiness_service import mark_reference_degraded
+        for item in gate.get("blocking_items", []):
+            model = Character if item.get("kind") == "character" else SceneAsset
+            row = db.query(model).filter(model.id == item.get("asset_id")).first()
+            if row:
+                mark_reference_degraded(db, item.get("kind"), row, reason="用户在故事板生成前确认降级")
+        db.commit()
+        gate = refresh_project_reference_state(db, project_id)
+        if gate.get("blocking"):
+            raise HTTPException(status_code=409, detail={"message": "参考素材降级确认后仍有阻断项", "consistency_report": gate})
+
     task_key = _project_task_key(project_id, "storyboard")
     claim = claim_or_block(
         task_key,
@@ -431,7 +515,7 @@ async def generate_storyboard_images(project_id: str, data: StoryboardGenerateRe
         project.status = "storyboard_generating"
         db.commit()
 
-        task = start_task(task_key, _run_storyboard_generation(project_id, [shot.id for shot in shots], expected_versions))
+        task = start_task(task_key, _run_storyboard_generation(project_id, [shot.id for shot in shots], expected_versions, allow_degraded=True))
     except BaseException as exc:
         db.rollback()
         finish_task(task_key, "failed", f"storyboard scheduling failed: {exc}")
@@ -517,12 +601,17 @@ async def generate_shot_video(shot_id: str, data: ShotVideoGenerateRequest, db: 
         raise HTTPException(status_code=400, detail="该镜头尚未生成定稿故事板")
     if _can_reuse_existing_video(shot, data.force):
         return {"id": shot.id, "status": shot.status, "video_path": shot.video_path, "audio_path": shot.audio_path}
+    _validate_timing_edit(shot, {}, db)
+    try:
+        provider_duration_capability().validate(float(shot.duration or 0), shot_id=shot.id)
+    except StoryTimingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # 启动前预检：视频端点必配；配音端点默认必配，但视频模型具备原生对白语音
     # 能力（或镜头无台词 / 镜头级显式指定 native）时不强制要求 TTS。
     ensure_providers_ready(
         "shot_video",
-        has_dialogue=bool((shot.dialogue or "").strip()),
+        has_dialogue=bool(_shot_dialogue_lines(shot)),
         audio_mode_override=str(_json_dict(shot.continuity_profile).get("audio_mode") or ""),
     )
 
@@ -560,7 +649,7 @@ async def generate_shot_audio(shot_id: str, data: ShotAudioGenerateRequest, db: 
         raise HTTPException(status_code=404, detail="Shot not found")
     if shot.confirmed and not data.force:
         raise HTTPException(status_code=423, detail="已审核锁定的镜头禁止重新生成配音")
-    if not (shot.dialogue or "").strip():
+    if not _shot_dialogue_lines(shot):
         return {"id": shot.id, "status": shot.status, "audio_path": shot.audio_path, "skipped": True}
     task_key = _shot_task_key(shot_id, "audio")
     expected_version = shot.version or 1
@@ -711,10 +800,50 @@ async def restore_shot_version(shot_id: str, version_id: str, db: Session = Depe
     }
 
 
+def _ensure_reference_provider_capability(db: Session, project_id: str, *, allow_degraded: bool = False) -> dict:
+    """参考图 Provider 不支持参考图时显式降级或阻止，绝不静默纯文本。"""
+
+    adapter, endpoint = image_service._resolve_route()
+    try:
+        adapter, endpoint, _source = image_service._upgrade_to_reference_provider(adapter, endpoint)
+    except Exception:
+        pass
+    if getattr(adapter.capabilities, "reference_images", False):
+        return {}
+    warning = (
+        f"图像 Provider {endpoint.protocol}/{endpoint.model or 'default'} 不支持参考图，"
+        "本次角色三视图/场景基准图不会发送给模型，已切换为纯文本生成。"
+    )
+    report = refresh_project_reference_state(db, project_id)
+    for item in report.get("items", []):
+        if not item.get("reference_images"):
+            continue
+        model = Character if item.get("kind") == "character" else SceneAsset
+        row = db.query(model).filter(model.id == item.get("asset_id")).first()
+        if not row:
+            continue
+        if allow_degraded:
+            from services.reference_readiness_service import mark_reference_degraded
+
+            mark_reference_degraded(db, item.get("kind"), row, reason="用户确认 Provider 纯文本降级", capability_warning=warning)
+        else:
+            from services.reference_readiness_service import mark_reference_unsupported
+
+            mark_reference_unsupported(db, item.get("kind"), row, warning=warning)
+    db.commit()
+    report = refresh_project_reference_state(db, project_id)
+    report["capability_warning"] = warning
+    if not allow_degraded:
+        raise RuntimeError(warning)
+    return report
+
+
 async def _run_storyboard_generation(
     project_id: str,
     shot_ids: list[str],
     expected_versions: dict[str, int] | None = None,
+    *,
+    allow_degraded: bool = False,
 ) -> None:
     """Run one project storyboard job at a time."""
 
@@ -733,14 +862,24 @@ async def _run_storyboard_generation(
         finally:
             db.close()
     async with lock:
-        await _run_storyboard_generation_impl(project_id, shot_ids, expected_versions)
+        await _run_storyboard_generation_impl(project_id, shot_ids, expected_versions, allow_degraded=allow_degraded)
 
 
 async def _run_storyboard_generation_impl(
     project_id: str,
     shot_ids: list[str],
     expected_versions: dict[str, int],
+    *,
+    emit_project_result: bool = True,
+    allow_degraded: bool = False,
+    provider_override: str = "",
+    preferred_size: str = "",
 ) -> None:
+    """生成指定镜头；``emit_project_result=False`` 时作为 fan-out worker 使用。
+
+    worker 模式只更新镜头和版本历史，不在单镜头失败时把整个项目标成 error，
+    也不发布项目级完成事件；调用方负责 fan-in、局部恢复和最终状态。
+    """
     try:
         db = SessionLocal()
         try:
@@ -784,6 +923,11 @@ async def _run_storyboard_generation_impl(
                         for_video=False,
                     )
                 )
+                shot_data["reference_manifest"] = build_manifest_for_shot(db, shot, stage="storyboard")
+                shot_data["reference_versions"] = {
+                    str(item.get("asset_id")): item.get("version")
+                    for item in shot_data["reference_manifest"]
+                }
                 apply_agent_config_to_shot(shot_data, skill_config)
                 style_params = _storyboard_style_params(project, skill_config)
                 seed = 42 + (shot.version or 1) * 100
@@ -804,6 +948,8 @@ async def _run_storyboard_generation_impl(
                 style_params=style_params,
                 project_id=project_id,
                 seed=seed,
+                provider_override=provider_override,
+                preferred_size=preferred_size,
             )
 
             db = SessionLocal()
@@ -836,6 +982,8 @@ async def _run_storyboard_generation_impl(
                 )
                 shot.continuity_profile = json.dumps(storyboard_profile, ensure_ascii=False)
                 shot.continuity_reference_path = previous_reference
+                shot.storyboard_reference_manifest = json.dumps(shot_data.get("reference_manifest", []), ensure_ascii=False)
+                shot.reference_capability_warning = str(image_meta.get("reference_capability_warning", ""))
                 shot.pose_reference_path = ""
                 shot.depth_reference_path = ""
                 shot.image_path = image_path
@@ -881,12 +1029,14 @@ async def _run_storyboard_generation_impl(
                     raise asyncio.CancelledError(f"故事板任务版本已变化: {', '.join(stale_or_missing)}")
 
             project = db.query(Project).filter(Project.id == project_id).first()
-            if project:
+            if project and emit_project_result:
                 project.status = "storyboard_ready"
                 db.commit()
             project_style = (project.style if project else "anime") or "anime"
         finally:
             db.close()
+        if not emit_project_result:
+            return
         await _progress(
             project_id,
             "wait_storyboard_approval",
@@ -907,25 +1057,33 @@ async def _run_storyboard_generation_impl(
         db = SessionLocal()
         try:
             project = db.query(Project).filter(Project.id == project_id).first()
-            if project:
+            if project and emit_project_result:
                 project.status = "error"
-            queued = db.query(Shot).filter(Shot.project_id == project_id, Shot.storyboard_status == "queued").all()
+            queued = (
+                db.query(Shot)
+                .filter(Shot.project_id == project_id, Shot.id.in_(list(expected_versions)))
+                .all()
+            )
             for shot in queued:
+                expected_version = expected_versions.get(shot.id)
+                if expected_version is not None and (shot.version or 1) != expected_version:
+                    continue
                 shot.storyboard_status = "failed"
-                if shot.status == "pending":
+                if shot.status in {"pending", "storyboard_generating"}:
                     shot.status = "failed"
             db.commit()
         finally:
             db.close()
-        await ws_manager.send_to_project(
-            project_id,
-            report_failure(
-                exc,
-                error_type=ERROR_STORYBOARD,
-                message="定稿故事板生成失败，本次任务已停止。请检查镜头参数与模型配置后重试。",
-                context={"project_id": project_id},
-            ),
-        )
+        if emit_project_result:
+            await ws_manager.send_to_project(
+                project_id,
+                report_failure(
+                    exc,
+                    error_type=ERROR_STORYBOARD,
+                    message="定稿故事板生成失败，本次任务已停止。请检查镜头参数与模型配置后重试。",
+                    context={"project_id": project_id},
+                ),
+            )
         raise
 
 
@@ -1070,7 +1228,11 @@ async def _regenerate_single_shot(shot_id: str, reason: str = "", expected_versi
 
 
 async def _run_single_shot_audio(shot_id: str, expected_version: int) -> None:
-    """配音阶段的最小独立 worker；写入前再次校验版本，避免取消后的迟到发布。"""
+    """配音阶段的最小独立 worker；写入前再次校验版本，避免取消后的迟到发布。
+
+    逐句对白按各自 speaker 选择角色音色合成并拼接为一条镜头配音，实测时间轴
+    随对白一起写回（字幕与镜头时间线据此计算）。
+    """
     project_id = ""
     try:
         db = SessionLocal()
@@ -1079,19 +1241,19 @@ async def _run_single_shot_audio(shot_id: str, expected_version: int) -> None:
             if not shot or (shot.version or 1) != expected_version:
                 raise asyncio.CancelledError("镜头版本已变化")
             project_id = shot.project_id
-            dialogue = clean_tts_text(shot.dialogue or "", resolve_skill_config(project_id, db))
-            speaker = (_json_list(shot.characters_in_scene) or [""])[0]
+            skill_config = resolve_skill_config(project_id, db)
+            lines = _shot_dialogue_lines(shot)
             characters = _characters(db, project_id)
-            voice_id = next((item.get("voice_id", "") for item in characters if item.get("name") == speaker), "")
             emotion = shot.emotion or "neutral"
         finally:
             db.close()
-        audio_path = await tts_service.generate_dialogue(
-            text=dialogue,
-            voice_id=voice_id,
-            emotion=emotion,
+        audio_path, timed_lines = await generate_dialogue_track(
+            lines,
+            characters=characters,
             project_id=project_id,
-            shot_id=_versioned_media_id(shot_id, expected_version),
+            media_id=_versioned_media_id(shot_id, expected_version),
+            default_emotion=emotion,
+            text_cleaner=lambda text: clean_tts_text(text, skill_config),
         )
         db = SessionLocal()
         try:
@@ -1099,6 +1261,7 @@ async def _run_single_shot_audio(shot_id: str, expected_version: int) -> None:
             if not shot or (shot.version or 1) != expected_version:
                 raise asyncio.CancelledError("镜头版本已变化")
             shot.audio_path = audio_path
+            shot.dialogue = serialize_dialogue_lines(timed_lines)
             shot.status = "video_done" if shot.video_path else ("storyboard_approved" if shot.confirmed else "storyboard_done")
             create_version(db, shot, "regenerate", task_id=f"shot:{shot_id}:audio")
             db.commit()
@@ -1122,6 +1285,8 @@ async def _run_single_shot_video(
     force: bool = False,
     expected_version: int | None = None,
     reuse_audio: bool = False,
+    provider_override: str = "",
+    resolution_override: str = "",
 ) -> None:
     lock = _shot_generation_locks.setdefault(shot_id, asyncio.Lock())
     if lock.locked():
@@ -1141,6 +1306,12 @@ async def _run_single_shot_video(
                 raise asyncio.CancelledError("镜头版本已变化")
             if _can_reuse_existing_video(shot, force):
                 return
+            video_gate = ensure_generation_gate(db, shot.project_id, allow_degraded=True, shot_ids=[shot.id])
+            if video_gate.get("blocking"):
+                raise RuntimeError(
+                    "一致性参考素材未就绪，视频生成已阻止："
+                    + ", ".join(item.get("name") or item.get("asset_id") for item in video_gate.get("blocking_items", []))
+                )
             project_id = shot.project_id
             project = db.query(Project).filter(Project.id == project_id).first()
             skill_config = resolve_skill_config(project_id, db)
@@ -1174,6 +1345,11 @@ async def _run_single_shot_video(
                     for_video=True,
                 )
             )
+            shot_data["reference_manifest"] = build_manifest_for_shot(db, shot, stage="video")
+            shot_data["reference_versions"] = {
+                str(item.get("asset_id")): item.get("version")
+                for item in shot_data["reference_manifest"]
+            }
             apply_agent_config_to_shot(shot_data, skill_config)
             # 镜头级 audio_mode 覆盖存于 continuity_profile，但一致性上下文会重建
             # profile，这里从数据库存档提升为 shot 顶级字段，保证覆盖不被冲掉。
@@ -1181,10 +1357,8 @@ async def _run_single_shot_video(
             if stored_audio_mode:
                 shot_data["audio_mode"] = str(stored_audio_mode).strip().lower()
             shot_sequence = shot.sequence
-            dialogue = shot.dialogue
+            dialogue_lines = _shot_dialogue_lines(shot)
             emotion = shot.emotion or "neutral"
-            speakers = _json_list(shot.characters_in_scene)
-            speaker = speakers[0] if speakers else ""
         finally:
             db.close()
         _materialize_control_references(project_id, shot_data, skill_config)
@@ -1201,16 +1375,25 @@ async def _run_single_shot_video(
         audio_mode = resolve_audio_mode(shot_data)
         native_routed = audio_mode == "native"
         dialogues = None
+        timed_lines: list = []
         if native_routed:
             # 原生音频路径：对白交给视频模型经 prompt 生成并随视频直出，
-            # 跳过独立 TTS 配音与后续 ffmpeg 音轨合成。
+            # 跳过独立 TTS 配音与后续 ffmpeg 音轨合成。每句对白各自携带
+            # speaker（prompt 中以该角色身份开口），绝不用单一角色冒名。
             audio_path = ""
             shot_data["audio_path"] = ""
-            if dialogue:
+            if dialogue_lines:
                 dialogues = [
-                    Dialogue(role=speaker, text=clean_tts_text(dialogue, skill_config), emotion=emotion)
+                    Dialogue(
+                        role=line.speaker or "角色",
+                        text=clean_tts_text(line.line, skill_config),
+                        emotion=line.emotion or emotion,
+                        start_ms=int(line.start_ms or 0),
+                        end_ms=int(line.end_ms or line.start_ms or 0),
+                    )
+                    for line in dialogue_lines
                 ]
-        elif dialogue:
+        elif dialogue_lines:
             reusable_audio = _reusable_audio_path(shot_id, expected_version, audio_path) if reuse_audio else ""
             if reusable_audio:
                 # 续跑 / 重试：该版本已经有有效配音，不再重复调用 TTS。
@@ -1231,13 +1414,13 @@ async def _run_single_shot_video(
                     f"正在生成镜头 {shot_sequence} 的配音",
                     job_keys=(f"shot:{shot_id}:video",),
                 )
-                voice_id = next((item.get("voice_id", "") for item in characters if item.get("name") == speaker), "")
-                audio_path = await tts_service.generate_dialogue(
-                    text=clean_tts_text(dialogue, skill_config),
-                    voice_id=voice_id,
-                    emotion=emotion,
+                audio_path, timed_lines = await generate_dialogue_track(
+                    dialogue_lines,
+                    characters=characters,
                     project_id=project_id,
-                    shot_id=media_id,
+                    media_id=media_id,
+                    default_emotion=emotion,
+                    text_cleaner=lambda text: clean_tts_text(text, skill_config),
                 )
                 shot_data["audio_path"] = audio_path
 
@@ -1249,10 +1432,23 @@ async def _run_single_shot_video(
             job_keys=(f"shot:{shot_id}:video",),
         )
         video_shot_data = {**shot_data, "shot_id": media_id, "dialogues": dialogues}
-        result = await seedance_service.generate_shot_video(video_shot_data, characters, scenes, project_id)
+        video_options = {}
+        if provider_override:
+            video_options["provider_override"] = provider_override
+        if resolution_override:
+            video_options["resolution_override"] = resolution_override
+        result = await seedance_service.generate_shot_video(
+            video_shot_data,
+            characters,
+            scenes,
+            project_id,
+            **video_options,
+        )
         if native_routed and not result.get("native_audio"):
             raise RuntimeError("视频适配器未按原生音频模式返回带音轨视频，已阻止无声成品")
         continuity_profile = shot_data.get("continuity_profile", {}) or {}
+        continuity_profile["reference_capability_warning"] = result.get("reference_capability_warning", "")
+        continuity_profile["reference_manifest"] = result.get("reference_manifest", shot_data.get("reference_manifest", []))
         if result.get("reference_payload_mode"):
             continuity_profile["seedance_reference_payload_mode"] = result["reference_payload_mode"]
             continuity_profile["reference_mode"] = "first_frame_only"
@@ -1283,9 +1479,14 @@ async def _run_single_shot_video(
             shot.reference_weights = json.dumps(shot_data.get("reference_weights", {}), ensure_ascii=False)
             shot.continuity_profile = json.dumps(shot_data.get("continuity_profile", {}), ensure_ascii=False)
             shot.continuity_reference_path = previous_reference
+            shot.video_reference_manifest = json.dumps(shot_data.get("reference_manifest", []), ensure_ascii=False)
+            shot.reference_capability_warning = str(shot_data.get("continuity_profile", {}).get("reference_capability_warning", ""))
             shot.pose_reference_path = shot_data.get("pose_reference_path", "")
             shot.depth_reference_path = shot_data.get("depth_reference_path", "")
             shot.audio_path = audio_path
+            if timed_lines:
+                # 新配音的逐句实测时间轴随镜头落库，字幕与时间线按此计算。
+                shot.dialogue = serialize_dialogue_lines(timed_lines)
             shot.video_path = result["video_path"]
             shot.last_frame_path = result.get("frame_path", "")
             if not shot.image_path:
@@ -1330,6 +1531,38 @@ async def _run_single_shot_video(
         lock.release()
 
 
+def _shot_dialogue_lines(s: Shot) -> list:
+    """读取镜头对白为结构化列表；旧版纯文本自动迁移为单条（说话人取场内
+    第一个角色并记录 warning，保持旧配音行为可追溯）。"""
+
+    speakers = _json_list(s.characters_in_scene)
+    fallback = speakers[0] if speakers and isinstance(speakers[0], str) else ""
+    return parse_shot_dialogue(
+        s.dialogue,
+        fallback_speaker=fallback,
+        default_emotion=s.emotion or "neutral",
+        warn_key=f"shot {s.id}",
+    )
+
+
+def _serialize_dialogue_input(value, shot: Shot, db: Session) -> str:
+    """把请求 DTO 的对白列表序列化入库，并做说话人可追踪校验。"""
+
+    lines = parse_shot_dialogue(value)
+    if lines:
+        warn_unknown_speakers(lines, _characters(db, shot.project_id), context=f"update shot {shot.id}")
+    if (
+        len(lines) == 1
+        and not lines[0].speaker
+        and not lines[0].action
+        and lines[0].start_ms is None
+        and lines[0].end_ms is None
+    ):
+        # 单句无说话人/时间轴的旧版输入保持纯文本存储；完整结构化输入仍原样 JSON 化。
+        return str(lines[0].line)
+    return serialize_dialogue_lines(lines)
+
+
 def _serialize_shot(s: Shot) -> dict:
     return {
         "id": s.id,
@@ -1338,10 +1571,11 @@ def _serialize_shot(s: Shot) -> dict:
         "shot_type": s.shot_type,
         "scene_description": s.scene_description,
         "character_action": s.character_action,
-        "dialogue": s.dialogue,
+        "dialogue": dialogue_lines_payload(_shot_dialogue_lines(s)),
         "camera_angle": s.camera_angle,
         "camera_movement": s.camera_movement or "静止",
         "duration": s.duration,
+        "estimated_speech_ms": s.estimated_speech_ms or 0,
         "emotion": s.emotion,
         "transition": s.transition,
         "visual_notes": s.visual_notes or "",
@@ -1354,6 +1588,11 @@ def _serialize_shot(s: Shot) -> dict:
         "version": s.version,
         "confirmed": s.confirmed,
         "media_stale": bool(s.media_stale),
+        "consistency_status": getattr(s, "consistency_status", "pending"),
+        "consistency_report": _json_dict(getattr(s, "consistency_report", "{}")),
+        "storyboard_reference_manifest": _json_list_raw(getattr(s, "storyboard_reference_manifest", "[]")),
+        "video_reference_manifest": _json_list_raw(getattr(s, "video_reference_manifest", "[]")),
+        "reference_capability_warning": getattr(s, "reference_capability_warning", ""),
         "characters_in_scene": json.loads(s.characters_in_scene) if s.characters_in_scene else [],
         "scene_asset_id": s.scene_asset_id or "",
         "character_asset_ids": json.loads(s.character_asset_ids) if s.character_asset_ids else [],
@@ -1379,6 +1618,13 @@ def _shot_update_payload(shot: Shot) -> dict:
         "version": shot.version or 1,
         "confirmed": bool(shot.confirmed),
         "media_stale": bool(shot.media_stale),
+        "duration": shot.duration,
+        "estimated_speech_ms": shot.estimated_speech_ms or 0,
+        "consistency_status": getattr(shot, "consistency_status", "pending"),
+        "consistency_report": _json_dict(getattr(shot, "consistency_report", "{}")),
+        "storyboard_reference_manifest": _json_list_raw(getattr(shot, "storyboard_reference_manifest", "[]")),
+        "video_reference_manifest": _json_list_raw(getattr(shot, "video_reference_manifest", "[]")),
+        "reference_capability_warning": getattr(shot, "reference_capability_warning", ""),
         "image_path": shot.image_path,
         "storyboard_path": shot.storyboard_path,
         "audio_path": shot.audio_path,
@@ -1541,6 +1787,14 @@ def _scenes(db, project_id: str) -> dict[str, dict]:
             "style_fingerprint": item.style_fingerprint or "",
         }
     return result
+
+
+def _json_list_raw(raw: str | None) -> list:
+    try:
+        value = json.loads(raw or "[]")
+        return value if isinstance(value, list) else []
+    except (TypeError, ValueError):
+        return []
 
 
 def _json_dict(raw: str | None) -> dict:
@@ -1762,13 +2016,30 @@ async def _ensure_scene_baselines(
                     .first()
                 )
                 if model and not model.baseline_image_path:
-                    model.baseline_image_path = ref_path
-                    model.reference_images = json.dumps([ref_path], ensure_ascii=False)
+                    from services.reference_readiness_service import mark_reference_success
+
+                    mark_reference_success(db, "scene", model, ref_path)
                     db.commit()
             finally:
                 db.close()
-        except Exception:
-            continue
+        except Exception as exc:
+            from services.error_reporter import log_failure
+            from services.reference_readiness_service import mark_reference_failure
+
+            error_id = log_failure(exc, error_type=ERROR_STORYBOARD, context={"asset_type": "scene", "asset_id": scene_id})
+            db = SessionLocal()
+            try:
+                model = (
+                    db.query(SceneAsset)
+                    .filter(SceneAsset.id == scene_id, SceneAsset.project_id == asset_project_id)
+                    .first()
+                )
+                if model:
+                    mark_reference_failure(db, "scene", model, exc, error_id=error_id)
+                    db.commit()
+                    refresh_project_reference_state(db, project_id)
+            finally:
+                db.close()
 
 
 def _previous_reference_for_shot(db: Session, shot: Shot, prefer_last_frame: bool = False) -> str:
@@ -1790,7 +2061,7 @@ def _previous_reference_for_shot(db: Session, shot: Shot, prefer_last_frame: boo
     return ""
 
 
-async def _progress(project_id: str, step: str, progress: int, message: str, *, job_keys: tuple[str, ...] = ()):
+async def _progress(project_id: str, step: str, progress: int, message: str, *, job_keys: tuple[str, ...] = (), report: dict | None = None):
     """推送项目进度，并把同一份进度写进任务中心的 durable 记录。
 
     ``job_keys`` 传候选键即可：只有真正持有当前 run token 的那个会写入成功，其余
@@ -1798,5 +2069,5 @@ async def _progress(project_id: str, step: str, progress: int, message: str, *, 
     """
 
     for key in job_keys:
-        update_job_progress(key, progress, current_step=step, message=message)
+        update_job_progress(key, progress, current_step=step, message=message, report=report)
     await ws_manager.send_to_project(project_id, {"type": "progress", "step": step, "progress": progress, "message": message})

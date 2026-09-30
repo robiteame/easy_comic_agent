@@ -38,6 +38,7 @@ from services.job_types import (
 )
 from services.provider_readiness import CODE_PROVIDER_NOT_CONFIGURED, format_message, missing_providers
 from services.task_registry import cancel as cancel_job_task
+from services.shot_dialogue import parse_shot_dialogue
 
 RETRY_MODE = "retry"
 RESUME_MODE = "resume"
@@ -173,7 +174,7 @@ def _provider_block(db: Session, job: BackgroundJob) -> ActionOutcome | None:
         profile = _json_dict(shot.continuity_profile)
         missing = missing_providers(
             "shot_video",
-            has_dialogue=bool((shot.dialogue or "").strip()),
+            has_dialogue=bool(parse_shot_dialogue(shot.dialogue)),
             audio_mode_override=str(profile.get("audio_mode") or ""),
         )
     else:

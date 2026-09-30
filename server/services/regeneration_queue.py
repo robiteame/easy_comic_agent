@@ -351,7 +351,13 @@ async def _run_item(queue_job_id: str) -> None:
                 if version_row is None:
                     raise RuntimeError(f"镜头版本 v{requested_version} 不存在")
                 create_version(run_db, shot, "regenerate", task_id=key)
-                apply_snapshot_to_shot(shot, parse_snapshot(version_row))
+                snapshot = parse_snapshot(version_row)
+                apply_snapshot_to_shot(shot, snapshot)
+                # 选择性重生成面向新结构化对白：历史纯文本快照恢复时迁移到单条结构。
+                if isinstance(snapshot.get("dialogue"), str):
+                    from services.shot_dialogue import parse_shot_dialogue, serialize_dialogue_lines
+
+                    shot.dialogue = serialize_dialogue_lines(parse_shot_dialogue(snapshot.get("dialogue")))
                 shot.version = int(shot.version or 1) + 1
                 run_db.commit()
             if bool(queued.queue_resume_missing) and _artifact_ok(shot, stage):

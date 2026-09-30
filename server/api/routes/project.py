@@ -17,6 +17,7 @@ from db import SessionLocal, get_db
 from models import Character, Project, SceneAsset, Shot, ShotVersion
 from services.image_service import ImageService
 from services.invalidation_service import mark_shot_media_stale
+from services.reference_readiness_service import mark_reference_failure, mark_reference_success, refresh_project_reference_state
 from services.security import UploadLimitExceeded, safe_path, save_upload_stream, validate_identifier, validate_video_upload
 from services.skill_config_service import agent_prompt_append, resolve_effective_style, resolve_skill_config
 from services.storage_service import StorageQuotaExceeded, StorageService
@@ -45,6 +46,7 @@ class ProjectCreate(BaseModel):
     output_format: schemas.OutputFormat = "9:16"
     resolution: schemas.Resolution = "1080p"
     platform: schemas.Platform = "douyin"
+    target_duration: schemas.TargetDuration = 45
 
 
 class ProjectUpdate(BaseModel):
@@ -57,6 +59,7 @@ class ProjectUpdate(BaseModel):
     output_format: schemas.OutputFormat | None = None
     resolution: schemas.Resolution | None = None
     platform: schemas.Platform | None = None
+    target_duration: schemas.TargetDuration | None = None
 
 
 @router.post("")
@@ -89,6 +92,7 @@ async def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
             output_format=project.output_format,
             resolution=project.resolution,
             platform=project.platform,
+            target_duration=project.target_duration,
             consistency_config=project.consistency_config,
         )
         db.add(first_episode)
@@ -122,7 +126,7 @@ async def update_project(project_id: str, data: ProjectUpdate, db: Session = Dep
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
     changed = data.model_dump(exclude_unset=True)
-    generation_fields = {"style", "output_format", "resolution"}
+    generation_fields = {"style", "output_format", "resolution", "target_duration"}
     generation_changed = any(
         key in generation_fields and getattr(project, key) != value
         for key, value in changed.items()
@@ -295,7 +299,7 @@ async def _run_asset_rebuild(project_id: str) -> None:
             try:
                 row = db.query(Character).filter(Character.id == item["id"]).first()
                 if row:
-                    row.reference_images = json.dumps([ref_path], ensure_ascii=False)
+                    mark_reference_success(db, "character", row, ref_path)
                     row.asset_status = "active"
                     row.style_fingerprint = fingerprint
                     db.commit()
@@ -309,6 +313,14 @@ async def _run_asset_rebuild(project_id: str) -> None:
     for item, result in zip(characters, results):
         if isinstance(result, BaseException):
             failures.append(f"角色 {item['name']}: {result}")
+            db = SessionLocal()
+            try:
+                row = db.query(Character).filter(Character.id == item["id"]).first()
+                if row:
+                    mark_reference_failure(db, "character", row, result)
+                    db.commit()
+            finally:
+                db.close()
         elif result:
             rebuilt_characters += 1
 
@@ -344,7 +356,7 @@ async def _run_asset_rebuild(project_id: str) -> None:
                 row = db.query(SceneAsset).filter(SceneAsset.id == item["id"]).first()
                 if row:
                     row.baseline_image_path = ref_path
-                    row.reference_images = json.dumps([ref_path], ensure_ascii=False)
+                    mark_reference_success(db, "character", row, ref_path)
                     row.asset_status = "active"
                     row.style_fingerprint = fingerprint
                     db.commit()
@@ -353,12 +365,26 @@ async def _run_asset_rebuild(project_id: str) -> None:
             rebuilt_scenes += 1
         except Exception as exc:
             failures.append(f"场景 {item['name']}: {exc}")
+            db = SessionLocal()
+            try:
+                row = db.query(SceneAsset).filter(SceneAsset.id == item["id"]).first()
+                if row:
+                    mark_reference_failure(db, "scene", row, exc)
+                    db.commit()
+            finally:
+                db.close()
 
+    report_db = SessionLocal()
+    try:
+        consistency_report = refresh_project_reference_state(report_db, project_id)
+    finally:
+        report_db.close()
     status = "failed" if failures else "completed"
     finish_task(
         f"project:{project_id}:assets-rebuild",
         status,
         "；".join(failures)[:500] or "资产重建完成",
+        report=consistency_report,
     )
     await ws_manager.send_to_project(
         project_id,
@@ -369,6 +395,7 @@ async def _run_asset_rebuild(project_id: str) -> None:
             "rebuilt_characters": rebuilt_characters,
             "rebuilt_scenes": rebuilt_scenes,
             "failures": failures,
+            "consistency_report": consistency_report,
         },
     )
 
@@ -592,7 +619,10 @@ def _serialize_project(project: Project, parent_titles: dict[str, str] | None = 
         "output_format": project.output_format,
         "resolution": project.resolution,
         "platform": project.platform,
+        "target_duration": project.target_duration,
+        "timing_plan": json.loads(project.timing_plan) if project.timing_plan else {},
         "consistency_config": json.loads(project.consistency_config) if project.consistency_config else {},
+        "consistency_report": json.loads(project.consistency_report) if project.consistency_report else {},
         "created_at": project.created_at.isoformat(),
         "updated_at": project.updated_at.isoformat(),
     }
@@ -957,10 +987,14 @@ def _invalidate_assets_for_style_change(db: Session, project: Project) -> None:
     asset_project_id = project.id
     for character in db.query(Character).filter(Character.project_id == asset_project_id).all():
         character.asset_status = "stale"
+        character.reference_status = "stale"
+        character.reference_failure_reason = "画风已切换，参考素材需按新画风重建"
         character.reference_images = "[]"
         character.lora_profile = ""
         character.ip_adapter_profile = ""
     for scene in db.query(SceneAsset).filter(SceneAsset.project_id == asset_project_id).all():
         scene.asset_status = "stale"
+        scene.reference_status = "stale"
+        scene.reference_failure_reason = "画风已切换，参考素材需按新画风重建"
         scene.baseline_image_path = ""
         scene.reference_images = "[]"

@@ -20,6 +20,9 @@ def mark_shot_media_stale(shot: Shot, *, reset_confirmed: bool = True) -> None:
     """
 
     shot.media_stale = True
+    # 参考素材版本变化后，镜头当前故事板/视频所用 manifest 不再代表最新版本。
+    if hasattr(shot, "consistency_status"):
+        shot.consistency_status = "stale"
     if reset_confirmed:
         shot.confirmed = False
 

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { EditableDialogueLine } from '../services/dialogueTimeline.ts'
 import { mergeShotServerUpdate, type ShotServerUpdate } from '../services/shotUpdateGuard.ts'
 
 export interface Shot {
@@ -8,10 +9,11 @@ export interface Shot {
   shot_type: string
   scene_description: string
   character_action: string
-  dialogue: string
+  dialogue: string | EditableDialogueLine[]
   camera_angle: string
   camera_movement: string
   duration: number
+  estimated_speech_ms?: number
   emotion: string
   transition: string
   visual_notes: string
@@ -25,6 +27,11 @@ export interface Shot {
   confirmed: boolean
   // 参数/配置已变更但旧素材仍保留：true 时界面在旧素材上显示「待重新生成」。
   media_stale?: boolean
+  consistency_status?: 'pending' | 'ready' | 'failed' | 'degraded' | 'unsupported' | 'stale'
+  consistency_report?: Record<string, any>
+  storyboard_reference_manifest?: Array<Record<string, any>>
+  video_reference_manifest?: Array<Record<string, any>>
+  reference_capability_warning?: string
   characters_in_scene: string[]
   scene_asset_id: string
   character_asset_ids: string[]

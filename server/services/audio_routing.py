@@ -18,6 +18,7 @@ import logging
 
 from services.providers.endpoint import EndpointConfig, get_endpoint
 from services.providers.registry import UnknownProtocolError, get_adapter
+from services.shot_dialogue import parse_shot_dialogue
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,8 @@ def resolve_audio_mode(shot: dict, endpoint: EndpointConfig | None = None) -> st
     if requested == "native":
         return "native"
     # auto：角色特写且带关键台词的镜头交给原生音频，其余用 tts。
-    has_dialogue = bool(str(shot.get("dialogue") or "").strip())
+    # dialogue 可能是结构化列表（新）或纯文本/JSON 字符串（旧），统一解析。
+    has_dialogue = any(line.line.strip() for line in parse_shot_dialogue(shot.get("dialogue")))
     closeup = str(shot.get("shot_type") or "").strip().lower() in CLOSEUP_SHOT_TYPES
     return "native" if has_dialogue and closeup else "tts"
 
