@@ -70,6 +70,8 @@ const ProgressDebugPanel: React.FC<ProgressDebugPanelProps> = ({
   const refresh = useCallback(async () => {
     if (!job?.id) {
       setRestEvents([])
+      setError('')
+      setLoading(false)
       return
     }
     setLoading(true)
