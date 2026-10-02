@@ -34,7 +34,10 @@ jobs:
       - name: Run regression tests
         env:
           PYTHONPATH: server
-        run: python -m unittest discover -s server/tests -p 'test_*.py' -v
+        # -t makes discovery import the tests package first, so
+        # tests/__init__.py sets up the sandboxed environment before any
+        # test module binds settings to the real repository directories.
+        run: python -m unittest discover -s server/tests -t server -p 'test_*.py' -v
       - name: Run pytest collection
         run: python -m pytest -q
 
