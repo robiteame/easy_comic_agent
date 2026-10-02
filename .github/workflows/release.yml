@@ -167,7 +167,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$GH_REF_NAME" \
+          gh release upload "$GITHUB_REF_NAME" \
             "client/release/SHA256SUMS-${{ matrix.os }}.txt" \
             "server-deps-${{ matrix.os }}.sbom.json" \
             "npm-deps-${{ matrix.os }}.sbom.json" \
