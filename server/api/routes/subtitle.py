@@ -23,6 +23,7 @@ from services.av_config_service import bump_av_config_version
 from services.ffmpeg_service import FFmpegService
 from services.security import validate_identifier
 from services.shot_dialogue import dialogue_plain_text, parse_shot_dialogue
+from services.story_timing import load_shot_execution_plan
 from services.subtitle_service import (
     SubtitleCueData,
     SubtitleStyle,
@@ -383,6 +384,15 @@ async def generate_subtitle_from_shots(track_id: str, data: SubtitleGenerateRequ
     inputs: list[ShotDialogueInput] = []
     for shot in shots:
         duration_ms = int(round(max(0.0, float(shot.duration or 0.0)) * 1000))
+        # 统一执行计划：剪辑窗口与实测对白时间轴与视频生成/后期合同一份；
+        # 没有计划的旧镜头回落 duration 字段（行为不变）。
+        try:
+            profile = json.loads(shot.continuity_profile or "{}")
+        except (TypeError, ValueError):
+            profile = {}
+        execution_plan = load_shot_execution_plan({"continuity_profile": profile})
+        if execution_plan is not None and execution_plan.effective_duration_ms > 0:
+            duration_ms = int(execution_plan.effective_duration_ms)
         tts_duration_ms = 0
         if shot.audio_path:
             tts_duration_ms = await ffmpeg_service.probe_duration_ms(shot.audio_path)
@@ -417,6 +427,7 @@ async def generate_subtitle_from_shots(track_id: str, data: SubtitleGenerateRequ
                     )
                     for line in lines
                 ],
+                execution_plan=execution_plan,
             )
         )
         cursor_ms += duration_ms

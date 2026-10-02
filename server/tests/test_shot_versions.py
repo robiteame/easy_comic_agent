@@ -196,7 +196,7 @@ class RegenerationVersionTests(ShotVersionTestCase):
             return str(TEST_ROOT / "stale-result.png")
 
         with patch.object(shot_route.image_service, "generate_shot_image", side_effect=generate_then_bump_version):
-            with self.assertRaises(asyncio.CancelledError):
+            with self.assertRaisesRegex(RuntimeError, "版本已变化"):
                 asyncio.run(shot_route._regenerate_single_shot(shot.id, "reason", expected_version=1))
 
         self.assertEqual(self.rows(shot.id), before)

@@ -68,6 +68,7 @@ export const ERROR_CODE_LABELS: Record<string, string> = {
   provider_invalid_request: 'API 参数错误',
   dependency_failed: '前置阶段失败',
   storage_error: '存储异常',
+  llm_output_truncated: '模型输出超长被截断',
   budget_exceeded: '超出项目预算',
   budget_soft_exceeded: '接近预算上限',
 }
@@ -83,11 +84,20 @@ export const FAILURE_CATEGORY_OPTIONS: { value: string; label: string }[] = [
   { value: 'dependency_failed', label: '前置阶段失败' },
   { value: 'budget_exceeded', label: '超出项目预算' },
   { value: 'storage_error', label: '存储异常' },
+  { value: 'llm_output_truncated', label: '模型输出超长被截断' },
   { value: 'job_failed', label: '其他失败' },
 ]
 
 /** 类别徽标的色调：账户类可自查（橙）、配置/调用类需处理（红）、环境/业务类（灰）。 */
 export type ErrorCodeTone = 'warn' | 'danger' | 'muted'
+
+/** 输出截断这类确定性失败的可执行建议：让用户知道下一步改什么，而不是重试同样的配置。 */
+export const TRUNCATION_ADVICE =
+  '模型输出达到上限被截断，重试同样配置无效。请在「模型与 API」中调大输出额度（max_tokens / max_output_tokens），或改用支持更大输出的端点；长剧本会自动分段解析，也可手动拆分后再试。'
+
+export function isTruncationErrorCode(code: string): boolean {
+  return code === 'llm_output_truncated'
+}
 
 export function errorCodeTone(code: string): ErrorCodeTone {
   if (code === 'provider_quota_exceeded' || code === 'provider_rate_limited') return 'warn'
@@ -96,6 +106,7 @@ export function errorCodeTone(code: string): ErrorCodeTone {
     code === 'provider_invalid_request' ||
     code === 'provider_config_error' ||
     code === 'timeout' ||
+    code === 'llm_output_truncated' ||
     code === 'job_failed' ||
     code === ''
   ) {

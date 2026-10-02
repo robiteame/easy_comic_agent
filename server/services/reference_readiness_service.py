@@ -15,6 +15,7 @@ from typing import Any, Iterable
 from sqlalchemy.orm import Session
 
 from models import Character, Project, SceneAsset, Shot
+from services.consistency_service import ConsistencyService
 from services.error_reporter import redact
 
 REFERENCE_STATUSES = ("ready", "failed", "degraded", "unsupported", "stale")
@@ -193,7 +194,20 @@ def build_report(db: Session, asset_project_id: str, *, persist: bool = True) ->
     return report
 
 
-def refresh_project_reference_state(db: Session, project_id: str, *, persist: bool = True) -> dict[str, Any]:
+def refresh_project_reference_state(
+    db: Session,
+    project_id: str,
+    *,
+    persist: bool = True,
+    allow_needs_review: bool = True,
+) -> dict[str, Any]:
+    """刷新项目/镜头的参考素材就绪状态。
+
+    ``allow_needs_review=False`` 用于显式 auto 模式：自动流程不得把项目状态写成
+    ``needs_review``（那等价于等待人工审核）。此时阻塞原因仍写入 consistency_report
+    并由图的恢复阶梯处理，绝不静默通过。
+    """
+
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         return {"status": "failed", "blocking": True, "items": [], "affected_shot_ids": []}
@@ -229,10 +243,14 @@ def refresh_project_reference_state(db: Session, project_id: str, *, persist: bo
         )
 
     project.consistency_report = json.dumps(report, ensure_ascii=False)
-    if report["blocking"] and project.status not in {"error", "needs_review"}:
+    if report["blocking"] and allow_needs_review and project.status not in {"error", "needs_review"}:
         project.status = "needs_review"
     elif not report["blocking"] and report["degraded"] and project.status not in {"error"}:
         project.status = "degraded"
+    elif report["blocking"] and not allow_needs_review:
+        # 自动模式：不写 needs_review，但阻塞状态必须可见地为 degraded/error。
+        if project.status not in {"error", "needs_review"}:
+            project.status = "degraded"
     if persist:
         db.commit()
     return report
@@ -313,8 +331,15 @@ def mark_reference_unsupported(
     item.reference_error_id = str(error_id or "")
 
 
-def build_manifest_for_shot(db: Session, shot: Shot, *, stage: str = "storyboard") -> list[dict[str, Any]]:
-    """记录本次下游生成实际绑定的参考素材及版本。"""
+def build_manifest_for_shot(
+    db: Session,
+    shot: Shot,
+    *,
+    stage: str = "storyboard",
+    continuity_profile: dict[str, Any] | None = None,
+    continuity_reference_path: str = "",
+) -> list[dict[str, Any]]:
+    """记录本次下游生成实际绑定的参考素材、版本和连续性决策。"""
 
     project = db.query(Project).filter(Project.id == shot.project_id).first()
     asset_project_id = (project.parent_project_id if project else "") or shot.project_id
@@ -351,15 +376,29 @@ def build_manifest_for_shot(db: Session, shot: Shot, *, stage: str = "storyboard
                         "sent": stage == "storyboard",
                     }
                 )
-    continuity = str(shot.continuity_reference_path or "")
-    if continuity:
+    profile = dict(continuity_profile or _json(getattr(shot, "continuity_profile", "{}"), {}))
+    resolved_path = str(continuity_reference_path or shot.continuity_reference_path or "")
+    profile.setdefault("continuity_reference_path", resolved_path)
+    profile.setdefault("continuity_reference_used", bool(resolved_path))
+    if not profile.get("continuity_reference_reason") and not resolved_path:
+        profile["continuity_reference_reason"] = "continuity_policy_not_resolved"
+    continuity_item = ConsistencyService.continuity_manifest_item(profile)
+    continuity_item.update(
+        {
+            "version": hashlib.sha256(resolved_path.encode()).hexdigest()[:16] if resolved_path else "",
+            "usage": "direct_reference" if stage == "storyboard" else "upstream_dependency",
+            "sent": bool(resolved_path and stage == "storyboard"),
+        }
+    )
+    manifest.append(continuity_item)
+    if resolved_path and continuity_item.get("used"):
         manifest.append(
             {
                 "type": "continuity_frame",
                 "asset_id": "continuity",
-                "name": "previous-shot-frame",
-                "path": continuity,
-                "version": hashlib.sha256(continuity.encode()).hexdigest()[:16],
+                "name": "previous-shot-last-frame",
+                "path": resolved_path,
+                "version": hashlib.sha256(resolved_path.encode()).hexdigest()[:16],
                 "status": "ready",
                 "usage": "direct_reference" if stage == "storyboard" else "upstream_dependency",
                 "sent": stage == "storyboard",
@@ -402,8 +441,9 @@ def ensure_generation_gate(
     *,
     allow_degraded: bool = False,
     shot_ids: list[str] | None = None,
+    allow_needs_review: bool = True,
 ) -> dict[str, Any]:
-    report = refresh_project_reference_state(db, project_id)
+    report = refresh_project_reference_state(db, project_id, allow_needs_review=allow_needs_review)
     scoped = report
     if shot_ids is not None:
         wanted = set(str(value) for value in shot_ids)

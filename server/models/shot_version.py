@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Index, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, Index, Integer, String, Text
 
 from .base import Base
 
@@ -37,4 +37,57 @@ class ShotVersion(Base):
     content_hash = Column(String, nullable=False, default="")
     # 镜头字段快照 JSON（_serialize_shot 的字段集 + prompt/negative_prompt）。
     snapshot = Column(Text, nullable=False, default="{}")
+    # 候选选择属于版本事实：选择结果和可解释 trace 同时写入不可变历史。
+    candidate_selection = Column(Text, nullable=False, default="{}")
+    decision_trace = Column(Text, nullable=False, default="{}")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ShotVideoCandidate(Base):
+    """视频候选的独立持久化记录。
+
+    候选生成不改写 ``Shot.video_path``：每个候选只保存自己的媒体路径和生成元数据，
+    全部候选完成后才由选择器把选中项发布为正式视频。失败尝试与重试均追加新行，
+    旧失败不会被成功结果覆盖。
+    """
+
+    __tablename__ = "shot_video_candidates"
+    __table_args__ = (
+        Index("ix_shot_video_candidates_shot_version", "shot_id", "shot_version"),
+        Index("ix_shot_video_candidates_batch", "batch_id"),
+    )
+
+    candidate_id = Column(String, primary_key=True)
+    shot_id = Column(String, nullable=False)
+    project_id = Column(String, nullable=False, default="")
+    shot_version = Column(Integer, nullable=False, default=1)
+    batch_id = Column(String, nullable=False, default="", index=True)
+    candidate_index = Column(Integer, nullable=False, default=1)
+    # pending / running / succeeded / failed / invalidated
+    status = Column(String, nullable=False, default="pending")
+    # 稳定候选契约：候选产物永不等于 Shot.video_path 正式发布路径。
+    path = Column(String, nullable=False, default="")
+    last_frame_path = Column(String, nullable=False, default="")
+    provider = Column(String, nullable=False, default="")
+    model = Column(String, nullable=False, default="")
+    seed = Column(Integer, nullable=True)
+    recipe_hash = Column(String, nullable=False, default="")
+    reference_manifest = Column(Text, nullable=False, default="[]")
+    generation_duration_ms = Column(Integer, nullable=False, default=0)
+    # 本步骤只有确定性结构/技术分数，不接入深度视觉质量模型。
+    score = Column(Float, nullable=False, default=0.0)
+    metrics = Column(Text, nullable=False, default="{}")
+    failure = Column(Text, nullable=False, default="{}")
+    # 旧字段继续保留，兼容已有查询/数据迁移。
+    video_path = Column(String, nullable=False, default="")
+    tail_frame_path = Column(String, nullable=False, default="")
+    execution_plan_hash = Column(String, nullable=False, default="")
+    structural_passed = Column(Boolean, nullable=True)
+    structural_metrics = Column(Text, nullable=False, default="{}")
+    failure_kind = Column(String, nullable=False, default="")
+    failure_message = Column(Text, nullable=False, default="")
+    retry_of_candidate_id = Column(String, nullable=False, default="")
+    selected = Column(Boolean, nullable=False, default=False)
+    selection_reason = Column(String, nullable=False, default="")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    selected_at = Column(DateTime, nullable=True)

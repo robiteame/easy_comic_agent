@@ -4,6 +4,9 @@ import {
   ACTIVE_STATUSES,
   DEFAULT_FILTERS,
   EMPTY_FILTERED_TEXT,
+  ERROR_CODE_LABELS,
+  FAILURE_CATEGORY_OPTIONS,
+  TRUNCATION_ADVICE,
   applyJobEvent,
   emptyStateText,
   errorCategoryLabel,
@@ -16,6 +19,7 @@ import {
   matchesFilters,
   formatDuration,
   formatRelativeTime,
+  isTruncationErrorCode,
   jobActionState,
   jobSection,
   mergeJobLists,
@@ -363,5 +367,65 @@ try {
 } finally {
   process.env.TZ = ORIGINAL_TZ
 }
+
+// --- 模型输出截断（llm_output_truncated） ---------------------------------
+// 后端把输出截断从普通解析失败中拆出来：前端必须能用稳定错误码展示专门文案，
+// 任务失败后离开活动列表（停止 loading），并给出可执行建议而不是「正在解析剧本」。
+
+const truncationJob = makeJob({
+  id: 'job-truncated',
+  status: 'failed',
+  status_label: '失败',
+  job_type: 'pipeline',
+  can_retry: true,
+  error_code: 'llm_output_truncated',
+  error_message: '模型输出超过最大长度并被截断（finish_reason=length，输出 4096/16384 tokens）；请增加输出额度或按场次分段解析',
+  current_step: 'parse_script',
+})
+
+assert.equal(isTruncationErrorCode('llm_output_truncated'), true, '截断错误码有专门判定函数')
+assert.equal(isTruncationErrorCode('job_failed'), false)
+assert.ok(TRUNCATION_ADVICE.length > 10, '截断失败必须附带可执行建议文案')
+
+assert.equal(
+  ERROR_CODE_LABELS.llm_output_truncated,
+  '模型输出超长被截断',
+  '错误码标签与后端 job_types.ERROR_CODE_LABELS 保持一致',
+)
+assert.ok(
+  FAILURE_CATEGORY_OPTIONS.some((option) => option.value === 'llm_output_truncated'),
+  '截断必须出现在失败原因筛选项中',
+)
+assert.equal(errorCodeTone('llm_output_truncated'), 'danger', '截断属于需要用户处理的调用类失败')
+assert.equal(
+  errorCategoryLabel(truncationJob),
+  '模型输出超长被截断',
+  '任务卡片显示截断类别，而不是回退到「任务失败」',
+)
+assert.ok(
+  errorHeadline(truncationJob).includes('被截断'),
+  '失败首行文案保留截断诊断信息',
+)
+assert.equal(
+  filterJobs([truncationJob], { ...DEFAULT_FILTERS, errorCodes: ['llm_output_truncated'] }).length,
+  1,
+  '截断失败可按错误码筛出',
+)
+assert.equal(jobSection(truncationJob.status), 'failed', '失败任务离开活动分组')
+
+// 运行中的任务收到终态事件后必须立即离开活动列表：这是「前端停止 loading」的判定来源。
+const parsingJob = makeJob({
+  id: 'job-truncated',
+  status: 'running',
+  progress: 8,
+  current_step: 'parse_script',
+  message: '正在解析剧本（第 2/4 段）',
+})
+const afterFailure = applyJobEvent([parsingJob], {
+  type: 'job.failed',
+  job: { ...parsingJob, status: 'failed', error_code: 'llm_output_truncated' } as never,
+})
+assert.equal(afterFailure[0].status, 'failed', '终态事件必须把运行中的解析任务切换为失败')
+assert.equal(summarizeJobs(afterFailure).activeCount, 0, '失败后活动计数归零，loading 状态随之结束')
 
 console.log('taskCenterModel.test.mts ok')

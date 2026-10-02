@@ -27,8 +27,10 @@ from services.reference_readiness_service import (
 from services.error_reporter import ERROR_PIPELINE, log_failure, redact, report_failure
 from services.image_service import ImageService
 from services.llm_service import LLMService
+from services.prompts import SCRIPT_GENERATION_SYSTEM_PROMPT, resolve_system_prompt
 from services.shot_version_service import create_version
 from services.skill_config_service import agent_prompt_append, resolve_effective_style, resolve_skill_config
+from services.story_timing import EXECUTION_PLAN_PROFILE_KEY
 from services.style_templates import style_prompt_params, style_template
 from services.tts_service import normalize_mimo_voice
 from services.security import UploadLimitExceeded, safe_filename, save_upload_stream, validate_identifier, validate_script_upload
@@ -204,9 +206,12 @@ async def _generate_script_text(data: ScriptGenerateRequest, skill_config: dict 
 
     script_style = resolve_effective_style(data.style, skill_config, "script_agent")["effective_style"]
     script_append = agent_prompt_append(skill_config, "script_agent")
+    # Skill 方案自定义了剧本系统提示词时使用用户提示词，为空时回落内置默认
+    # （与历史硬编码逐字一致）。剧本生成输出是纯文本，无需追加 JSON 契约。
+    system_prompt = resolve_system_prompt(skill_config, "script_agent", fallback=SCRIPT_GENERATION_SYSTEM_PROMPT)
     try:
         script = await llm_service.call(
-            "你是漫剧编剧。请输出完整中文漫剧剧本，包含标题、人物、场景、动作、对白和情绪，不要输出解释。",
+            system_prompt,
             f"""
 创作方向：{data.prompt}
 类型：{data.genre}
@@ -332,9 +337,12 @@ async def _run_auto_pipeline(
     quality_profile: str = "standard",
 ):
     """自动模式:经 LangGraph 一次 ainvoke 从解析跑到成片,节点复用 route 步骤函数。"""
+    from agent.checkpoints import CheckpointStore
     from agent.graph import get_graph
+    from config import settings
 
     try:
+        await _progress(project_id, "parse_script", 5, "正在解析剧本")
         result = await get_graph().ainvoke(
             {
                 "project_id": project_id,
@@ -346,7 +354,10 @@ async def _run_auto_pipeline(
                 "run_id": "auto",
                 "current_step": "",
                 "errors": [],
-            }
+            },
+            # 十阶段图 + 局部恢复会超过 LangGraph 默认的 25 步上限；不调高会把
+            # 健康任务以 GraphRecursionError 误杀，且错误无法定位到具体阶段。
+            config={"recursion_limit": max(30, int(settings.LANGGRAPH_RECURSION_LIMIT))},
         )
         if result.get("errors"):
             db = SessionLocal()
@@ -355,6 +366,17 @@ async def _run_auto_pipeline(
             finally:
                 db.close()
             raise RuntimeError("自动流程失败: " + "\n".join(result["errors"]))
+        # 运行结论写入检查点，让 /api/graph 追踪在进程重启后仍能看到最终状态。
+        # 降级发布（含"视觉质量未评估"的结构门禁收口）必须如实记为 degraded，
+        # 不能在成片未做视觉验证时显示为干净的 completed。
+        run_status = str(result.get("run_status") or "completed")
+        if result.get("degraded_published") or run_status == "degraded":
+            run_status = "degraded"
+        elif run_status != "completed":
+            run_status = "completed"
+        store = CheckpointStore.get(project_id, "auto")
+        store.set_status(run_status, reason=str(result.get("degraded_reason") or "自动流程完成"))
+        store.add_event("run_finished", status=run_status, video_path=str(result.get("video_path") or ""))
     except Exception as exc:
         db = SessionLocal()
         try:
@@ -782,6 +804,9 @@ def _shot_model(
             {
                 **consistency.get("continuity_profile", {}),
                 **({"timing": shot.get("timing")} if shot.get("timing") else {}),
+                # 分镜阶段生成的统一执行计划随镜头落库；视频/字幕/合成按此执行，
+                # 后续阶段覆写时保持同一 schema。
+                **({EXECUTION_PLAN_PROFILE_KEY: shot.get(EXECUTION_PLAN_PROFILE_KEY)} if shot.get(EXECUTION_PLAN_PROFILE_KEY) else {}),
             },
             ensure_ascii=False,
         ),

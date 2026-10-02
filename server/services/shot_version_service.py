@@ -218,6 +218,8 @@ def create_version(
     task_id: str = "",
     negative_prompt: str | None = None,
     force: bool = False,
+    candidate_selection: dict[str, Any] | None = None,
+    decision_trace: dict[str, Any] | None = None,
 ) -> ShotVersion | None:
     """追加一条当前镜头状态的版本快照。
 
@@ -243,6 +245,9 @@ def create_version(
         parent_version_id=head.id if head is not None else "",
         content_hash=digest,
         snapshot=json.dumps(snapshot, ensure_ascii=False),
+        # 候选选择与 DecisionTrace 是该版本事实的一部分，随快照一并不可变保存。
+        candidate_selection=json.dumps(candidate_selection or {}, ensure_ascii=False),
+        decision_trace=json.dumps(decision_trace or {}, ensure_ascii=False),
     )
     db.add(row)
     # flush 让同一事务内的连续追加（恢复流程先存「被替换状态」再存「恢复后状态」）
@@ -273,6 +278,8 @@ def version_summary(row: ShotVersion) -> dict:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "has_image": bool(snapshot.get("storyboard_path") or snapshot.get("image_path")),
         "has_video": bool(snapshot.get("video_path")),
+        "candidate_selection": _json_dict(row.candidate_selection),
+        "decision_trace": _json_dict(row.decision_trace),
     }
 
 

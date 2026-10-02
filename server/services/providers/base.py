@@ -111,6 +111,8 @@ class VideoRequest:
     project_id: str = ""  # 用于存储配额核算
     output_video_path: Path | None = None  # 产物写入路径（服务层已做安全校验与配额）
     output_frame_path: Path | None = None
+    end_frame: str | None = None  # 仅显式支持 first_last_frame_interpolation 的 Provider 可用
+    seed: int | None = None  # 候选可追溯 seed；Provider 不支持时只记录 recipe，不声称已生效
 
 
 @dataclass

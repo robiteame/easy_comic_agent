@@ -1,0 +1,904 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "fixture-video-ab-001",
+  "batch_id": "fixture-batch-2026-10",
+  "shots": [
+    {
+      "shot_id": "dialogue_001",
+      "shot_type": "dialogue",
+      "execution_plan_hash": "plan-dialogue-v1"
+    },
+    {
+      "shot_id": "closeup_001",
+      "shot_type": "close_up",
+      "execution_plan_hash": "plan-closeup-v1"
+    },
+    {
+      "shot_id": "action_001",
+      "shot_type": "ordinary_action",
+      "execution_plan_hash": "plan-action-v1"
+    },
+    {
+      "shot_id": "complex_001",
+      "shot_type": "complex_action",
+      "execution_plan_hash": "plan-complex-v1"
+    },
+    {
+      "shot_id": "cross_001",
+      "shot_type": "cross_scene",
+      "execution_plan_hash": "plan-cross-v1"
+    }
+  ],
+  "results": [
+    {
+      "shot_id": "dialogue_001",
+      "strategy_id": "A",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-dialogue-v1",
+      "provider": "fixture-i2v",
+      "model": "fixture-video-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/dialogue_001/first.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 120000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 4200,
+      "output_path": "fixture/dialogue_001/A/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.82,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "dialogue_001",
+      "strategy_id": "B",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-dialogue-v1",
+      "provider": "fixture-i2v",
+      "model": "fixture-video-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/dialogue_001/first.png",
+          "used": true
+        },
+        {
+          "type": "continuity_reference",
+          "role": "conditional_continuity",
+          "path": "fixture/dialogue_001/previous_tail.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 125000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 4400,
+      "output_path": "fixture/dialogue_001/B/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.86,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "dialogue_001",
+      "strategy_id": "C",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-dialogue-v1",
+      "provider": "fixture-r2v",
+      "model": "fixture-r2v-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/dialogue_001/first.png",
+          "used": true
+        },
+        {
+          "type": "character_three_view",
+          "role": "identity",
+          "path": "fixture/dialogue_001/character.png",
+          "used": true
+        },
+        {
+          "type": "scene_baseline",
+          "role": "environment",
+          "path": "fixture/dialogue_001/scene.png",
+          "used": true
+        },
+        {
+          "type": "continuity_reference",
+          "role": "motion_continuity",
+          "path": "fixture/dialogue_001/previous_tail.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 160000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 5900,
+      "output_path": "fixture/dialogue_001/C/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.91,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "dialogue_001",
+      "strategy_id": "D",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-dialogue-v1",
+      "provider": "fixture-continuation",
+      "model": "fixture-continuation-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/dialogue_001/first.png",
+          "used": true
+        },
+        {
+          "type": "end_frame",
+          "role": "last_frame",
+          "path": "fixture/dialogue_001/end.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 145000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 5100,
+      "output_path": "fixture/dialogue_001/D/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.84,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "closeup_001",
+      "strategy_id": "A",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-closeup-v1",
+      "provider": "fixture-i2v",
+      "model": "fixture-video-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/closeup_001/first.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 110000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 3900,
+      "output_path": "fixture/closeup_001/A/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.88,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "closeup_001",
+      "strategy_id": "B",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-closeup-v1",
+      "provider": "fixture-i2v",
+      "model": "fixture-video-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/closeup_001/first.png",
+          "used": true
+        },
+        {
+          "type": "continuity_reference",
+          "role": "conditional_continuity",
+          "path": "fixture/closeup_001/previous_tail.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 116000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 4100,
+      "output_path": "fixture/closeup_001/B/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.9,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "closeup_001",
+      "strategy_id": "C",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-closeup-v1",
+      "provider": "fixture-r2v",
+      "model": "fixture-r2v-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/closeup_001/first.png",
+          "used": true
+        },
+        {
+          "type": "character_three_view",
+          "role": "identity",
+          "path": "fixture/closeup_001/character.png",
+          "used": true
+        },
+        {
+          "type": "scene_baseline",
+          "role": "environment",
+          "path": "fixture/closeup_001/scene.png",
+          "used": true
+        },
+        {
+          "type": "continuity_reference",
+          "role": "motion_continuity",
+          "path": "fixture/closeup_001/previous_tail.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 152000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 5600,
+      "output_path": "fixture/closeup_001/C/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.93,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "closeup_001",
+      "strategy_id": "D",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-closeup-v1",
+      "provider": "fixture-continuation",
+      "model": "fixture-continuation-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/closeup_001/first.png",
+          "used": true
+        },
+        {
+          "type": "end_frame",
+          "role": "last_frame",
+          "path": "fixture/closeup_001/end.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 138000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 4900,
+      "output_path": "fixture/closeup_001/D/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.87,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "action_001",
+      "strategy_id": "A",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-action-v1",
+      "provider": "fixture-i2v",
+      "model": "fixture-video-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/action_001/first.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 130000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 4400,
+      "output_path": "fixture/action_001/A/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.78,
+        "tail_frame_valid": false,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "rejected",
+        "accepted": false,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "action_001",
+      "strategy_id": "B",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-action-v1",
+      "provider": "fixture-i2v",
+      "model": "fixture-video-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/action_001/first.png",
+          "used": true
+        },
+        {
+          "type": "continuity_reference",
+          "role": "conditional_continuity",
+          "path": "fixture/action_001/previous_tail.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 137000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 4700,
+      "output_path": "fixture/action_001/B/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.83,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "action_001",
+      "strategy_id": "C",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-action-v1",
+      "provider": "fixture-r2v",
+      "model": "fixture-r2v-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/action_001/first.png",
+          "used": true
+        },
+        {
+          "type": "character_three_view",
+          "role": "identity",
+          "path": "fixture/action_001/character.png",
+          "used": true
+        },
+        {
+          "type": "scene_baseline",
+          "role": "environment",
+          "path": "fixture/action_001/scene.png",
+          "used": true
+        },
+        {
+          "type": "continuity_reference",
+          "role": "motion_continuity",
+          "path": "fixture/action_001/previous_tail.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 176000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 6200,
+      "output_path": "fixture/action_001/C/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.87,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "action_001",
+      "strategy_id": "D",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-action-v1",
+      "provider": "fixture-continuation",
+      "model": "fixture-continuation-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/action_001/first.png",
+          "used": true
+        },
+        {
+          "type": "end_frame",
+          "role": "last_frame",
+          "path": "fixture/action_001/end.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 158000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 5500,
+      "output_path": "fixture/action_001/D/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.85,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "complex_001",
+      "strategy_id": "A",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-complex-v1",
+      "provider": "fixture-i2v",
+      "model": "fixture-video-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/complex_001/first.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 135000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 4700,
+      "output_path": "fixture/complex_001/A/output.mp4",
+      "metrics": {
+        "structural_passed": false,
+        "first_frame_match_score": 0.62,
+        "tail_frame_valid": false,
+        "frozen": true,
+        "freeze_seconds": 2.4,
+        "output_duration_s": 5.0
+      },
+      "manual_review": {
+        "status": "rejected",
+        "accepted": false,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "complex_001",
+      "strategy_id": "B",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-complex-v1",
+      "provider": "fixture-i2v",
+      "model": "fixture-video-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/complex_001/first.png",
+          "used": true
+        },
+        {
+          "type": "continuity_reference",
+          "role": "conditional_continuity",
+          "path": "fixture/complex_001/previous_tail.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 143000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 5000,
+      "output_path": "fixture/complex_001/B/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.72,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 5.0
+      },
+      "manual_review": {
+        "status": "pending",
+        "accepted": false,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "complex_001",
+      "strategy_id": "C",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-complex-v1",
+      "provider": "fixture-r2v",
+      "model": "fixture-r2v-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/complex_001/first.png",
+          "used": true
+        },
+        {
+          "type": "character_three_view",
+          "role": "identity",
+          "path": "fixture/complex_001/character.png",
+          "used": true
+        },
+        {
+          "type": "scene_baseline",
+          "role": "environment",
+          "path": "fixture/complex_001/scene.png",
+          "used": true
+        },
+        {
+          "type": "continuity_reference",
+          "role": "motion_continuity",
+          "path": "fixture/complex_001/previous_tail.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 188000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 6700,
+      "output_path": "fixture/complex_001/C/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.85,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 5.0
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "complex_001",
+      "strategy_id": "D",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-complex-v1",
+      "provider": "fixture-continuation",
+      "model": "fixture-continuation-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/complex_001/first.png",
+          "used": true
+        },
+        {
+          "type": "end_frame",
+          "role": "last_frame",
+          "path": "fixture/complex_001/end.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 171000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 6000,
+      "output_path": "fixture/complex_001/D/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.89,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.2,
+        "output_duration_s": 5.0
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "cross_001",
+      "strategy_id": "A",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-cross-v1",
+      "provider": "fixture-i2v",
+      "model": "fixture-video-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/cross_001/first.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 125000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 4100,
+      "output_path": "fixture/cross_001/A/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.71,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "pending",
+        "accepted": false,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "cross_001",
+      "strategy_id": "B",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-cross-v1",
+      "provider": "fixture-i2v",
+      "model": "fixture-video-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/cross_001/first.png",
+          "used": true
+        },
+        {
+          "type": "continuity_reference",
+          "role": "conditional_continuity",
+          "path": "fixture/cross_001/previous_tail.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 132000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 4500,
+      "output_path": "fixture/cross_001/B/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.76,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "accepted",
+        "accepted": true,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "cross_001",
+      "strategy_id": "C",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-cross-v1",
+      "provider": "fixture-r2v",
+      "model": "fixture-r2v-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/cross_001/first.png",
+          "used": true
+        },
+        {
+          "type": "character_three_view",
+          "role": "identity",
+          "path": "fixture/cross_001/character.png",
+          "used": true
+        },
+        {
+          "type": "scene_baseline",
+          "role": "environment",
+          "path": "fixture/cross_001/scene.png",
+          "used": true
+        },
+        {
+          "type": "continuity_reference",
+          "role": "motion_continuity",
+          "path": "fixture/cross_001/previous_tail.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 171000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 6100,
+      "output_path": "fixture/cross_001/C/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.81,
+        "tail_frame_valid": true,
+        "frozen": false,
+        "freeze_seconds": 0.0,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "pending",
+        "accepted": false,
+        "note": "fixture"
+      }
+    },
+    {
+      "shot_id": "cross_001",
+      "strategy_id": "D",
+      "batch_id": "fixture-batch-2026-10",
+      "execution_plan_hash": "plan-cross-v1",
+      "provider": "fixture-continuation",
+      "model": "fixture-continuation-1.0",
+      "reference_manifest": [
+        {
+          "type": "approved_storyboard_first_frame",
+          "role": "first_frame",
+          "path": "fixture/cross_001/first.png",
+          "used": true
+        },
+        {
+          "type": "end_frame",
+          "role": "last_frame",
+          "path": "fixture/cross_001/end.png",
+          "used": true
+        }
+      ],
+      "cost": {
+        "cost_known": true,
+        "cost_micro": 154000,
+        "currency": "CNY"
+      },
+      "elapsed_ms": 5400,
+      "output_path": "fixture/cross_001/D/output.mp4",
+      "metrics": {
+        "structural_passed": true,
+        "first_frame_match_score": 0.79,
+        "tail_frame_valid": true,
+        "frozen": true,
+        "freeze_seconds": 1.2,
+        "output_duration_s": 4.8
+      },
+      "manual_review": {
+        "status": "rejected",
+        "accepted": false,
+        "note": "fixture"
+      }
+    }
+  ]
+}

@@ -21,6 +21,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, BeforeValidator, Field, ValidationError, ValidationInfo, AliasChoices
 
 from config import settings
+from services.consistency_service import CONTINUITY_MODES, normalize_continuity_mode
 from services.shot_dialogue import MAX_DIALOGUE_LINES_PER_SHOT, MAX_TIMELINE_MS
 from services.style_templates import STYLE_TEMPLATES
 
@@ -35,6 +36,7 @@ MAX_APPEARANCE_VALUE_CHARS = 400
 MAX_CHARACTERS_IN_SCENE = 12
 MAX_LOGIC_ISSUES = 20
 MAX_SEED = 2_147_483_647
+MAX_ACTION_BEATS_PER_SHOT = 12
 
 
 class LLMOutputError(ValueError):
@@ -52,6 +54,7 @@ SHOT_TYPES = ("wide", "medium", "close-up", "extreme_close")
 CAMERA_ANGLES = ("正面", "侧面", "俯视", "仰视")
 CAMERA_MOVEMENTS = ("静止", "推", "拉", "摇", "移", "跟", "升降", "环绕", "缓慢推进")
 TRANSITIONS = ("cut", "fade", "dissolve", "white_flash", "push", "wipe")
+# CONTINUITY_MODES 由一致性策略统一维护，分镜输出与执行阶段共用同一枚举。
 SHOT_STATUSES = (
     "pending",
     "storyboard_done",
@@ -304,6 +307,16 @@ def _choice(normalizer, default: str):
     return BeforeValidator(validate)
 
 
+def _continuity_mode():
+    """连续性模式：合法值/别名归一化，缺失或非法值留空交给确定性规则兜底。"""
+
+    def validate(value: Any, info: ValidationInfo) -> str:
+        del info
+        return normalize_continuity_mode(value, default="")
+
+    return BeforeValidator(validate)
+
+
 def _model_list(model: type[BaseModel], limit: int, path: str):
     """对象数组字段：逐条校验，丢弃无法修复的条目并记录路径与原因。"""
 
@@ -481,6 +494,41 @@ class SceneOutput(BaseModel):
     camera_suggestion: Annotated[str, _choice(normalize_shot_type, "medium")] = "medium"
 
 
+class ActionBeatOutput(BaseModel):
+    """一个镜头动作节拍；字符串输入会安全归一化为单个节拍。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    text: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
+    phase: Annotated[str, _text(24)] = "continuation"
+    complex_motion: bool = False
+    entry_state: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
+    exit_state: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
+
+
+def _action_beat_list():
+    def validate(value: Any, info: ValidationInfo) -> list[ActionBeatOutput]:
+        del info
+        if value in (None, ""):
+            return []
+        if isinstance(value, (str, dict)):
+            value = [value]
+        if not isinstance(value, (list, tuple)):
+            logger.warning("LLM 输出动作节拍类型不可用,已置空: field=action_beats type=%s", type(value).__name__)
+            return []
+        parsed: list[ActionBeatOutput] = []
+        for item in list(value)[:MAX_ACTION_BEATS_PER_SHOT]:
+            try:
+                if isinstance(item, str):
+                    item = {"text": item}
+                parsed.append(ActionBeatOutput.model_validate(item))
+            except ValidationError as exc:
+                logger.warning("LLM 输出动作节拍被丢弃: path=action_beats 原因=%s", describe_error(exc))
+        return [item for item in parsed if item.text.strip()]
+
+    return BeforeValidator(validate)
+
+
 class ShotOutput(BaseModel):
     """分镜镜头。"""
 
@@ -493,6 +541,11 @@ class ShotOutput(BaseModel):
     scene_description: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
     characters_in_scene: Annotated[list[str], _bounded_list(MAX_CHARACTERS_IN_SCENE, MAX_CHARACTER_NAME)] = Field(default_factory=list)
     character_action: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
+    action_beats: Annotated[list[ActionBeatOutput], _action_beat_list()] = Field(default_factory=list)
+    gaze_direction: Annotated[str, _text(200)] = ""
+    screen_axis: Annotated[str, _text(200)] = ""
+    action_entry_state: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
+    action_exit_state: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
     dialogue: Annotated[
         list[ShotDialogueLineOutput],
         _shot_dialogue_list(),
@@ -503,6 +556,8 @@ class ShotOutput(BaseModel):
     duration: Annotated[float, _clamped_number(settings.MIN_SHOT_DURATION_SECONDS, settings.MAX_SHOT_DURATION_SECONDS, 3.0, cast=float, label="时长")] = 3.0
     estimated_speech_ms: Annotated[int, _clamped_number(0, 600_000, 0, cast=int, label="对白预计时长")] = 0
     transition: Annotated[str, _choice(normalize_transition, "cut")] = "cut"
+    continuity_mode: Annotated[str, _continuity_mode()] = ""
+    continuity_mode_source: Annotated[str, _text(40)] = ""
     image_path: Annotated[str, _text(500)] = ""
     audio_path: Annotated[str, _text(500)] = ""
     status: Annotated[str, _choice(normalize_shot_status, "pending")] = "pending"

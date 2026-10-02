@@ -48,6 +48,73 @@ FEATURE_ORDER = (
     "dialogue_in_prompt",
 )
 
+# --- 视频逐镜头路由（模型级能力判断） ----------------------------------------
+#
+# 镜头级视频生成路由模式，按镜头要求与 ``effective_capabilities(model)`` 共同裁决：
+# - ``first_frame_i2v``：图生视频，仅已审核故事板首帧驱动；
+# - ``multi_reference_r2v``：参考生视频，首帧 + 角色身份/场景基准/连续性多参考；
+# - ``first_last_frame``：首尾帧插值，要求模型声明 last_frame_input。
+
+VIDEO_MODE_FIRST_FRAME_I2V = "first_frame_i2v"
+VIDEO_MODE_MULTI_REFERENCE_R2V = "multi_reference_r2v"
+VIDEO_MODE_FIRST_LAST_FRAME = "first_last_frame"
+VIDEO_MODES = (
+    VIDEO_MODE_FIRST_FRAME_I2V,
+    VIDEO_MODE_MULTI_REFERENCE_R2V,
+    VIDEO_MODE_FIRST_LAST_FRAME,
+)
+
+# r2v 多参考素材的发送优先级：首帧锚定画面，角色身份一致性最高，其次场景
+# 基准，最后连续性参考；超出数量上限时从优先级最低的一端丢弃。
+REFERENCE_SEND_PRIORITY = (
+    "approved_storyboard_first_frame",
+    "end_frame",
+    "character_three_view",
+    "scene_baseline",
+    "continuity_frame",
+)
+
+_REFERENCE_PRIORITY_UNKNOWN = len(REFERENCE_SEND_PRIORITY)
+
+
+def reference_send_priority(asset_type: str) -> int:
+    """参考素材的发送优先级序号；越小越先发送，未知类型排在已知类型之后。"""
+
+    try:
+        return REFERENCE_SEND_PRIORITY.index(str(asset_type or ""))
+    except ValueError:
+        return _REFERENCE_PRIORITY_UNKNOWN
+
+
+def select_video_mode(required_capabilities: Any, capabilities: Any) -> str:
+    """按镜头要求与模型生效能力选择视频路由模式。
+
+    只读 ``effective_capabilities(model)`` 的结果：首尾帧插值要求最具体、优先
+    满足；其次多参考 r2v；模型能力不满足时回落 ``first_frame_i2v``，是否接受
+    该降级由调用方的能力门禁决定，这里不做静默替换。
+    """
+
+    required = {str(item) for item in (required_capabilities or [])}
+    if (
+        required & {"last_frame", "first_last_frame_interpolation"}
+        and _value(capabilities, "last_frame_input", False)
+        and _value(capabilities, "first_last_frame_interpolation", False)
+    ):
+        return VIDEO_MODE_FIRST_LAST_FRAME
+    if "multiple_reference_images" in required and _value(capabilities, "multiple_reference_images", False):
+        return VIDEO_MODE_MULTI_REFERENCE_R2V
+    return VIDEO_MODE_FIRST_FRAME_I2V
+
+
+def supports_first_last_frame(capabilities: Any) -> bool:
+    """只有协议同时明确声明首帧、尾帧输入和首尾帧插值时才允许 end_frame。"""
+
+    return bool(
+        (_value(capabilities, "reference_image", False) or _value(capabilities, "first_frame", False))
+        and _value(capabilities, "last_frame_input", False)
+        and _value(capabilities, "first_last_frame_interpolation", False)
+    )
+
 
 def feature(status: str, **detail: Any) -> dict[str, Any]:
     """构造一个能力项；detail 只放可验证的协议事实，不放产品承诺。"""
@@ -176,7 +243,15 @@ def status_of(report: dict[str, Any], name: str) -> str:
     return str(((report or {}).get("features") or {}).get(name, {}).get("status") or UNSUPPORTED)
 
 
-def payload_control_types(capability: str, report: dict[str, Any], *, has_first_frame: bool = False) -> list[str]:
+def payload_control_types(
+    capability: str,
+    report: dict[str, Any],
+    *,
+    has_first_frame: bool = False,
+    has_end_frame: bool = False,
+    has_pose_control: bool = False,
+    has_depth_control: bool = False,
+) -> list[str]:
     """只返回确实能出现在 Provider 请求载荷里的控制类型。"""
 
     sent: list[str] = []
@@ -188,13 +263,13 @@ def payload_control_types(capability: str, report: dict[str, Any], *, has_first_
         sent.append("reference_images")
     if status_of(report, "reference_weights") == SUPPORTED:
         sent.append("reference_weights")
-    for name, control in (
-        ("pose_control", "openpose"),
-        ("depth_control", "depth"),
-        ("lora", "lora"),
-        ("ip_adapter", "ip_adapter"),
-        ("first_last_frame_interpolation", "first_last_frame_interpolation"),
-    ):
+    if has_pose_control and status_of(report, "pose_control") == SUPPORTED:
+        sent.append("openpose")
+    if has_depth_control and status_of(report, "depth_control") == SUPPORTED:
+        sent.append("depth")
+    for name, control in (("lora", "lora"), ("ip_adapter", "ip_adapter")):
         if status_of(report, name) == SUPPORTED:
             sent.append(control)
+    if has_end_frame and status_of(report, "first_last_frame_interpolation") == SUPPORTED:
+        sent.append("first_last_frame_interpolation")
     return list(dict.fromkeys(sent))

@@ -1,19 +1,33 @@
 import asyncio
+import copy
+from datetime import datetime
 import hashlib
 import json
+import time
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from agent.checkpoints import CheckpointStore
+from agent.contracts import (
+    DecisionTrace,
+    StageName,
+    VideoCandidateRecord,
+    VideoCandidateSelection,
+    VideoCandidateStatus,
+    score_video_candidate,
+    select_video_candidate,
+)
 from api import schemas
 from api.websocket import ws_manager
 from config import settings
 from db import SessionLocal, get_db
-from models import Character, Project, SceneAsset, Shot, ShotVersion
+from models import Character, Project, SceneAsset, Shot, ShotVersion, ShotVideoCandidate
 from services.audio_routing import resolve_audio_mode
-from services.consistency_service import ConsistencyService
+from services.consistency_service import ConsistencyService, normalize_continuity_mode
 from services.dialogue_audio import generate_dialogue_track
 from services.invalidation_service import clear_shot_media_stale, mark_shot_media_stale
 from services.reference_readiness_service import (
@@ -52,7 +66,9 @@ from services.shot_version_service import (
     parse_snapshot,
     version_detail,
 )
+from services.structural_validation import probe_media_duration, validate_video_file
 from services.story_timing import (
+    ShotExecutionPlan,
     StoryTimingError,
     dialogue_text,
     estimate_speech_ms,
@@ -165,8 +181,9 @@ async def get_shot_generation_prompt(shot_id: str, db: Session = Depends(get_db)
     skill_config = resolve_skill_config(shot.project_id, db)
     characters = _characters(db, shot.project_id)
     scenes = _scenes(db, shot.project_id)
-    # 与实际生成路径保持一致：同场景优先上一镜尾帧，无则回退上一镜故事板。
-    previous_reference = _previous_reference_for_shot(db, shot, prefer_last_frame=True)
+    # 与实际生成路径保持一致：只有 continuous_action 才自动读取上一镜末帧。
+    previous_shot_model = _previous_shot_for_continuity(db, shot)
+    previous_shot_data = _shot_dict(previous_shot_model) if previous_shot_model else None
     shot_data = _shot_dict(shot)
     shot_data["storyboard_prompt"] = _storyboard_notes(shot, scenes)
     shot_data.update(
@@ -174,7 +191,7 @@ async def get_shot_generation_prompt(shot_id: str, db: Session = Depends(get_db)
             shot_data,
             characters,
             scenes,
-            previous_reference_path=previous_reference,
+            previous_shot=previous_shot_data,
             for_video=False,
         )
     )
@@ -289,6 +306,49 @@ def _validate_timing_edit(shot: Shot, changed: dict, db: Session) -> int:
             ),
         )
     return estimated_speech_ms
+
+
+def _validate_shot_duration_for_provider(shot: Shot) -> None:
+    """生成入口的时长能力校验。
+
+    固定档 Provider（如固定 5 秒）允许更短的故事时长：按固定秒数生成后，由
+    执行计划在成片中裁剪到故事时长；只有不超出固定档/上限的镜头可以放行。
+    非固定档 Provider 仍要求时长落在能力范围与步长网格上。
+    """
+
+    capability = provider_duration_capability()
+    narrative_s = float(shot.duration or 0)
+    if capability.is_fixed:
+        if narrative_s <= 0 or narrative_s > capability.max_duration + capability.tolerance_s:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"镜头 {shot.id} 时长 {narrative_s:g} 秒超出固定档视频 Provider "
+                    f"{capability.protocol or '<unknown>'} 的 {capability.describe()}；"
+                    "请拆分镜头到 Provider 允许的时长后逐镜生成"
+                ),
+            )
+        return
+    try:
+        capability.validate(narrative_s, shot_id=shot.id)
+    except StoryTimingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _persist_execution_plan(shot: Shot, plan: ShotExecutionPlan) -> None:
+    """把统一执行计划写入 continuity_profile JSON（复用现有字段，无迁移）。
+
+    实测对白把故事时长延展到剪辑区间时同步 ``shot.duration``，保证数据库、
+    视频 Prompt 与后期合成读到的时长一致；只在延展时调整，绝不悄悄缩短
+    故事时长（超出 Provider 能力的镜头由入口校验拒绝）。
+    """
+
+    profile = _json_dict(shot.continuity_profile)
+    profile["execution_plan"] = plan.to_dict()
+    shot.continuity_profile = json.dumps(profile, ensure_ascii=False)
+    effective_s = round(plan.effective_duration_ms / 1000, 3)
+    if effective_s > 0 and round(float(shot.duration or 0), 3) < effective_s:
+        shot.duration = effective_s
 
 
 def _capability_kwargs(capability_mode: str, confirm_capability_downgrade: bool) -> dict[str, object]:
@@ -704,10 +764,7 @@ async def generate_shot_video(shot_id: str, data: ShotVideoGenerateRequest, db: 
     if _can_reuse_existing_video(shot, data.force):
         return {"id": shot.id, "status": shot.status, "video_path": shot.video_path, "audio_path": shot.audio_path}
     _validate_timing_edit(shot, {}, db)
-    try:
-        provider_duration_capability().validate(float(shot.duration or 0), shot_id=shot.id)
-    except StoryTimingError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _validate_shot_duration_for_provider(shot)
 
     # 启动前预检：视频端点必配；配音端点默认必配，但视频模型具备原生对白语音
     # 能力（或镜头无台词 / 镜头级显式指定 native）时不强制要求 TTS。
@@ -750,6 +807,75 @@ async def generate_shot_video(shot_id: str, data: ShotVideoGenerateRequest, db: 
     _shot_video_tasks.add(task)
     task.add_done_callback(_shot_video_tasks.discard)
     return {"id": shot.id, "status": "video_generating"}
+
+
+@router.get("/{shot_id}/video-candidates")
+async def list_video_candidates(shot_id: str, db: Session = Depends(get_db)):
+    """列出候选保存记录；失败候选与成功候选并列返回，不把失败藏进日志。"""
+
+    if not db.query(Shot).filter(Shot.id == shot_id).first():
+        raise HTTPException(status_code=404, detail="Shot not found")
+    rows = (
+        db.query(ShotVideoCandidate)
+        .filter(ShotVideoCandidate.shot_id == shot_id)
+        .order_by(ShotVideoCandidate.shot_version.desc(), ShotVideoCandidate.created_at)
+        .all()
+    )
+    return {"shot_id": shot_id, "candidates": [_video_candidate_payload(row) for row in rows]}
+
+
+async def _retry_failed_video_candidate(
+    shot_id: str,
+    candidate_id: str,
+    expected_version: int,
+) -> dict:
+    """只补拍指定失败候选；旧失败行不修改，成功候选继续参与默认选择。"""
+
+    return await _run_single_shot_video(
+        shot_id,
+        force=True,
+        expected_version=int(expected_version),
+        reuse_audio=True,
+        candidate_count=1,
+        strict_structural_selection=True,
+        retry_of_candidate_id=str(candidate_id),
+    )
+
+
+@router.post("/{shot_id}/video-candidates/{candidate_id}/retry")
+async def retry_video_candidate(shot_id: str, candidate_id: str, db: Session = Depends(get_db)):
+    shot = db.query(Shot).filter(Shot.id == shot_id).first()
+    if not shot:
+        raise HTTPException(status_code=404, detail="Shot not found")
+    candidate = db.query(ShotVideoCandidate).filter(ShotVideoCandidate.candidate_id == candidate_id).first()
+    if not candidate or candidate.shot_id != shot_id:
+        raise HTTPException(status_code=404, detail="Video candidate not found")
+    if candidate.status != VideoCandidateStatus.FAILED.value:
+        raise HTTPException(status_code=409, detail="只有失败候选允许重试")
+    if int(candidate.shot_version or 0) != int(shot.version or 1):
+        raise HTTPException(status_code=409, detail="候选所属镜头版本已变化")
+    expected_version = int(shot.version or 1)
+    task_key = _shot_task_key(shot_id, f"video-candidate-retry:{candidate_id}")
+    claim = claim_or_block(
+        task_key,
+        f"shot:{shot_id}",
+        version=expected_version,
+        current_step="video_candidate_retry",
+        message=f"已排队重试视频候选 {candidate_id}",
+    )
+    if not claim.claimed:
+        return {"shot_id": shot_id, "candidate_id": candidate_id, "status": "retrying", "deduplicated": True}
+    try:
+        task = start_task(
+            task_key,
+            _retry_failed_video_candidate(shot_id, candidate_id, expected_version),
+        )
+    except BaseException as exc:
+        finish_task(task_key, "failed", f"video candidate retry scheduling failed: {exc}")
+        raise
+    _shot_video_tasks.add(task)
+    task.add_done_callback(_shot_video_tasks.discard)
+    return {"shot_id": shot_id, "candidate_id": candidate_id, "status": "retrying"}
 
 
 @router.post("/{shot_id}/generate-audio")
@@ -985,6 +1111,14 @@ async def _run_storyboard_generation(
         )
 
 
+class StoryboardVersionConflict(RuntimeError):
+    """故事板任务与镜头版本不一致：过期结果丢弃，项目保持可编辑状态。
+
+    版本冲突是用户编辑与后台任务的竞态，不是生成失败；恢复逻辑已在抛出前
+    把项目状态还原，通用异常处理不得再覆盖成 error。
+    """
+
+
 async def _run_storyboard_generation_impl(
     project_id: str,
     shot_ids: list[str],
@@ -996,6 +1130,8 @@ async def _run_storyboard_generation_impl(
     preferred_size: str = "",
     capability_mode: str = "manual",
     confirm_capability_downgrade: bool = False,
+    seed_override: int | None = None,
+    recovery_revisions: list[dict] | None = None,
 ) -> None:
     """生成指定镜头；``emit_project_result=False`` 时作为 fan-out worker 使用。
 
@@ -1033,26 +1169,34 @@ async def _run_storyboard_generation_impl(
                 shot_data["visual_notes"] = _storyboard_notes(shot, scenes)
                 if project:
                     shot_data["output_format"] = project.output_format or "9:16"
-                # 同场景优先用上一镜尾帧（Seedance return_last_frame 产物）作为续帧参考：
-                # 该帧尚无视频时自动回退到上一镜已审核故事板，首次全量出图行为不变。
-                previous_reference = _previous_reference_for_shot(db, shot, prefer_last_frame=True)
+                # 只有 continuous_action 才自动读取上一镜 last_frame_path；
+                # same_scene 仅继承场景/角色身份，其他模式不继承上一镜具体画面。
+                previous_shot_model = _previous_shot_for_continuity(db, shot)
+                previous_shot_data = _shot_dict(previous_shot_model) if previous_shot_model else None
                 shot_data.update(
                     consistency_service.build_generation_context(
                         shot_data,
                         characters,
                         scenes,
-                        previous_reference_path=previous_reference,
+                        previous_shot=previous_shot_data,
                         for_video=False,
                     )
                 )
-                shot_data["reference_manifest"] = build_manifest_for_shot(db, shot, stage="storyboard")
+                shot_data["reference_manifest"] = build_manifest_for_shot(
+                    db,
+                    shot,
+                    stage="storyboard",
+                    continuity_profile=shot_data.get("continuity_profile") or {},
+                    continuity_reference_path=shot_data.get("continuity_reference_path", ""),
+                )
                 shot_data["reference_versions"] = {
                     str(item.get("asset_id")): item.get("version")
                     for item in shot_data["reference_manifest"]
                 }
                 apply_agent_config_to_shot(shot_data, skill_config)
+                _apply_recovery_revisions(shot_data, recovery_revisions, shot_id=shot.id, stage="image_generation")
                 style_params = _storyboard_style_params(project, skill_config)
-                seed = 42 + (shot.version or 1) * 100
+                seed = int(seed_override) if seed_override is not None else 42 + (shot.version or 1) * 100
             finally:
                 db.close()
 
@@ -1111,7 +1255,7 @@ async def _run_storyboard_generation_impl(
                     }
                 )
                 shot.continuity_profile = json.dumps(storyboard_profile, ensure_ascii=False)
-                shot.continuity_reference_path = previous_reference
+                shot.continuity_reference_path = shot_data.get("continuity_reference_path", "")
                 shot.storyboard_reference_manifest = json.dumps(shot_data.get("reference_manifest", []), ensure_ascii=False)
                 shot.reference_capability_warning = str(image_meta.get("reference_capability_warning", ""))
                 shot.pose_reference_path = ""
@@ -1156,7 +1300,7 @@ async def _run_storyboard_generation_impl(
                     if project and project.status == "storyboard_generating":
                         project.status = "assets_ready"
                         db.commit()
-                    raise asyncio.CancelledError(f"故事板任务版本已变化: {', '.join(stale_or_missing)}")
+                    raise StoryboardVersionConflict(f"故事板任务版本已变化: {', '.join(stale_or_missing)}")
 
             project = db.query(Project).filter(Project.id == project_id).first()
             if project and emit_project_result:
@@ -1187,7 +1331,10 @@ async def _run_storyboard_generation_impl(
         db = SessionLocal()
         try:
             project = db.query(Project).filter(Project.id == project_id).first()
-            if project and emit_project_result:
+            # 版本冲突已在上抛前还原项目状态：不覆盖成 error，也不把
+            # 批次内其它已完成镜头标成 failed。
+            version_conflict = isinstance(exc, StoryboardVersionConflict)
+            if project and emit_project_result and not version_conflict:
                 project.status = "error"
             queued = (
                 db.query(Shot)
@@ -1197,6 +1344,8 @@ async def _run_storyboard_generation_impl(
             for shot in queued:
                 expected_version = expected_versions.get(shot.id)
                 if expected_version is not None and (shot.version or 1) != expected_version:
+                    continue
+                if version_conflict:
                     continue
                 shot.storyboard_status = "failed"
                 if shot.status in {"pending", "storyboard_generating"}:
@@ -1210,7 +1359,11 @@ async def _run_storyboard_generation_impl(
                 report_failure(
                     exc,
                     error_type=ERROR_STORYBOARD,
-                    message="定稿故事板生成失败，本次任务已停止。请检查镜头参数与模型配置后重试。",
+                    message=(
+                        "故事板任务因镜头版本已变化而停止：检测到用户编辑，本次结果已丢弃，请重新发起生成。"
+                        if version_conflict
+                        else "定稿故事板生成失败，本次任务已停止。请检查镜头参数与模型配置后重试。"
+                    ),
                     context={"project_id": project_id},
                 ),
             )
@@ -1235,7 +1388,7 @@ async def _regenerate_single_shot(
         try:
             shot = db.query(Shot).filter(Shot.id == shot_id).first()
             if not shot or (expected_version is not None and (shot.version or 1) != expected_version):
-                raise asyncio.CancelledError("镜头版本已变化")
+                raise RuntimeError("镜头版本已变化")
             project_id = shot.project_id
             project = db.query(Project).filter(Project.id == project_id).first()
             skill_config = resolve_skill_config(project_id, db)
@@ -1249,7 +1402,7 @@ async def _regenerate_single_shot(
         try:
             shot = db.query(Shot).filter(Shot.id == shot_id).first()
             if not shot or (expected_version is not None and (shot.version or 1) != expected_version):
-                raise asyncio.CancelledError("镜头版本已变化")
+                raise RuntimeError("镜头版本已变化")
             project = db.query(Project).filter(Project.id == project_id).first()
             characters = _characters(db, project_id)
             scenes = _scenes(db, project_id)
@@ -1257,15 +1410,15 @@ async def _regenerate_single_shot(
             shot_data["visual_notes"] = reason or _storyboard_notes(shot, scenes)
             if project:
                 shot_data["output_format"] = project.output_format or "9:16"
-            # 同场景优先用上一镜尾帧（Seedance return_last_frame 产物）作为续帧参考：
-            # 该帧尚无视频时自动回退到上一镜已审核故事板，因此首次全量出图行为不变。
-            previous_reference = _previous_reference_for_shot(db, shot, prefer_last_frame=True)
+            # 只有 continuous_action 才自动读取上一镜 last_frame_path。
+            previous_shot_model = _previous_shot_for_continuity(db, shot)
+            previous_shot_data = _shot_dict(previous_shot_model) if previous_shot_model else None
             shot_data.update(
                 consistency_service.build_generation_context(
                     shot_data,
                     characters,
                     scenes,
-                    previous_reference_path=previous_reference,
+                    previous_shot=previous_shot_data,
                     for_video=False,
                 )
             )
@@ -1296,7 +1449,7 @@ async def _regenerate_single_shot(
         try:
             shot = db.query(Shot).filter(Shot.id == shot_id).first()
             if not shot or (expected_version is not None and (shot.version or 1) != expected_version):
-                raise asyncio.CancelledError("镜头版本已变化")
+                raise RuntimeError("镜头版本已变化")
             shot.scene_group_id = shot_data.get("scene_group_id", shot.scene_group_id)
             shot.consistency_context = shot_data.get("consistency_context", shot.consistency_context)
             shot.reference_weights = json.dumps(shot_data.get("reference_weights", {}), ensure_ascii=False)
@@ -1322,7 +1475,7 @@ async def _regenerate_single_shot(
                 }
             )
             shot.continuity_profile = json.dumps(storyboard_profile, ensure_ascii=False)
-            shot.continuity_reference_path = previous_reference
+            shot.continuity_reference_path = shot_data.get("continuity_reference_path", "")
             shot.pose_reference_path = ""
             shot.depth_reference_path = ""
             shot.image_path = image_path
@@ -1372,48 +1525,119 @@ async def _regenerate_single_shot(
         lock.release()
 
 
-async def _run_single_shot_audio(shot_id: str, expected_version: int) -> None:
-    """配音阶段的最小独立 worker；写入前再次校验版本，避免取消后的迟到发布。
+async def _prepare_shot_audio(shot_id: str, expected_version: int) -> dict[str, object]:
+    """准备当前镜头版本的音频，供独立音频阶段和一键视频入口复用。
 
-    逐句对白按各自 speaker 选择角色音色合成并拼接为一条镜头配音，实测时间轴
-    随对白一起写回（字幕与镜头时间线据此计算）。
+    该步骤是幂等的：无对白或 native 路由直接跳过 TTS；当前版本已有有效音频
+    时始终复用；只有缺少有效音频的 TTS 镜头才会调用外部配音服务。
     """
+    db = SessionLocal()
+    try:
+        shot = db.query(Shot).filter(Shot.id == shot_id).first()
+        if not shot or (shot.version or 1) != expected_version:
+            raise RuntimeError("镜头版本已变化")
+        project_id = shot.project_id
+        skill_config = resolve_skill_config(project_id, db)
+        lines = _shot_dialogue_lines(shot)
+        characters = _characters(db, project_id)
+        emotion = shot.emotion or "neutral"
+        shot_data = _shot_dict(shot)
+        audio_mode = resolve_audio_mode(shot_data)
+        native_routed = audio_mode == "native"
+        existing_audio = _reusable_audio_path(shot_id, expected_version, shot.audio_path)
+    finally:
+        db.close()
+
+    # native 音频由视频模型负责；没有对白的镜头也不应触发外部 TTS。
+    if native_routed or not lines:
+        return {
+            "project_id": project_id,
+            "characters": characters,
+            "skill_config": skill_config,
+            "dialogue_lines": lines,
+            "timed_lines": [],
+            "audio_path": "",
+            "native_routed": native_routed,
+            "reused": False,
+            "skipped": True,
+        }
+
+    if existing_audio:
+        return {
+            "project_id": project_id,
+            "characters": characters,
+            "skill_config": skill_config,
+            "dialogue_lines": lines,
+            "timed_lines": [],
+            "audio_path": existing_audio,
+            "native_routed": False,
+            "reused": True,
+            "skipped": False,
+        }
+
+    audio_path, timed_lines = await generate_dialogue_track(
+        lines,
+        characters=characters,
+        project_id=project_id,
+        media_id=_versioned_media_id(shot_id, expected_version),
+        default_emotion=emotion,
+        text_cleaner=lambda text: clean_tts_text(text, skill_config),
+    )
+    db = SessionLocal()
+    try:
+        shot = db.query(Shot).filter(Shot.id == shot_id).first()
+        if not shot or (shot.version or 1) != expected_version:
+            raise RuntimeError("镜头版本已变化")
+        shot.audio_path = audio_path
+        shot.dialogue = serialize_dialogue_lines(timed_lines)
+        # TTS 实测时间轴落库的同时刷新统一执行计划（先于视频生成），视频
+        # Prompt 与后期合成后续都消费这一份计划。
+        _persist_execution_plan(
+            shot,
+            ShotExecutionPlan.derive(
+                shot_data,
+                provider=provider_duration_capability(),
+                audio_mode="tts",
+                dialogue_timing=[line.as_dict() for line in timed_lines],
+                dialogue_timing_source="tts_measured",
+            ),
+        )
+        shot.status = "video_done" if shot.video_path else ("storyboard_approved" if shot.confirmed else "storyboard_done")
+        create_version(db, shot, "regenerate", task_id=f"shot:{shot_id}:audio")
+        db.commit()
+    finally:
+        db.close()
+    return {
+        "project_id": project_id,
+        "characters": characters,
+        "skill_config": skill_config,
+        "dialogue_lines": lines,
+        "timed_lines": timed_lines,
+        "audio_path": audio_path,
+        "native_routed": False,
+        "reused": False,
+        "skipped": False,
+    }
+
+
+async def _run_single_shot_audio(shot_id: str, expected_version: int) -> None:
+    """独立音频 worker；准备步骤本身负责版本校验、复用和跳过策略。"""
+    lock = _shot_generation_locks.setdefault(shot_id, asyncio.Lock())
+    if lock.locked():
+        raise RuntimeError("镜头音频生成任务已在运行")
+    await lock.acquire()
     project_id = ""
     try:
+        result = await _prepare_shot_audio(shot_id, expected_version)
+        project_id = str(result.get("project_id") or "")
         db = SessionLocal()
         try:
             shot = db.query(Shot).filter(Shot.id == shot_id).first()
-            if not shot or (shot.version or 1) != expected_version:
-                raise asyncio.CancelledError("镜头版本已变化")
-            project_id = shot.project_id
-            skill_config = resolve_skill_config(project_id, db)
-            lines = _shot_dialogue_lines(shot)
-            characters = _characters(db, project_id)
-            emotion = shot.emotion or "neutral"
+            if shot and (shot.version or 1) == expected_version:
+                await ws_manager.send_to_project(project_id, _shot_update_payload(shot))
         finally:
             db.close()
-        audio_path, timed_lines = await generate_dialogue_track(
-            lines,
-            characters=characters,
-            project_id=project_id,
-            media_id=_versioned_media_id(shot_id, expected_version),
-            default_emotion=emotion,
-            text_cleaner=lambda text: clean_tts_text(text, skill_config),
-        )
-        db = SessionLocal()
-        try:
-            shot = db.query(Shot).filter(Shot.id == shot_id).first()
-            if not shot or (shot.version or 1) != expected_version:
-                raise asyncio.CancelledError("镜头版本已变化")
-            shot.audio_path = audio_path
-            shot.dialogue = serialize_dialogue_lines(timed_lines)
-            shot.status = "video_done" if shot.video_path else ("storyboard_approved" if shot.confirmed else "storyboard_done")
-            create_version(db, shot, "regenerate", task_id=f"shot:{shot_id}:audio")
-            db.commit()
-            await ws_manager.send_to_project(project_id, _shot_update_payload(shot))
-        finally:
-            db.close()
-    except Exception as exc:
+    except Exception:
         db = SessionLocal()
         try:
             shot = db.query(Shot).filter(Shot.id == shot_id).first()
@@ -1422,8 +1646,344 @@ async def _run_single_shot_audio(shot_id: str, expected_version: int) -> None:
                 db.commit()
         finally:
             db.close()
-        raise exc
+        raise
+    finally:
+        lock.release()
 
+
+async def _generate_shot_video(
+    shot_data: dict,
+    characters: list[dict],
+    scenes: list[dict],
+    project_id: str,
+    *,
+    provider_override: str = "",
+    resolution_override: str = "",
+    capability_mode: str = "manual",
+    confirm_capability_downgrade: bool = False,
+) -> dict:
+    """调用视频 Provider 的纯视频步骤；音频准备由 ``_prepare_shot_audio`` 完成。"""
+    video_options = {}
+    if provider_override:
+        video_options["provider_override"] = provider_override
+    if resolution_override:
+        video_options["resolution_override"] = resolution_override
+    video_options.update(_capability_kwargs(capability_mode, confirm_capability_downgrade))
+    return await seedance_service.generate_shot_video(
+        shot_data,
+        characters,
+        scenes,
+        project_id,
+        **video_options,
+    )
+
+
+def _video_candidate_media_id(
+    media_id: str,
+    candidate_index: int,
+    retry_of_candidate_id: str = "",
+    batch_id: str = "",
+) -> str:
+    """为候选/重试生成不会覆盖旧文件的稳定媒体名。"""
+
+    batch_suffix = f"_b{hashlib.sha256(str(batch_id).encode('utf-8')).hexdigest()[:8]}" if batch_id else ""
+    if retry_of_candidate_id:
+        retry_suffix = hashlib.sha256(str(retry_of_candidate_id).encode("utf-8")).hexdigest()[:8]
+        stem = f"{media_id}_retry_{retry_suffix}{batch_suffix}_c{int(candidate_index)}"
+    else:
+        stem = f"{media_id}{batch_suffix}_c{int(candidate_index)}"
+    if len(stem) <= 128:
+        return stem
+    digest = hashlib.sha256(stem.encode("utf-8")).hexdigest()[:16]
+    return f"{stem[:105]}_{digest}"[:128]
+
+
+def _apply_recovery_revisions(shot_data: dict, revisions: list[dict] | None, *, shot_id: str, stage: str) -> None:
+    """Apply only explicit, stage/shot-scoped patches to the actual generation input."""
+    for revision in revisions or []:
+        if not isinstance(revision, dict) or str(revision.get("shot_id") or "") not in {"", str(shot_id)}:
+            continue
+        for raw in revision.get("patches") or []:
+            if not isinstance(raw, dict) or str(raw.get("target_stage") or stage) != stage:
+                continue
+            if str(raw.get("shot_id") or "") not in {"", str(shot_id)}:
+                continue
+            field = str(raw.get("field") or "")
+            op = str(raw.get("op") or "set")
+            value = raw.get("value")
+            if field in {"visual_prompt", "storyboard_prompt", "visual_notes"}:
+                if isinstance(value, dict) and isinstance(value.get("rule"), str):
+                    value = value["rule"]
+                if isinstance(value, str) and value.strip():
+                    existing = str(shot_data.get(field) or "")
+                    shot_data[field] = value.strip() if op == "replace" else f"{existing}\\n{value.strip()}".strip()
+                    # Both providers consume these fields through their prompt builders.
+                    if field == "visual_prompt":
+                        shot_data["visual_notes"] = f"{shot_data.get('visual_notes', '')}\\n{value.strip()}".strip()
+                        shot_data["storyboard_prompt"] = f"{shot_data.get('storyboard_prompt', '')}\\n{value.strip()}".strip()
+            elif field == "negative_prompt" and isinstance(value, str):
+                existing = str(shot_data.get(field) or "")
+                shot_data[field] = value if op == "replace" else f"{existing}, {value}".strip(", ")
+            elif field == "reference_images" and op == "replace":
+                _replace_recovery_reference(shot_data, stage=stage, source=value if isinstance(value, dict) else {})
+            elif field == "resolution" and isinstance(value, str):
+                shot_data["resolution"] = value
+
+
+def _replace_recovery_reference(shot_data: dict, *, stage: str, source: dict) -> None:
+    """Choose a real scene baseline/continuity frame; never invent a reference path."""
+    requested = str(source.get("source") or "scene_baseline_or_previous_tail_frame")
+    manifest = list(shot_data.get("reference_manifest") or [])
+    valid = [
+        item for item in manifest
+        if isinstance(item, dict)
+        and str(item.get("path") or "")
+        and Path(str(item.get("path"))).is_file()
+        and str(item.get("status") or "ready") not in {"failed", "stale", "unsupported"}
+    ]
+    priorities = ("scene_baseline", "continuity_frame", "previous_last_frame", "approved_storyboard_first_frame")
+    chosen = next((item for kind in priorities for item in valid if str(item.get("type") or "") == kind), None)
+    if chosen is None:
+        shot_data["recovery_reference"] = {"requested": requested, "applied": False, "reason": "no_valid_reference"}
+        return
+    if stage == "video_generation":
+        # Video generation always retains the approved storyboard first frame as its required anchor.
+        first = next((item for item in valid if item.get("type") == "approved_storyboard_first_frame"), None)
+        selected = [first] if first and first is not chosen else []
+        selected.append(chosen)
+    else:
+        selected = [chosen]
+    selected = list({str(item.get("path")): item for item in selected}.values())
+    shot_data["reference_manifest"] = selected
+    shot_data["reference_assets"] = [
+        {"type": item.get("type", "reference_image"), "role": item.get("name") or item.get("type", "reference_image"), "path": item["path"], "version": item.get("version", "")}
+        for item in selected
+    ]
+    shot_data["scene_reference_images"] = [item["path"] for item in selected if item.get("type") == "scene_baseline"]
+    shot_data["character_reference_images"] = []
+    continuity = next((item["path"] for item in selected if item.get("type") in {"continuity_frame", "previous_last_frame"}), "")
+    if continuity:
+        shot_data["continuity_reference_path"] = continuity
+    shot_data["recovery_reference"] = {"requested": requested, "applied": True, "path": chosen["path"], "type": chosen.get("type", "")}
+
+
+def _candidate_seed(media_id: str, candidate_index: int, retry_of_candidate_id: str = "") -> int:
+    """为每个候选生成可追溯的稳定 seed；Provider 不支持 seed 时仍记录 recipe seed。"""
+
+    payload = f"{media_id}:{candidate_index}:{retry_of_candidate_id}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big") % (2**31 - 1)
+
+
+def _candidate_recipe_hash(
+    *,
+    provider: str,
+    model: str,
+    seed: int,
+    execution_plan_hash: str,
+    reference_manifest: list,
+    prompt: str,
+) -> str:
+    payload = {
+        "provider": str(provider or ""),
+        "model": str(model or ""),
+        "seed": int(seed),
+        "execution_plan_hash": str(execution_plan_hash or ""),
+        "reference_manifest": reference_manifest,
+        "prompt": str(prompt or ""),
+    }
+    return _execution_plan_hash(payload)
+
+
+def _candidate_decision_trace(
+    *,
+    project_id: str,
+    shot_id: str,
+    expected_version: int,
+    batch_id: str,
+    candidates: list[dict],
+    selection: VideoCandidateSelection,
+) -> dict:
+    return DecisionTrace(
+        trace_id=f"trace:video_candidate:{shot_id}:{batch_id}",
+        project_id=project_id,
+        shot_id=shot_id,
+        shot_version=int(expected_version),
+        run_id=f"shot:{shot_id}:video",
+        stage=StageName.VIDEO_GENERATION,
+        mode="auto",
+        reason=selection.reason or "candidate_selection",
+        selected_video_candidate_id=str(selection.candidate_id or ""),
+        video_candidates=[dict(item) for item in candidates],
+        candidate_selection=selection.model_dump(mode="json"),
+    ).model_dump(mode="json")
+
+
+def _new_video_candidate_id(media_id: str, candidate_index: int, batch_id: str, retry_of_candidate_id: str = "") -> str:
+    stem = _video_candidate_media_id(media_id, candidate_index, retry_of_candidate_id)
+    return f"{stem}_{batch_id}_{int(candidate_index)}"
+
+
+def _output_format_ratio(value: str | None) -> float | None:
+    """把 ``9:16`` 这类画幅字符串解析成宽高比；无法解析返回 None。"""
+    width, _, height = str(value or "").partition(":")
+    try:
+        ratio = float(width) / float(height)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return ratio if ratio > 0 else None
+
+
+def _execution_plan_hash(payload: dict) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _video_candidate_model(data: dict) -> ShotVideoCandidate:
+    failure = _json_dict(data.get("failure"))
+    if not failure and (data.get("failure_kind") or data.get("failure_message")):
+        failure = {"kind": data.get("failure_kind"), "message": data.get("failure_message")}
+    metrics = _json_dict(data.get("metrics") or data.get("structural_metrics"))
+    path = str(data.get("path") or data.get("video_path") or "")
+    last_frame_path = str(data.get("last_frame_path") or data.get("tail_frame_path") or "")
+    recipe_hash = str(data.get("recipe_hash") or data.get("execution_plan_hash") or "")
+    seed_raw = data.get("seed")
+    try:
+        seed = int(seed_raw) if seed_raw is not None and str(seed_raw) != "" else None
+    except (TypeError, ValueError):
+        seed = None
+    return ShotVideoCandidate(
+        candidate_id=str(data["candidate_id"]),
+        shot_id=str(data["shot_id"]),
+        project_id=str(data.get("project_id") or ""),
+        shot_version=int(data.get("shot_version") or 1),
+        batch_id=str(data.get("batch_id") or ""),
+        candidate_index=int(data.get("candidate_index") or 1),
+        status=str(data.get("status") or VideoCandidateStatus.PENDING.value),
+        path=path,
+        last_frame_path=last_frame_path,
+        provider=str(data.get("provider") or ""),
+        model=str(data.get("model") or ""),
+        seed=seed,
+        recipe_hash=recipe_hash,
+        reference_manifest=json.dumps(data.get("reference_manifest") or [], ensure_ascii=False),
+        generation_duration_ms=int(data.get("generation_duration_ms") or 0),
+        score=float(data.get("score") or 0.0),
+        metrics=json.dumps(metrics, ensure_ascii=False),
+        failure=json.dumps(failure, ensure_ascii=False),
+        video_path=path,
+        tail_frame_path=last_frame_path,
+        execution_plan_hash=recipe_hash,
+        structural_passed=data.get("structural_passed"),
+        structural_metrics=json.dumps(metrics, ensure_ascii=False),
+        failure_kind=str(failure.get("kind") or data.get("failure_kind") or ""),
+        failure_message=str(failure.get("message") or data.get("failure_message") or ""),
+        retry_of_candidate_id=str(data.get("retry_of_candidate_id") or ""),
+        selected=bool(data.get("selected") or False),
+        selection_reason=str(data.get("selection_reason") or ""),
+    )
+
+
+def _video_candidate_payload(row: ShotVideoCandidate) -> dict:
+    failure = _json_dict(row.failure)
+    if not failure and (row.failure_kind or row.failure_message):
+        failure = {"kind": row.failure_kind, "message": row.failure_message, "stage": "video_generation", "shot_id": row.shot_id}
+    failure = failure or None
+    metrics = _json_dict(row.metrics) or _json_dict(row.structural_metrics)
+    path = row.path or row.video_path or ""
+    last_frame_path = row.last_frame_path or row.tail_frame_path or ""
+    return {
+        "candidate_id": row.candidate_id,
+        "shot_id": row.shot_id,
+        "project_id": row.project_id or "",
+        "shot_version": int(row.shot_version or 1),
+        "batch_id": row.batch_id or "",
+        "candidate_index": int(row.candidate_index or 1),
+        "status": row.status,
+        "path": path,
+        "last_frame_path": last_frame_path,
+        "provider": row.provider or "",
+        "model": row.model or "",
+        "seed": row.seed,
+        "recipe_hash": row.recipe_hash or row.execution_plan_hash or "",
+        "reference_manifest": _json_list(row.reference_manifest),
+        "generation_duration_ms": int(row.generation_duration_ms or 0),
+        "score": float(row.score or 0.0),
+        "metrics": metrics,
+        "failure": failure,
+        "video_path": path,
+        "tail_frame_path": last_frame_path,
+        "execution_plan_hash": row.recipe_hash or row.execution_plan_hash or "",
+        "structural_passed": row.structural_passed,
+        "structural_metrics": metrics,
+        "retry_of_candidate_id": row.retry_of_candidate_id or "",
+        "selected": bool(row.selected),
+        "selection_reason": row.selection_reason or "",
+    }
+
+
+def _save_video_candidate(data: dict) -> dict:
+    row = _video_candidate_model(data)
+    db = SessionLocal()
+    try:
+        merged = db.merge(row)
+        db.commit()
+        db.refresh(merged)
+        return _video_candidate_payload(merged)
+    finally:
+        db.close()
+
+
+def _shot_video_candidates(
+    shot_id: str,
+    *,
+    shot_version: int | None = None,
+    statuses: set[str] | None = None,
+) -> list[dict]:
+    db = SessionLocal()
+    try:
+        query = db.query(ShotVideoCandidate).filter(ShotVideoCandidate.shot_id == str(shot_id))
+        if shot_version is not None:
+            query = query.filter(ShotVideoCandidate.shot_version == int(shot_version))
+        if statuses is not None:
+            query = query.filter(ShotVideoCandidate.status.in_(sorted(statuses)))
+        rows = query.order_by(ShotVideoCandidate.candidate_index, ShotVideoCandidate.created_at).all()
+        return [_video_candidate_payload(row) for row in rows]
+    finally:
+        db.close()
+
+
+def _persist_video_candidate_selection(
+    db: Session,
+    shot: Shot,
+    selected: VideoCandidateSelection,
+    *,
+    expected_version: int,
+) -> ShotVideoCandidate:
+    if not selected.candidate_id:
+        raise RuntimeError(selected.reason or "没有可发布的视频候选")
+    if int(shot.version or 1) != int(expected_version):
+        raise RuntimeError("镜头版本已变化")
+    rows = (
+        db.query(ShotVideoCandidate)
+        .filter(ShotVideoCandidate.shot_id == shot.id, ShotVideoCandidate.shot_version == int(expected_version))
+        .all()
+    )
+    matched = None
+    for row in rows:
+        is_selected = row.candidate_id == selected.candidate_id
+        if is_selected:
+            if row.status != VideoCandidateStatus.SUCCEEDED.value:
+                raise RuntimeError("只能选择成功的视频候选")
+            if row.structural_passed is False:
+                raise RuntimeError("结构检查失败的候选不能被选择")
+            matched = row
+        row.selected = is_selected
+        row.selection_reason = selected.reason if is_selected else ""
+        row.selected_at = None
+    if matched is None:
+        raise RuntimeError("视频候选不存在或版本不匹配")
+    matched.selected_at = datetime.utcnow()
+    return matched
 
 async def _run_single_shot_video(
     shot_id: str,
@@ -1435,7 +1995,14 @@ async def _run_single_shot_video(
     *,
     capability_mode: str = "manual",
     confirm_capability_downgrade: bool = False,
-) -> None:
+    candidate_count: int = 1,
+    recovery_budget: int = 1,
+    strict_structural_selection: bool = False,
+    retry_of_candidate_id: str = "",
+    seed_override: int | None = None,
+    recovery_revisions: list[dict] | None = None,
+) -> dict:
+    candidate_count = max(1, min(3, int(candidate_count or 1)))
     lock = _shot_generation_locks.setdefault(shot_id, asyncio.Lock())
     if lock.locked():
         raise RuntimeError("镜头视频生成任务已在运行")
@@ -1447,13 +2014,13 @@ async def _run_single_shot_video(
         try:
             shot = db.query(Shot).filter(Shot.id == shot_id).first()
             if not shot:
-                return
+                return {"skipped": True, "reason": "shot_not_found", "video_candidates": []}
             if expected_version is None:
                 expected_version = shot.version or 1
             elif (shot.version or 1) != expected_version:
-                raise asyncio.CancelledError("镜头版本已变化")
+                raise RuntimeError("镜头版本已变化")
             if _can_reuse_existing_video(shot, force):
-                return
+                return {"skipped": True, "reason": "existing_video_reused", "video_candidates": []}
             video_gate = ensure_generation_gate(db, shot.project_id, allow_degraded=True, shot_ids=[shot.id])
             if video_gate.get("blocking"):
                 raise RuntimeError(
@@ -1473,7 +2040,7 @@ async def _run_single_shot_video(
         try:
             shot = db.query(Shot).filter(Shot.id == shot_id).first()
             if not shot or (expected_version is not None and (shot.version or 1) != expected_version):
-                raise asyncio.CancelledError("镜头版本已变化")
+                raise RuntimeError("镜头版本已变化")
             project = db.query(Project).filter(Project.id == project_id).first()
             characters = _characters(db, project_id)
             scenes = _scenes(db, project_id)
@@ -1483,22 +2050,31 @@ async def _run_single_shot_video(
                 shot_data["output_format"] = project.output_format or "9:16"
                 shot_data["resolution"] = project.resolution or "720p"
                 shot_data["style"] = project.style or "anime"
-            previous_reference = _previous_reference_for_shot(db, shot, prefer_last_frame=True)
+            previous_shot_model = _previous_shot_for_continuity(db, shot)
+            previous_shot_data = _shot_dict(previous_shot_model) if previous_shot_model else None
             shot_data.update(
                 consistency_service.build_generation_context(
                     shot_data,
                     characters,
                     scenes,
-                    previous_reference_path=previous_reference,
+                    previous_shot=previous_shot_data,
                     for_video=True,
                 )
             )
-            shot_data["reference_manifest"] = build_manifest_for_shot(db, shot, stage="video")
+            previous_reference = shot_data.get("continuity_reference_path", "")
+            shot_data["reference_manifest"] = build_manifest_for_shot(
+                db,
+                shot,
+                stage="video",
+                continuity_profile=shot_data.get("continuity_profile") or {},
+                continuity_reference_path=previous_reference,
+            )
             shot_data["reference_versions"] = {
                 str(item.get("asset_id")): item.get("version")
                 for item in shot_data["reference_manifest"]
             }
             apply_agent_config_to_shot(shot_data, skill_config)
+            _apply_recovery_revisions(shot_data, recovery_revisions, shot_id=shot.id, stage="video_generation")
             # 镜头级 audio_mode 覆盖存于 continuity_profile，但一致性上下文会重建
             # profile，这里从数据库存档提升为 shot 顶级字段，保证覆盖不被冲掉。
             stored_audio_mode = _json_dict(shot.continuity_profile).get("audio_mode")
@@ -1519,34 +2095,26 @@ async def _run_single_shot_video(
             job_keys=(f"shot:{shot_id}:video",),
         )
         media_id = _versioned_media_id(shot_id, expected_version)
-        audio_path = shot_data.get("audio_path", "")
-        audio_mode = resolve_audio_mode(shot_data)
-        native_routed = audio_mode == "native"
-        dialogues = None
-        timed_lines: list = []
-        if native_routed:
-            # 原生音频路径：对白交给视频模型经 prompt 生成并随视频直出，
-            # 跳过独立 TTS 配音与后续 ffmpeg 音轨合成。每句对白各自携带
-            # speaker（prompt 中以该角色身份开口），绝不用单一角色冒名。
-            audio_path = ""
-            shot_data["audio_path"] = ""
-            if dialogue_lines:
-                dialogues = [
-                    Dialogue(
-                        role=line.speaker or "角色",
-                        text=clean_tts_text(line.line, skill_config),
-                        emotion=line.emotion or emotion,
-                        start_ms=int(line.start_ms or 0),
-                        end_ms=int(line.end_ms or line.start_ms or 0),
-                    )
-                    for line in dialogue_lines
-                ]
-        elif dialogue_lines:
-            reusable_audio = _reusable_audio_path(shot_id, expected_version, audio_path) if reuse_audio else ""
-            if reusable_audio:
-                # 续跑 / 重试：该版本已经有有效配音，不再重复调用 TTS。
-                audio_path = reusable_audio
-                shot_data["audio_path"] = audio_path
+        prepared_audio = await _prepare_shot_audio(shot_id, expected_version)
+        audio_path = str(prepared_audio.get("audio_path") or "")
+        native_routed = bool(prepared_audio.get("native_routed"))
+        timed_lines = list(prepared_audio.get("timed_lines") or [])
+        shot_data["audio_path"] = audio_path
+        if dialogue_lines and native_routed:
+            # 原生音频由视频模型负责；对白随 prompt 传入，不调用独立 TTS。
+            dialogues = [
+                Dialogue(
+                    role=line.speaker or "角色",
+                    text=clean_tts_text(line.line, skill_config),
+                    emotion=line.emotion or emotion,
+                    start_ms=int(line.start_ms or 0),
+                    end_ms=int(line.end_ms or line.start_ms or 0),
+                )
+                for line in dialogue_lines
+            ]
+        else:
+            dialogues = None
+            if prepared_audio.get("reused"):
                 await _progress(
                     project_id,
                     "generate_voice",
@@ -1554,23 +2122,45 @@ async def _run_single_shot_video(
                     f"镜头 {shot_sequence} 已有有效配音，复用后继续生成视频",
                     job_keys=(f"shot:{shot_id}:video",),
                 )
-            else:
-                await _progress(
-                    project_id,
-                    "generate_voice",
-                    84,
-                    f"正在生成镜头 {shot_sequence} 的配音",
-                    job_keys=(f"shot:{shot_id}:video",),
-                )
-                audio_path, timed_lines = await generate_dialogue_track(
-                    dialogue_lines,
-                    characters=characters,
-                    project_id=project_id,
-                    media_id=media_id,
-                    default_emotion=emotion,
-                    text_cleaner=lambda text: clean_tts_text(text, skill_config),
-                )
-                shot_data["audio_path"] = audio_path
+
+        # 统一执行计划先行落库，再进入视频生成：TTS 实测时间轴（或复用配音的
+        # 库内时间轴 / native prompt 时间）与 Provider 生成时长在此收敛成一份
+        # 裁剪区间，视频 Prompt 与后期合成都消费它，不再各自推导。候选数与
+        # 恢复预算来自调用方质量档位，一并写入计划供恢复决策追踪。
+        if native_routed and dialogues:
+            timing_payload = [
+                {"speaker": item.role, "text": item.text, "start_ms": item.start_ms, "end_ms": item.end_ms}
+                for item in dialogues
+            ]
+            timing_source = "native_prompt"
+        elif timed_lines:
+            timing_payload = [line.as_dict() for line in timed_lines]
+            timing_source = "tts_measured"
+        else:
+            timing_payload = None
+            timing_source = ""
+        shot_data["candidate_count"] = candidate_count
+        shot_data["recovery_budget"] = max(0, int(recovery_budget))
+        execution_plan = ShotExecutionPlan.derive(
+            shot_data,
+            provider=provider_duration_capability(),
+            audio_mode="native" if native_routed else "tts",
+            dialogue_timing=timing_payload,
+            dialogue_timing_source=timing_source,
+            candidate_count=candidate_count,
+            recovery_budget=max(0, int(recovery_budget)),
+        )
+        db = SessionLocal()
+        try:
+            shot = db.query(Shot).filter(Shot.id == shot_id).first()
+            if not shot or (expected_version is not None and (shot.version or 1) != expected_version):
+                raise RuntimeError("镜头版本已变化")
+            _persist_execution_plan(shot, execution_plan)
+            db.commit()
+        finally:
+            db.close()
+        shot_data["execution_plan"] = execution_plan.to_dict()
+        shot_data["duration"] = round(execution_plan.effective_duration_ms / 1000, 3)
 
         await _progress(
             project_id,
@@ -1579,22 +2169,237 @@ async def _run_single_shot_video(
             f"正在生成镜头 {shot_sequence} 的视频",
             job_keys=(f"shot:{shot_id}:video",),
         )
-        video_shot_data = {**shot_data, "shot_id": media_id, "dialogues": dialogues}
-        video_options = {}
-        if provider_override:
-            video_options["provider_override"] = provider_override
-        if resolution_override:
-            video_options["resolution_override"] = resolution_override
-        video_options.update(_capability_kwargs(capability_mode, confirm_capability_downgrade))
-        result = await seedance_service.generate_shot_video(
-            video_shot_data,
-            characters,
-            scenes,
-            project_id,
-            **video_options,
+        batch_id = uuid.uuid4().hex[:12]
+        execution_plan_hash = _execution_plan_hash(execution_plan.to_dict())
+        # 候选验证上下文：执行计划时长、目标画幅、实测配音时长。缺失的维度
+        # 在校验器里记 skipped，不猜测也不冒充通过。
+        expected_aspect_ratio = _output_format_ratio(str(shot_data.get("output_format") or ""))
+        audio_duration_s = await probe_media_duration(audio_path) if audio_path else None
+        candidate_rows: list[dict] = []
+        candidate_results: dict[str, dict] = {}
+        candidate_specs: list[dict] = []
+        for candidate_index in range(1, candidate_count + 1):
+            candidate_id = _new_video_candidate_id(media_id, candidate_index, batch_id, retry_of_candidate_id)
+            candidate_media_id = _video_candidate_media_id(media_id, candidate_index, retry_of_candidate_id, batch_id)
+            if seed_override is not None:
+                seed_payload = f"{int(seed_override)}:{candidate_index}:{batch_id}:{retry_of_candidate_id}".encode("utf-8")
+                seed = int.from_bytes(hashlib.sha256(seed_payload).digest()[:4], "big") % (2**31 - 1)
+            else:
+                seed = _candidate_seed(media_id, candidate_index, retry_of_candidate_id)
+            reference_manifest = list(shot_data.get("reference_manifest") or [])
+            recipe_hash = _candidate_recipe_hash(
+                provider=provider_override or get_endpoint("video").protocol,
+                model=get_endpoint("video").model,
+                seed=seed,
+                execution_plan_hash=execution_plan_hash,
+                reference_manifest=reference_manifest,
+                prompt=str(shot_data.get("visual_notes") or shot_data.get("storyboard_prompt") or ""),
+            )
+            spec = {
+                "candidate_id": candidate_id,
+                "candidate_index": candidate_index,
+                "candidate_media_id": candidate_media_id,
+                "seed": seed,
+                "recipe_hash": recipe_hash,
+                "reference_manifest": reference_manifest,
+            }
+            candidate_specs.append(spec)
+            _save_video_candidate({
+                "candidate_id": candidate_id,
+                "shot_id": shot_id,
+                "project_id": project_id,
+                "shot_version": int(expected_version),
+                "batch_id": batch_id,
+                "candidate_index": candidate_index,
+                "status": VideoCandidateStatus.PENDING.value,
+                "path": "",
+                "last_frame_path": "",
+                "provider": provider_override or get_endpoint("video").protocol,
+                "model": get_endpoint("video").model,
+                "seed": seed,
+                "recipe_hash": recipe_hash,
+                "reference_manifest": reference_manifest,
+                "generation_duration_ms": 0,
+                "score": 0.0,
+                "metrics": {},
+                "failure": {},
+                "retry_of_candidate_id": retry_of_candidate_id,
+            })
+
+        async def generate_candidate(spec: dict) -> dict:
+            candidate_id = str(spec["candidate_id"])
+            candidate_index = int(spec["candidate_index"])
+            candidate_media_id = str(spec["candidate_media_id"])
+            candidate_started = time.monotonic()
+            endpoint = get_endpoint("video")
+            candidate_shot_data = copy.deepcopy(shot_data)
+            candidate_shot_data.update({"shot_id": candidate_media_id, "dialogues": dialogues, "seed": spec["seed"]})
+            try:
+                _save_video_candidate({
+                    "candidate_id": candidate_id,
+                    "shot_id": shot_id,
+                    "project_id": project_id,
+                    "shot_version": int(expected_version),
+                    "batch_id": batch_id,
+                    "candidate_index": candidate_index,
+                    "status": VideoCandidateStatus.RUNNING.value,
+                    "path": "",
+                    "last_frame_path": "",
+                    "provider": provider_override or endpoint.protocol,
+                    "model": endpoint.model,
+                    "seed": spec["seed"],
+                    "recipe_hash": spec["recipe_hash"],
+                    "reference_manifest": spec["reference_manifest"],
+                    "retry_of_candidate_id": retry_of_candidate_id,
+                })
+                candidate_result = await _generate_shot_video(
+                    candidate_shot_data,
+                    characters,
+                    scenes,
+                    project_id,
+                    provider_override=provider_override,
+                    resolution_override=resolution_override,
+                    capability_mode=capability_mode,
+                    confirm_capability_downgrade=confirm_capability_downgrade,
+                )
+                if native_routed and not candidate_result.get("native_audio"):
+                    raise RuntimeError("视频适配器未按原生音频模式返回带音轨视频，已阻止无声成品")
+                reference_manifest = list(
+                    candidate_result.get("reference_manifest")
+                    or candidate_shot_data.get("reference_manifest")
+                    or spec["reference_manifest"]
+                    or []
+                )
+                video_report = dict(candidate_result.get("generation_report") or {})
+                structural = await validate_video_file(
+                    str(candidate_result.get("video_path") or ""),
+                    expected_duration_s=float(execution_plan.provider_generation_duration_s),
+                    expected_aspect_ratio=expected_aspect_ratio,
+                    audio_duration_s=audio_duration_s,
+                    tail_frame_path=str(candidate_result.get("frame_path") or "") or None,
+                )
+                structural_passed = bool(structural.get("passed"))
+                # 测试/兼容 Provider 若不落可探测媒体，保留生成成功记录但不获得结构分；
+                # 严格自动候选只选择 structural_passed=True 的行。
+                if not Path(str(candidate_result.get("video_path") or "")).exists():
+                    structural_passed = None
+                candidate_data = {
+                    "candidate_id": candidate_id,
+                    "shot_id": shot_id,
+                    "project_id": project_id,
+                    "shot_version": int(expected_version),
+                    "batch_id": batch_id,
+                    "candidate_index": candidate_index,
+                    "status": VideoCandidateStatus.SUCCEEDED.value,
+                    "path": str(candidate_result.get("video_path") or ""),
+                    "last_frame_path": str(candidate_result.get("frame_path") or ""),
+                    "provider": str(video_report.get("provider") or provider_override or endpoint.protocol),
+                    "model": str(video_report.get("model") or endpoint.model),
+                    "seed": spec["seed"],
+                    "recipe_hash": spec["recipe_hash"],
+                    "reference_manifest": reference_manifest,
+                    "generation_duration_ms": int((time.monotonic() - candidate_started) * 1000),
+                    "metrics": structural,
+                    "structural_passed": structural_passed,
+                    "retry_of_candidate_id": retry_of_candidate_id,
+                }
+                candidate_data["score"] = score_video_candidate({**candidate_data, "score": 0.0})
+                saved = _save_video_candidate(candidate_data)
+                return {
+                    "candidate_index": candidate_index,
+                    "row": saved,
+                    "result": {
+                        **candidate_result,
+                        "reference_manifest": reference_manifest,
+                        "generation_report": video_report,
+                        "candidate_shot_data": candidate_shot_data,
+                    },
+                }
+            except Exception as candidate_exc:
+                failure = {
+                    "kind": "video_failed",
+                    "stage": "video_generation",
+                    "shot_id": shot_id,
+                    "message": str(candidate_exc),
+                    "retryable": True,
+                    "details": {"candidate_index": candidate_index, "candidate_id": candidate_id},
+                }
+                saved = _save_video_candidate({
+                    "candidate_id": candidate_id,
+                    "shot_id": shot_id,
+                    "project_id": project_id,
+                    "shot_version": int(expected_version),
+                    "batch_id": batch_id,
+                    "candidate_index": candidate_index,
+                    "status": VideoCandidateStatus.FAILED.value,
+                    "path": "",
+                    "last_frame_path": "",
+                    "provider": provider_override or endpoint.protocol,
+                    "model": endpoint.model,
+                    "seed": spec["seed"],
+                    "recipe_hash": spec["recipe_hash"],
+                    "reference_manifest": list(spec["reference_manifest"] or []),
+                    "generation_duration_ms": int((time.monotonic() - candidate_started) * 1000),
+                    "score": 0.0,
+                    "metrics": {"passed": False, "issues": [str(candidate_exc)]},
+                    "failure": failure,
+                    "retry_of_candidate_id": retry_of_candidate_id,
+                })
+                return {"candidate_index": candidate_index, "row": saved, "result": {}}
+
+        # 候选之间互不等待：一个 Provider 失败只生成自己的 failed 记录，
+        # 其它候选继续完成，最后统一评分与选择。
+        generated = await asyncio.gather(*(generate_candidate(spec) for spec in candidate_specs))
+        for item in sorted(generated, key=lambda value: int(value["candidate_index"])):
+            saved = item["row"]
+            candidate_rows.append(saved)
+            if item.get("result"):
+                candidate_results[str(saved["candidate_id"])] = item["result"]
+
+        # 重试时把同镜头版本的历史成功候选一并纳入，避免新候选直接挤掉更好的旧结果。
+        selection_pool = (
+            _shot_video_candidates(shot_id, shot_version=int(expected_version))
+            if retry_of_candidate_id
+            else [item for item in candidate_rows if item.get("batch_id") == batch_id]
         )
-        if native_routed and not result.get("native_audio"):
-            raise RuntimeError("视频适配器未按原生音频模式返回带音轨视频，已阻止无声成品")
+        selection_pool = [
+            {**item, "score": score_video_candidate(item)}
+            for item in selection_pool
+        ]
+        selection = select_video_candidate(
+            selection_pool,
+            require_structural=strict_structural_selection,
+            allow_single_candidate_fallback=(not strict_structural_selection and candidate_count == 1),
+        )
+        decision_trace = _candidate_decision_trace(
+            project_id=project_id,
+            shot_id=shot_id,
+            expected_version=int(expected_version),
+            batch_id=batch_id,
+            candidates=selection_pool,
+            selection=selection,
+        )
+        CheckpointStore.get(project_id, f"shot:{shot_id}:video").add_decision(decision_trace)
+        if not selection.candidate_id:
+            raise RuntimeError(selection.reason or "没有可发布的视频候选")
+        selected_candidate_id = str(selection.candidate_id)
+        result = candidate_results.get(selected_candidate_id, {})
+        if not result:
+            persisted = next(item for item in selection_pool if item.get("candidate_id") == selected_candidate_id)
+            result = {
+                "video_path": persisted.get("video_path", ""),
+                "frame_path": persisted.get("tail_frame_path", ""),
+                "reference_manifest": persisted.get("reference_manifest", []),
+                "generation_report": {
+                    "provider": persisted.get("provider", ""),
+                    "model": persisted.get("model", ""),
+                },
+                "candidate_shot_data": dict(shot_data),
+            }
+        video_shot_data = result.get("candidate_shot_data") or {**shot_data, "shot_id": media_id, "dialogues": dialogues}
+        if result.get("reference_manifest"):
+            # 请求级 manifest 含已审核首帧、实际候选参考和 continuity 决策/缺帧原因。
+            shot_data["reference_manifest"] = list(result["reference_manifest"])
         continuity_profile = shot_data.get("continuity_profile", {}) or {}
         video_report = dict(result.get("generation_report") or {})
         if video_report:
@@ -1643,12 +2448,29 @@ async def _run_single_shot_video(
         try:
             shot = db.query(Shot).filter(Shot.id == shot_id).first()
             if not shot or (expected_version is not None and (shot.version or 1) != expected_version):
-                raise asyncio.CancelledError("镜头版本已变化")
+                raise RuntimeError("镜头版本已变化")
+            selected_candidate_row = _persist_video_candidate_selection(
+                db,
+                shot,
+                selection,
+                expected_version=int(expected_version),
+            )
             shot.scene_group_id = shot_data.get("scene_group_id", shot.scene_group_id)
             shot.consistency_context = shot_data.get("consistency_context", shot.consistency_context)
             shot.reference_weights = json.dumps(shot_data.get("reference_weights", {}), ensure_ascii=False)
-            shot.continuity_profile = json.dumps(shot_data.get("continuity_profile", {}), ensure_ascii=False)
-            shot.continuity_reference_path = previous_reference
+            # 执行计划随本次生成结果一起写回存档；后期合成直接读取这一份计划。
+            # 生成路由在候选上下文里按可加载素材覆写过能力清单与 video_mode，
+            # 合并进最终计划（对白实测时间轴与 shot_id 仍以路由级计划为准）。
+            final_profile = dict(shot_data.get("continuity_profile") or {})
+            final_plan = dict(execution_plan.to_dict())
+            candidate_plan = dict((video_shot_data or {}).get("execution_plan") or {})
+            for key in ("required_capabilities", "video_mode", "candidate_count", "recovery_budget"):
+                if key in candidate_plan:
+                    final_plan[key] = candidate_plan[key]
+            final_plan["shot_id"] = shot_id
+            final_profile["execution_plan"] = final_plan
+            shot.continuity_profile = json.dumps(final_profile, ensure_ascii=False)
+            shot.continuity_reference_path = shot_data.get("continuity_reference_path", "")
             shot.video_reference_manifest = json.dumps(shot_data.get("reference_manifest", []), ensure_ascii=False)
             shot.reference_capability_warning = str(shot_data.get("continuity_profile", {}).get("reference_capability_warning", ""))
             shot.pose_reference_path = shot_data.get("pose_reference_path", "")
@@ -1664,13 +2486,31 @@ async def _run_single_shot_video(
             shot.status = "video_done"
             # 视频 + 配音 + 尾帧全部基于当前参数重新生成：过期标记就此清除。
             clear_shot_media_stale(shot)
-            create_version(db, shot, "regenerate", task_id=f"shot:{shot_id}:video")
+            create_version(
+                db,
+                shot,
+                "regenerate",
+                task_id=f"shot:{shot_id}:video",
+                candidate_selection=selection.model_dump(mode="json"),
+                decision_trace=decision_trace,
+                force=True,
+            )
             db.commit()
             update = _shot_update_payload(shot)
         finally:
             db.close()
 
         await ws_manager.send_to_project(project_id, update)
+        return {
+            "shot_id": shot_id,
+            "shot_version": int(expected_version),
+            "selected_video_candidate_id": selected_candidate_id,
+            "candidate_selection": selection.model_dump(mode="json"),
+            "decision_trace": decision_trace,
+            "video_candidates": _shot_video_candidates(shot_id, shot_version=int(expected_version)),
+            "video_path": str(result.get("video_path") or ""),
+            "tail_frame_path": str(result.get("frame_path") or ""),
+        }
     except Exception as exc:
         error_id = log_failure(exc, error_type=ERROR_SHOT_VIDEO, context={"shot_id": shot_id})
         db = SessionLocal()
@@ -1734,6 +2574,7 @@ def _serialize_dialogue_input(value, shot: Shot, db: Session) -> str:
 
 
 def _serialize_shot(s: Shot) -> dict:
+    profile = _json_dict(s.continuity_profile)
     return {
         "id": s.id,
         "project_id": s.project_id,
@@ -1769,7 +2610,9 @@ def _serialize_shot(s: Shot) -> dict:
         "scene_group_id": s.scene_group_id or "",
         "consistency_context": s.consistency_context or "",
         "reference_weights": _json_dict(s.reference_weights),
-        "continuity_profile": _json_dict(s.continuity_profile),
+        "continuity_mode": normalize_continuity_mode(profile.get("continuity_mode"), default=""),
+        "continuity_mode_source": str(profile.get("continuity_mode_source") or ""),
+        "continuity_profile": profile,
         "continuity_reference_path": s.continuity_reference_path or "",
         "pose_reference_path": s.pose_reference_path or "",
         "depth_reference_path": s.depth_reference_path or "",
@@ -1805,6 +2648,8 @@ def _shot_update_payload(shot: Shot) -> dict:
         "last_frame_path": shot.last_frame_path,
         "scene_group_id": shot.scene_group_id,
         "reference_weights": _json_dict(shot.reference_weights),
+        "continuity_mode": normalize_continuity_mode(_json_dict(shot.continuity_profile).get("continuity_mode"), default=""),
+        "continuity_mode_source": _json_dict(shot.continuity_profile).get("continuity_mode_source", ""),
         "continuity_profile": _json_dict(shot.continuity_profile),
         "continuity_reference_path": shot.continuity_reference_path,
         "pose_reference_path": shot.pose_reference_path,
@@ -1971,7 +2816,9 @@ def _json_list_raw(raw: str | None) -> list:
         return []
 
 
-def _json_dict(raw: str | None) -> dict:
+def _json_dict(raw: str | dict | None) -> dict:
+    if isinstance(raw, dict):
+        return dict(raw)
     if not raw:
         return {}
     try:
@@ -2216,23 +3063,27 @@ async def _ensure_scene_baselines(
                 db.close()
 
 
-def _previous_reference_for_shot(db: Session, shot: Shot, prefer_last_frame: bool = False) -> str:
-    current_keys = _shot_scene_keys(shot, db)
-    if not current_keys:
-        return ""
-    previous_shots = (
+def _previous_shot_for_continuity(db: Session, shot: Shot) -> Shot | None:
+    """只取时间线上的紧邻上一镜；连续性不跨越中间镜头回溯旧素材。"""
+
+    return (
         db.query(Shot)
         .filter(Shot.project_id == shot.project_id, Shot.sequence < shot.sequence)
         .order_by(Shot.sequence.desc())
-        .all()
+        .first()
     )
-    for previous in previous_shots:
-        if not (current_keys & _shot_scene_keys(previous, db)):
-            continue
-        if prefer_last_frame and previous.last_frame_path:
-            return previous.last_frame_path
-        return previous.storyboard_path or previous.image_path or previous.last_frame_path or ""
-    return ""
+
+
+def _previous_reference_for_shot(db: Session, shot: Shot, prefer_last_frame: bool = False) -> str:
+    """兼容入口：返回策略实际选中的上一镜末帧，不再回退故事板/首帧。"""
+
+    del prefer_last_frame  # 历史参数保留签名；候选类型现在完全由 continuity_mode 决定。
+    previous = _previous_shot_for_continuity(db, shot)
+    decision = consistency_service.resolve_continuity(
+        _shot_dict(shot),
+        _shot_dict(previous) if previous else None,
+    )
+    return str(decision.get("continuity_reference_path") or "")
 
 
 async def _progress(project_id: str, step: str, progress: int, message: str, *, job_keys: tuple[str, ...] = (), report: dict | None = None):

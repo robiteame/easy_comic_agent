@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException
 
-from agent.checkpoints import CheckpointStore
+from agent.checkpoints import CheckpointStore, summarize_trace
 from agent.contracts import QUALITY_STRATEGIES, STAGE_CONTRACTS, STAGE_ORDER
-from agent.graph import GRAPH_NODE_META, GRAPH_STAGE_ORDER, get_graph
+from agent.graph import GRAPH_NODE_META, GRAPH_STAGE_NODE_NAMES, GRAPH_STAGE_ORDER, get_graph
 from services.security import validate_identifier
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
@@ -25,11 +25,13 @@ async def get_graph_structure():
         )
         nodes.append({"id": node_id, **meta})
 
-    edges = [{"source": edge.source, "target": edge.target, "label": ""} for edge in drawable.edges]
+    edges = [{"source": edge.source, "target": edge.target, "label": str(edge.data or "")} for edge in drawable.edges]
     contracts = [
         {
             "stage": item.value,
-            **STAGE_CONTRACTS[item].model_dump(mode="json"),
+            **STAGE_CONTRACTS[item].model_dump(mode="json", exclude={"input_model", "output_model"}),
+            "input_model": STAGE_CONTRACTS[item].input_model.__name__,
+            "output_model": STAGE_CONTRACTS[item].output_model.__name__,
         }
         for item in STAGE_ORDER
     ]
@@ -38,6 +40,7 @@ async def get_graph_structure():
         "nodes": nodes,
         "edges": edges,
         "stage_order": list(GRAPH_STAGE_ORDER),
+        "stage_node_roles": {stage: dict(roles) for stage, roles in GRAPH_STAGE_NODE_NAMES.items()},
         "stage_contracts": contracts,
         "quality_profiles": quality_profiles,
     }
@@ -52,7 +55,13 @@ async def get_agent_run(project_id: str, run_id: str = "auto"):
 
 @router.get("/runs/{project_id}/trace")
 async def get_agent_trace(project_id: str, run_id: str = "auto"):
-    """可解释追踪：决策树、候选、评分、修改原因、最终选择和逐镜头时间线。"""
+    """可解释追踪：决策树、候选、评分、修改原因、最终选择和逐镜头时间线。
+
+    ``summary`` 是面向展示的稳定汇总（当前阶段、镜头状态、阶段质量分、Critic
+    问题、恢复候选与最终决策、Prompt 修改、候选结果、Provider/模型、实际发送
+    参考图、成本、预计/实际耗时、自动降级原因、检查点与恢复次数）；顶层保留
+    原始 ``stages/decisions/shots/events`` 供旧消费者使用。
+    """
     store = _store(project_id, run_id)
     snapshot = store.snapshot()
     stages = [
@@ -64,6 +73,10 @@ async def get_agent_trace(project_id: str, run_id: str = "auto"):
         for stage in GRAPH_STAGE_ORDER
         if stage in {item.value for item in STAGE_ORDER}
     ]
+    summary = summarize_trace(snapshot)
+    for row in summary.get("stages", []):
+        row["label"] = GRAPH_NODE_META.get(str(row.get("stage")), {}).get("label", row.get("stage"))
+    summary["shots"] = _attach_shot_reference_rows(summary.get("shots", []))
     return {
         "project_id": snapshot.get("project_id"),
         "run_id": snapshot.get("run_id"),
@@ -73,8 +86,57 @@ async def get_agent_trace(project_id: str, run_id: str = "auto"):
         "decisions": snapshot.get("decisions", []),
         "shots": snapshot.get("shots", {}),
         "events": snapshot.get("events", []),
+        "summary": summary,
         "mermaid": _mermaid(snapshot),
     }
+
+
+def _attach_shot_reference_rows(shots: list[dict]) -> list[dict]:
+    """把数据库里的镜头版本/状态和「实际发送参考图」清单并入追踪汇总。
+
+    检查点文件只记录生成结果；参考图发送清单落在 Shot 行的
+    storyboard/video reference manifest 上，这里按 shot_id 合并。数据库不可用
+    时保持检查点原样，绝不因读取失败让整条追踪 404。
+    """
+
+    if not shots:
+        return shots
+    try:
+        import json as _json
+
+        from db import SessionLocal
+        from models import Shot
+
+        db = SessionLocal()
+        try:
+            rows = {
+                row.id: row
+                for row in db.query(Shot).filter(Shot.id.in_([str(item.get("shot_id")) for item in shots])).all()
+            }
+        finally:
+            db.close()
+    except Exception:
+        return shots
+    for item in shots:
+        row = rows.get(str(item.get("shot_id")))
+        if row is None:
+            continue
+        item["db_status"] = str(row.status or "")
+        item["db_shot_version"] = int(row.version or 1)
+        item["confirmed"] = bool(row.confirmed)
+
+        def manifest(field: str) -> list[dict]:
+            try:
+                value = _json.loads(getattr(row, field, "") or "[]")
+                return [entry for entry in value if isinstance(entry, dict)]
+            except Exception:
+                return []
+
+        item["references_sent"] = {
+            "image_generation": manifest("storyboard_reference_manifest"),
+            "video_generation": manifest("video_reference_manifest"),
+        }
+    return shots
 
 
 @router.get("/runs/{project_id}/decisions")

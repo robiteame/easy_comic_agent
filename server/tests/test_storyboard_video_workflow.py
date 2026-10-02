@@ -3,12 +3,14 @@
 - 自动模式不因「有图」就批量批准：结构检查不合格的故事板既不会被批准，
   也只重生成失败镜头；
 - 视频生成失败只重试当前镜头，不重跑整个项目；
-- 同场景故事板优先使用上一镜尾帧（Seedance return_last_frame 产物）做续帧参考。
+- 只有 continuous_action 自动使用上一镜尾帧；same_scene 不继承上一镜具体画面。
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
+import json
 import logging
 import os
 import sys
@@ -163,7 +165,8 @@ class PerShotVideoRetryTests(WorkflowTestCase):
 
         def handler(shot_id: str, force: bool) -> None:
             if shot_id.endswith("shot_2") and not force:
-                raise RuntimeError("Seedance 创建任务失败")
+                # 瞬时错误（超时）才允许重试；重试只针对失败的那一个镜头。
+                raise RuntimeError("Seedance 创建任务超时 timeout")
 
         result, calls = self._run(project_id, shot_ids, handler)
 
@@ -179,7 +182,8 @@ class PerShotVideoRetryTests(WorkflowTestCase):
         shot_ids = [f"{project_id}_shot_1"]
 
         def handler(shot_id: str, force: bool) -> None:
-            raise RuntimeError("Seedance 任务失败")
+            # 持续超时属于瞬时错误证据，每镜头允许一次重试，重试后仍失败则终止。
+            raise RuntimeError("Seedance 任务超时 timeout")
 
         with self.assertLogs("agent.graph", level=logging.ERROR) as captured:
             result, calls = self._run(project_id, shot_ids, handler)
@@ -191,88 +195,45 @@ class PerShotVideoRetryTests(WorkflowTestCase):
 
 
 class LastFrameContinuityTests(WorkflowTestCase):
-    def test_same_scene_storyboard_prefers_previous_last_frame(self) -> None:
+    def test_continuous_action_uses_previous_last_frame(self) -> None:
         project_id = self._seed("last_frame", {1: True, 2: True})
         last_frame = _noise_image(TEST_ROOT / "output" / project_id / "shot_1_last.png", (256, 256))
         previous_storyboard = _noise_image(TEST_ROOT / "output" / project_id / "shot_1_story.png", (256, 256))
         self.db.query(Shot).filter(Shot.id == f"{project_id}_shot_1").update(
             {"last_frame_path": last_frame, "storyboard_path": previous_storyboard}
         )
+        self.db.query(Shot).filter(Shot.id == f"{project_id}_shot_2").update(
+            {"continuity_profile": json.dumps({"continuity_mode": "continuous_action"}, ensure_ascii=False)}
+        )
         self.db.commit()
         second = self.db.query(Shot).filter(Shot.id == f"{project_id}_shot_2").first()
 
-        resolved = shot_route._previous_reference_for_shot(self.db, second, prefer_last_frame=True)
+        resolved = shot_route._previous_reference_for_shot(self.db, second)
+
         self.assertEqual(resolved, last_frame)
 
-        # 尚无尾帧时回退上一镜故事板，行为与首次全量出图一致。
-        self.db.query(Shot).filter(Shot.id == f"{project_id}_shot_1").update({"last_frame_path": ""})
+    def test_same_scene_does_not_inherit_previous_concrete_image(self) -> None:
+        project_id = self._seed("same_scene_identity", {1: True, 2: True})
+        last_frame = _noise_image(TEST_ROOT / "output" / project_id / "shot_1_last.png", (256, 256))
+        previous_storyboard = _noise_image(TEST_ROOT / "output" / project_id / "shot_1_story.png", (256, 256))
+        self.db.query(Shot).filter(Shot.id == f"{project_id}_shot_1").update(
+            {"last_frame_path": last_frame, "storyboard_path": previous_storyboard}
+        )
+        self.db.query(Shot).filter(Shot.id == f"{project_id}_shot_2").update(
+            {"continuity_profile": json.dumps({"continuity_mode": "same_scene"}, ensure_ascii=False)}
+        )
         self.db.commit()
-        self.db.expire_all()
         second = self.db.query(Shot).filter(Shot.id == f"{project_id}_shot_2").first()
-        resolved = shot_route._previous_reference_for_shot(self.db, second, prefer_last_frame=True)
-        self.assertEqual(resolved, previous_storyboard)
 
-    def test_storyboard_generation_path_requests_last_frame_preference(self) -> None:
-        """出图路径确实以 prefer_last_frame=True 调用（否则尾帧永远不会被用上）。"""
+        resolved = shot_route._previous_reference_for_shot(self.db, second)
 
-        import inspect
+        self.assertEqual(resolved, "")
 
+    def test_storyboard_generation_resolves_previous_shot_by_policy(self) -> None:
         source = inspect.getsource(shot_route._run_storyboard_generation_impl)
-        self.assertIn("prefer_last_frame=True", source)
-        self.assertIn("prefer_last_frame=True", inspect.getsource(shot_route._regenerate_single_shot))
+        self.assertIn("previous_shot=", source)
+        self.assertNotIn("previous.storyboard_path or previous.image_path", source)
 
-
-class StoryboardCandidateTests(WorkflowTestCase):
-    """关键镜头可一次生成 2 个故事板候选，两个候选都进入版本历史。"""
-
-    def _request(self) -> object:
-        from api.routes.shot import RegenerateRequest
-
-        return RegenerateRequest(reason="关键反转镜头")
-
-    def test_candidate_count_is_bounded(self) -> None:
-        from pydantic import ValidationError
-
-        from api.routes.shot import RegenerateRequest
-
-        self.assertEqual(RegenerateRequest(candidates=1).candidates, 1)
-        self.assertEqual(RegenerateRequest(candidates=2).candidates, 2)
-        for invalid in (0, 3):
-            with self.assertRaises(ValidationError):
-                RegenerateRequest(candidates=invalid)
-
-    def test_two_candidates_each_land_in_version_history(self) -> None:
-        project_id = self._seed("candidates", {1: True})
-        shot_id = f"{project_id}_shot_1"
-        seen_versions: list = []
-
-        async def fake_generate(target_shot_id, reason="", expected_version=None):  # noqa: ANN001
-            seen_versions.append(expected_version)
-            # 模拟真实生成：写入产物，create_version 才能记录出不同的候选快照。
-            path = _noise_image(TEST_ROOT / "output" / project_id / f"cand_{len(seen_versions)}.png", (256, 256))
-            db = SessionLocal()
-            try:
-                row = db.query(Shot).filter(Shot.id == target_shot_id).first()
-                row.storyboard_path = path
-                row.image_path = path
-                row.status = "storyboard_done"
-                create_version(db, row, "regenerate", task_id="test")
-                db.commit()
-            finally:
-                db.close()
-
-        with patch.object(shot_route, "_regenerate_single_shot", fake_generate):
-            asyncio.run(
-                shot_route._run_storyboard_candidates(shot_id, self._request(), 2, 1, "key shot")
-            )
-
-        # 两个候选使用不同的 expected_version（各自独立抢占镜头版本）。
-        self.assertEqual(len(seen_versions), 2)
-        self.assertEqual(len(set(seen_versions)), 2)
-
-        self.db.expire_all()
-        versions = list_versions(self.db, shot_id)
-        self.assertGreaterEqual(len(versions), 2, "两个候选都必须进入版本历史供挑选")
 
 if __name__ == "__main__":
     unittest.main()

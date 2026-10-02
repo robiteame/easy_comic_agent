@@ -21,6 +21,16 @@ import Slider from 'antd/es/slider'
 import Switch from 'antd/es/switch'
 import { projectApi, settingsApi } from '../services/api'
 import PricingConfigPanel from './PricingConfigPanel'
+import {
+  DEFAULT_AGENT_CONFIG,
+  DEFAULT_TEMPLATE,
+  SYSTEM_PROMPT_MAX_LENGTH,
+  cloneTemplate,
+  importSkillTemplate,
+  templateCopyPayload,
+  type AgentSkillConfig,
+  type SkillTemplate,
+} from './skillTemplateModel'
 import { STYLE_TEMPLATES_UPDATED_EVENT } from '../constants/events'
 import { STYLE_DESCRIPTIONS, STYLE_OPTIONS } from '../constants/styleTemplates'
 import { useProjectStore } from '../stores/projectStore'
@@ -36,27 +46,6 @@ const { TextArea } = Input
 const { Password } = Input
 
 type StyleOption = { value: string; label: string; keywords?: string; custom?: boolean }
-
-type AgentSkillConfig = {
-  style_template_id: string
-  style_override_enabled: boolean
-  custom_style_keywords: string
-  filter_tts_instruction_text: boolean
-  camera_composition: string
-  force_character_scene_references: boolean
-  prompt_auto_assembly: boolean
-  openpose_lock_enabled: boolean
-  style_reference_weight: number
-  action_reference_weight: number
-  continuity_enabled: boolean
-}
-
-type SkillTemplate = {
-  id: string
-  name: string
-  script_agent: AgentSkillConfig
-  storyboard_agent: AgentSkillConfig
-}
 
 type ModelCategory = 'script' | 'image' | 'video' | 'voice'
 type ModelConfig = Record<string, any>
@@ -271,27 +260,6 @@ interface SystemSettingsPageProps {
 
 type SettingsTab = 'appearance' | 'models' | 'pricing' | 'skill'
 
-const DEFAULT_AGENT_CONFIG: AgentSkillConfig = {
-  style_template_id: '',
-  style_override_enabled: false,
-  custom_style_keywords: '',
-  filter_tts_instruction_text: true,
-  camera_composition: 'medium shot, vertical 9:16, clear subject staging',
-  force_character_scene_references: true,
-  prompt_auto_assembly: true,
-  openpose_lock_enabled: false,
-  style_reference_weight: 0.45,
-  action_reference_weight: 0.3,
-  continuity_enabled: true,
-}
-
-const DEFAULT_TEMPLATE: SkillTemplate = {
-  id: 'default',
-  name: '默认 Skill 方案',
-  script_agent: DEFAULT_AGENT_CONFIG,
-  storyboard_agent: DEFAULT_AGENT_CONFIG,
-}
-
 const EMPTY_MODEL_CONFIG: ModelConfigState = {
   script: {},
   image: {},
@@ -446,11 +414,7 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
       message.warning('请输入 Skill 方案名称')
       return
     }
-    const payload = {
-      ...draftSkill,
-      id: saveAs ? `${draftSkill.id}_${Date.now()}` : draftSkill.id,
-      name: saveAs ? `${name} 副本` : name,
-    }
+    const payload = saveAs ? templateCopyPayload(draftSkill) : { ...draftSkill, name }
     try {
       setSavingSkill(true)
       const saved = await settingsApi.saveSkillConfig(payload)
@@ -475,17 +439,11 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
     try {
       const text = await file.text()
       const parsed = JSON.parse(text)
-      const candidate = parsed?.script_agent || parsed?.storyboard_agent ? parsed : parsed?.template || parsed
-      if (!candidate || (!candidate.script_agent && !candidate.storyboard_agent)) {
+      const imported = importSkillTemplate(parsed, draftSkill)
+      if (!imported) {
         message.error('配置文件格式不正确：缺少 script_agent / storyboard_agent')
         return
       }
-      const imported: SkillTemplate = cloneTemplate({
-        id: draftSkill.id,
-        name: candidate.name ? `${candidate.name}` : `${draftSkill.name}（导入）`,
-        script_agent: { ...DEFAULT_AGENT_CONFIG, ...(candidate.script_agent || candidate.storyboard_agent || {}) },
-        storyboard_agent: { ...DEFAULT_AGENT_CONFIG, ...(candidate.storyboard_agent || candidate.script_agent || {}) },
-      })
       setDraftSkill(imported)
       message.success('已导入 Skill 配置方案，请确认后点击保存生效')
     } catch (err: any) {
@@ -854,12 +812,14 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
                 <div className="skill-agent-grid">
                   <AgentSkillPanel
                     title="剧本生成子Agent配置区"
+                    agentKey="script_agent"
                     agent={draftSkill.script_agent}
                     styleTemplates={styleTemplates}
                     onChange={(agent) => setDraftSkill((current) => ({ ...current, script_agent: agent }))}
                   />
                   <AgentSkillPanel
                     title="分镜生成子Agent配置区"
+                    agentKey="storyboard_agent"
                     agent={draftSkill.storyboard_agent}
                     styleTemplates={styleTemplates}
                     onChange={(agent) => setDraftSkill((current) => ({ ...current, storyboard_agent: agent }))}
@@ -1122,11 +1082,13 @@ function BindingSelect({
 
 function AgentSkillPanel({
   title,
+  agentKey,
   agent,
   styleTemplates,
   onChange,
 }: {
   title: string
+  agentKey: 'script_agent' | 'storyboard_agent'
   agent: AgentSkillConfig
   styleTemplates: StyleOption[]
   onChange: (agent: AgentSkillConfig) => void
@@ -1163,6 +1125,7 @@ function AgentSkillPanel({
           onChange={(event) => update('custom_style_keywords', event.target.value)}
         />
       </div>
+      <SystemPromptField agentKey={agentKey} value={agent.system_prompt} onChange={(value) => update('system_prompt', value)} />
       <div className="settings-field">
         <span>镜头构图规范默认参数</span>
         <TextArea
@@ -1178,6 +1141,58 @@ function AgentSkillPanel({
       <ToggleRow label="镜头续帧连贯逻辑" checked={agent.continuity_enabled} onChange={(value) => update('continuity_enabled', value)} />
       <WeightField label="参考图画风权重" value={agent.style_reference_weight} onChange={(value) => update('style_reference_weight', value)} />
       <WeightField label="动作权重" value={agent.action_reference_weight} onChange={(value) => update('action_reference_weight', value)} />
+    </div>
+  )
+}
+
+// 系统提示词编辑框：多行输入，留空 = 使用后端内置默认提示词；JSON 输出
+// 契约由后端固定拼装，用户提示词无法删除结构约束。计数按去首尾空白后的长度。
+function SystemPromptField({
+  agentKey,
+  value,
+  onChange,
+}: {
+  agentKey: 'script_agent' | 'storyboard_agent'
+  value: string
+  onChange: (value: string) => void
+}) {
+  const label = agentKey === 'script_agent' ? '剧本系统提示词' : '分镜系统提示词'
+  const trimmed = value.trim()
+  const overLimit = trimmed.length > SYSTEM_PROMPT_MAX_LENGTH
+  return (
+    <div className="settings-field skill-system-prompt-field">
+      <span>
+        {label}
+        <em className="skill-system-prompt-count">
+          （{trimmed.length}/{SYSTEM_PROMPT_MAX_LENGTH}
+          {value ? '，留空恢复默认' : '，当前使用默认提示词'}）
+        </em>
+      </span>
+      <TextArea
+        autoSize={{ minRows: 4, maxRows: 12 }}
+        value={value}
+        maxLength={SYSTEM_PROMPT_MAX_LENGTH * 2}
+        showCount={false}
+        placeholder={
+          agentKey === 'script_agent'
+            ? '留空使用默认：你是漫剧编剧。请输出完整中文漫剧剧本，包含标题、人物、场景、动作、对白和情绪……\n可自定义角色定位、创作风格、语言语气；JSON 输出契约由系统固定附加，不可删除。'
+            : '留空使用默认：你是专业漫剧分镜师。根据剧本场景输出可执行分镜 JSON……\n可自定义角色定位、创作风格、语言语气；JSON 输出契约由系统固定附加，不可删除。'
+        }
+        onChange={(event) => onChange(event.target.value)}
+        status={overLimit ? 'error' : undefined}
+      />
+      <div className="skill-system-prompt-actions">
+        <Button
+          size="small"
+          icon={<ReloadOutlined />}
+          disabled={!value}
+          onClick={() => onChange('')}
+          title="清空自定义提示词，恢复后端默认系统提示词"
+        >
+          恢复默认提示词
+        </Button>
+        {overLimit ? <span className="skill-system-prompt-error">提示词去空白后超过 {SYSTEM_PROMPT_MAX_LENGTH} 字符，保存会被拒绝</span> : null}
+      </div>
     </div>
   )
 }
@@ -1199,14 +1214,6 @@ function WeightField({ label, value, onChange }: { label: string; value: number;
       <InputNumber min={0} max={1} step={0.05} value={value} onChange={(next) => onChange(Number(next || 0))} />
     </div>
   )
-}
-
-function cloneTemplate(template: SkillTemplate): SkillTemplate {
-  return {
-    ...template,
-    script_agent: { ...DEFAULT_AGENT_CONFIG, ...template.script_agent },
-    storyboard_agent: { ...DEFAULT_AGENT_CONFIG, ...template.storyboard_agent },
-  }
 }
 
 export default SystemSettingsPage

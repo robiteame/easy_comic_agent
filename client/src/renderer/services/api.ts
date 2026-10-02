@@ -790,6 +790,28 @@ export interface WebSocketOptions {
   onError?: (event: Event) => void
 }
 
+/**
+ * 生成 Agent 图结构与可解释追踪。
+ *
+ * `/api/graph/runs/:id/trace` 的 `summary` 是展示用稳定汇总：当前阶段、镜头
+ * 状态、阶段质量分、Critic 问题、恢复候选与最终决策、Prompt 修改、候选结果、
+ * Provider/模型、实际发送参考图、成本、预计/实际耗时、自动降级原因、检查点
+ * 与恢复次数。类型定义和展示逻辑见 `components/agentTraceModel`。
+ */
+export const agentGraphApi = {
+  structure: () => api.get('/api/graph/structure').then((r) => r.data as unknown),
+
+  run: (projectId: string, runId = 'auto') =>
+    api
+      .get(`/api/graph/runs/${encodeURIComponent(projectId)}`, { params: { run_id: runId } })
+      .then((r) => r.data as unknown),
+
+  trace: (projectId: string, runId = 'auto') =>
+    api
+      .get(`/api/graph/runs/${encodeURIComponent(projectId)}/trace`, { params: { run_id: runId } })
+      .then((r) => r.data as import('../components/agentTraceModel').AgentTraceResponse),
+}
+
 function localTokenQuery(): string {
   return LOCAL_AUTH_TOKEN && isLocalApiOrigin(API_BASE)
     ? `?token=${encodeURIComponent(LOCAL_AUTH_TOKEN)}`

@@ -865,14 +865,19 @@ class QualityReviewService:
                 }
         return summary
 
-    def storyboard_gate_status(self, project_id: str) -> dict:
-        """全部镜头是否都通过了故事板质量门禁（且已确认）。"""
-        return self._gate_status(project_id, STAGE_STORYBOARD)
+    def storyboard_gate_status(self, project_id: str, *, allow_visual_pending: bool = False) -> dict:
+        """全部镜头是否都通过了故事板质量门禁（且已确认）。
 
-    def video_gate_status(self, project_id: str) -> dict:
-        return self._gate_status(project_id, STAGE_VIDEO)
+        ``allow_visual_pending`` 只在显式 auto 模式 + 策略允许时由调用方传入：
+        此时"视觉能力缺失导致的 unsupported"按结构门禁降级放行，但仍逐镜头记录在
+        ``degraded`` 里，绝不写成通过。
+        """
+        return self._gate_status(project_id, STAGE_STORYBOARD, allow_visual_pending=allow_visual_pending)
 
-    def _gate_status(self, project_id: str, stage: str) -> dict:
+    def video_gate_status(self, project_id: str, *, allow_visual_pending: bool = False) -> dict:
+        return self._gate_status(project_id, STAGE_VIDEO, allow_visual_pending=allow_visual_pending)
+
+    def _gate_status(self, project_id: str, stage: str, *, allow_visual_pending: bool = False) -> dict:
         db = SessionLocal()
         try:
             shots = db.query(Shot).filter(Shot.project_id == project_id).order_by(Shot.sequence).all()
@@ -882,17 +887,32 @@ class QualityReviewService:
             return {"ok": False, "reason": "无镜头"}
         latest = self.latest_reviews(project_id, stage)
         failed: list[dict] = []
+        degraded: list[dict] = []
         for shot in shots:
             row = latest.get(shot.id)
             if row is None:
                 failed.append({"shot_id": shot.id, "reason": "尚无质量审核记录"})
             elif not row["passed"]:
-                failed.append({"shot_id": shot.id, "reason": f"最新审核未通过（{row['verdict']}）"})
+                # 视觉模型缺失（unsupported）与真正的质量失败必须区分：前者在自动
+                # 模式下按结构门禁降级放行，后者继续拦截。
+                if allow_visual_pending and str(row.get("verdict") or "") == "unsupported":
+                    degraded.append({
+                        "shot_id": shot.id,
+                        "stage": stage,
+                        "verdict": "unsupported",
+                        "reason": "视觉质量未评估（pending）：无视觉模型，按结构门禁降级放行",
+                    })
+                else:
+                    failed.append({"shot_id": shot.id, "reason": f"最新审核未通过（{row['verdict']}）"})
             elif stage == STAGE_STORYBOARD and not shot.confirmed:
                 failed.append({"shot_id": shot.id, "reason": "镜头未确认"})
             elif stage == STAGE_VIDEO and not (shot.video_path or ""):
                 failed.append({"shot_id": shot.id, "reason": "镜头没有视频产物"})
-        return {"ok": not failed, "failed": failed}
+        result = {"ok": not failed, "failed": failed}
+        if degraded:
+            result["degraded"] = degraded
+            result["visual_pending"] = True
+        return result
 
 
 # ---------------------------------------------------------------------------

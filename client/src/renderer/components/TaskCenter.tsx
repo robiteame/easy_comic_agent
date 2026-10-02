@@ -49,6 +49,7 @@ import {
   JOB_TYPE_LABELS,
   SORT_LABELS,
   STATUS_LABELS,
+  TRUNCATION_ADVICE,
   connectionLabel,
   emptyStateText,
   errorCategoryLabel,
@@ -57,6 +58,7 @@ import {
   effectiveErrorCode,
   formatDuration,
   formatRelativeTime,
+  isTruncationErrorCode,
   jobActionState,
   jobSection,
   progressText,
@@ -69,6 +71,7 @@ import {
   type JobSortKey,
 } from './taskCenterModel'
 import { resolveWorkspaceTabIndex } from './workspaceTabs'
+import AgentTracePanel from './AgentTracePanel'
 
 export const OPEN_TASK_CENTER_EVENT = 'workspace:open-task-center'
 
@@ -776,9 +779,11 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
                       <span className="task-error-code-id">{effectiveErrorCode(selectedJob) || 'job_failed'}</span>
                     </div>
                     <p className="task-error-text">{errorHeadline(selectedJob)}</p>
-                    {selectedJob.error_detail?.suggestion && (
+                    {(selectedJob.error_detail?.suggestion ||
+                      (isTruncationErrorCode(effectiveErrorCode(selectedJob)) ? TRUNCATION_ADVICE : '')) && (
                       <p className="task-error-advice">
-                        <BulbOutlined aria-hidden="true" /> 修复建议：{selectedJob.error_detail.suggestion}
+                        <BulbOutlined aria-hidden="true" /> 修复建议：
+                        {selectedJob.error_detail?.suggestion || TRUNCATION_ADVICE}
                       </p>
                     )}
                     {selectedJob.error_detail?.summary &&
@@ -816,6 +821,12 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
                     </li>
                   ))}
                 </ol>
+                {selectedJob.project_id && (
+                  <details className="task-agent-trace">
+                    <summary>Agent 追踪（阶段 · 决策 · 候选 · 成本）</summary>
+                    <AgentTracePanel projectId={selectedJob.project_id} />
+                  </details>
+                )}
                 <h4 className="task-detail-subtitle">成本明细</h4>
                 {costDetailLoading && (
                   <div className="task-center-status">

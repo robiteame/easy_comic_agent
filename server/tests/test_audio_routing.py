@@ -208,8 +208,8 @@ class NativeModeSkipsVoiceTests(_PipelineTestCase):
                 subprocess.run(
                     [
                         "ffmpeg", "-y",
-                        "-f", "lavfi", "-i", "color=c=green:s=256x256:d=1",
-                        "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                        "-f", "lavfi", "-i", "color=c=green:s=256x256:d=3",
+                        "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
                         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
                         "-shortest", str(video_path),
                     ],
@@ -234,6 +234,7 @@ class NativeModeSkipsVoiceTests(_PipelineTestCase):
             patch.object(audio_routing, "get_endpoint", return_value=_endpoint(audio_mode="native")),
             patch.object(audio_routing, "get_adapter", return_value=_RecordingNativeAdapter),
             patch("services.video_service.get_adapter", return_value=_RecordingNativeAdapter),
+            patch.object(shot_route, "validate_video_file", return_value={"kind": "video", "passed": True, "issues": []}),
             patch.object(dialogue_audio.tts_service, "generate_dialogue", side_effect=fake_tts),
         ):
             asyncio.run(shot_route._run_single_shot_video(self.shot.id, force=True))
@@ -301,6 +302,61 @@ class NativeModeSkipsVoiceTests(_PipelineTestCase):
 
 
 class TtsModeUnchangedTests(_PipelineTestCase):
+    def test_same_version_audio_is_prepared_once_and_reused_by_video(self) -> None:
+        """自动音频阶段后的视频阶段只能消费已有音频，不能再次触发 TTS。"""
+        tts_calls: list[dict] = []
+        audio_path = Path(settings.OUTPUT_DIR) / "projects" / self.project.id / "audio" / f"{self.shot.id}_v1.wav"
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        audio_path.write_bytes(b"a" * 2048)
+        expected_audio_path = str(audio_path.resolve())
+
+        async def fake_prepare(*args, **kwargs):
+            tts_calls.append(kwargs)
+            return str(audio_path), shot_route._shot_dialogue_lines(self.shot)
+
+        async def fake_video(shot_data, *_args, **_kwargs):
+            self.assertEqual(shot_data.get("audio_path"), expected_audio_path)
+            return {
+                "video_path": str(settings.OUTPUT_DIR / "prepared-once.mp4"),
+                "frame_path": str(settings.OUTPUT_DIR / "prepared-once.png"),
+                "native_audio": False,
+            }
+
+        # 第一次调用代表 audio_production；视频阶段再次进入准备步骤时必须复用。
+        with (
+            patch.object(shot_route, "generate_dialogue_track", side_effect=fake_prepare),
+            patch.object(shot_route.seedance_service, "generate_shot_video", side_effect=fake_video),
+        ):
+            asyncio.run(shot_route._prepare_shot_audio(self.shot.id, 1))
+            asyncio.run(shot_route._run_single_shot_video(self.shot.id, force=True))
+
+        self.assertEqual(len(tts_calls), 1, "同一镜头版本的音频准备最多调用一次外部 TTS")
+
+    def test_shot_without_dialogue_skips_tts(self) -> None:
+        self.shot.dialogue = ""
+        self.db.commit()
+        tts_calls: list[dict] = []
+
+        async def fake_tts(**kwargs):
+            tts_calls.append(kwargs)
+            return str(settings.OUTPUT_DIR / "should-not-exist.wav")
+
+        async def fake_video(shot_data, *_args, **_kwargs):
+            self.assertEqual(shot_data.get("audio_path"), "")
+            return {
+                "video_path": str(settings.OUTPUT_DIR / "silent-dialogue.mp4"),
+                "frame_path": str(settings.OUTPUT_DIR / "silent-dialogue.png"),
+                "native_audio": False,
+            }
+
+        with (
+            patch.object(dialogue_audio.tts_service, "generate_dialogue", side_effect=fake_tts),
+            patch.object(shot_route.seedance_service, "generate_shot_video", side_effect=fake_video),
+        ):
+            asyncio.run(shot_route._run_single_shot_video(self.shot.id, force=True))
+
+        self.assertEqual(tts_calls, [])
+
     def test_tts_mode_behaves_like_before(self) -> None:
         tts_calls: list[dict] = []
 

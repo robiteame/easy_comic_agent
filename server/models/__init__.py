@@ -1,6 +1,6 @@
 from .project import Project
 from .shot import Shot
-from .shot_version import ShotVersion
+from .shot_version import ShotVersion, ShotVideoCandidate
 from .character import Character
 from .scene_asset import SceneAsset
 from .background_job import BackgroundJob
@@ -14,6 +14,7 @@ __all__ = [
     "Project",
     "Shot",
     "ShotVersion",
+    "ShotVideoCandidate",
     "Character",
     "SceneAsset",
     "BackgroundJob",

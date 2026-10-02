@@ -227,6 +227,10 @@ ERROR_CODE_QUOTA_EXCEEDED = "provider_quota_exceeded"
 ERROR_CODE_RATE_LIMITED = "provider_rate_limited"
 ERROR_CODE_INVALID_REQUEST = "provider_invalid_request"
 ERROR_CODE_DEPENDENCY_FAILED = "dependency_failed"
+# 模型输出达到 max_tokens 上限被截断（finish_reason=length 或输出顶满额度）。
+# 与普通解析失败分开：它有明确可执行建议（提高额度/分段/换端点），且绝不允许
+# 同配置重试，任务中心需要用专门文案提示而不是「正在解析剧本」。
+ERROR_CODE_LLM_OUTPUT_TRUNCATED = "llm_output_truncated"
 
 # 规则按顺序匹配、先命中先赢：预算与取消等业务语义优先于供应商细分，
 # 供应商细分（额度/限流/参数）又必须排在泛化的 provider/config 之前。
@@ -236,6 +240,11 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (ERROR_CODE_SERVER_RESTART, ("server restarted", "restart")),
     (ERROR_CODE_JOB_CANCELLED, ("cancel", "取消", "版本已变化")),
     (ERROR_CODE_DEPENDENCY_FAILED, ("前置阶段失败", "dependency failed")),
+    # 截断必须先于 timeout/普通解析失败判定：截断消息里常带重试与 JSON 细节。
+    (
+        ERROR_CODE_LLM_OUTPUT_TRUNCATED,
+        ("finish_reason=length", "llm_output_truncated", "输出超过最大长度", "输出疑似达到上限", "被截断"),
+    ),
     (ERROR_CODE_TIMEOUT, ("timeout", "timed out", "超时")),
     (
         ERROR_CODE_QUOTA_EXCEEDED,
@@ -277,6 +286,7 @@ ERROR_CODE_LABELS = {
     ERROR_CODE_RATE_LIMITED: "触发限流",
     ERROR_CODE_INVALID_REQUEST: "API 参数错误",
     ERROR_CODE_DEPENDENCY_FAILED: "前置阶段失败",
+    ERROR_CODE_LLM_OUTPUT_TRUNCATED: "模型输出超长被截断",
     ERROR_CODE_STORAGE: "存储异常",
     ERROR_CODE_VALIDATION: "请求不合法",
     ERROR_CODE_NOT_FOUND: "任务不存在",
@@ -333,6 +343,7 @@ __all__ = [
     "ERROR_CODE_JOB_CANCELLED",
     "ERROR_CODE_JOB_FAILED",
     "ERROR_CODE_JOB_INTERRUPTED",
+    "ERROR_CODE_LLM_OUTPUT_TRUNCATED",
     "ERROR_CODE_NOT_FOUND",
     "ERROR_CODE_NOT_RESUMABLE",
     "ERROR_CODE_NOT_RETRYABLE",

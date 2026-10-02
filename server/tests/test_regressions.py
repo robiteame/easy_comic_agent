@@ -1132,7 +1132,9 @@ class BackgroundJobRegressionTests(DatabaseTestCase):
             asyncio.run(shot_route._run_single_shot_video(shot.id, expected_version=7))
 
         self.assertEqual(captured["audio_id"], f"{shot.id}_v7")
-        self.assertEqual(captured["video_id"], f"{shot.id}_v7")
+        # Each attempt uses a batch-scoped media ID while retaining the candidate suffix.
+        self.assertTrue(captured["video_id"].startswith(f"{shot.id}_v7_b"))
+        self.assertTrue(captured["video_id"].endswith("_c1"))
 
     def test_stale_shot_result_does_not_overwrite_newer_version(self) -> None:
         project = Project(id="stale-project", title="Stale")
@@ -1152,7 +1154,9 @@ class BackgroundJobRegressionTests(DatabaseTestCase):
             return str(_TEST_ROOT / "stale-result.png")
 
         with patch.object(shot_route.image_service, "generate_shot_image", side_effect=generate_then_bump_version):
-            with self.assertRaises(asyncio.CancelledError):
+            # 版本冲突显式失败（VERSION_CONFLICT），不再静默取消；
+            # 关键约束是过期结果绝不覆盖新版本。
+            with self.assertRaises(RuntimeError, msg="镜头版本已变化"):
                 asyncio.run(shot_route._regenerate_single_shot("stale-shot", expected_version=1))
 
         self.db.expire_all()
@@ -1187,7 +1191,8 @@ class BackgroundJobRegressionTests(DatabaseTestCase):
             return str(_TEST_ROOT / "auto-stale-result.png")
 
         with patch.object(shot_route.image_service, "generate_shot_image", side_effect=generate_then_edit):
-            with self.assertRaises(asyncio.CancelledError):
+            # 过期故事板结果按版本冲突显式失败，项目状态回退后不落盘旧结果。
+            with self.assertRaises(RuntimeError, msg="故事板任务版本已变化"):
                 asyncio.run(shot_route._run_storyboard_generation(project.id, [shot.id]))
 
         self.db.expire_all()

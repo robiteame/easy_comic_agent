@@ -25,6 +25,7 @@
   - [五栏工作台布局](#五栏工作台布局)
   - [双运行模式](#双运行模式)
   - [流水线流程](#流水线流程)
+  - [十阶段自愈流水线](#十阶段自愈流水线)
   - [视觉一致性系统](#视觉一致性系统)
   - [三层记忆系统](#三层记忆系统)
 - [下载安装](#下载安装)
@@ -54,10 +55,11 @@
 
 <table>
 <tr><td width="140"><strong>📝 剧本输入</strong></td><td>手工输入、AI 自动生成、上传 <code>.txt</code> / <code>.docx</code> 剧本文件，支持系列项目与多剧集管理</td></tr>
-<tr><td><strong>🤖 Agent 流水线</strong></td><td>剧本解析 → 分镜拆解 → 角色三视图 + 场景基准图 → 定稿故事板 → 逐镜头配音 → 逐镜头视频 → 成片合成，全流程自动编排</td></tr>
+<tr><td><strong>🤖 Agent 流水线</strong></td><td>十阶段自愈流水线：导演规划 → 分镜设计 → 素材准备 → 图像生成 → 质量审核 → 音频制作 → 视频生成 → 视频检查 → 剪辑合成 → 成片复审；每阶段带 Critic 审查、恢复决策与幂等检查点，失败可局部补拍、改写 Prompt、切换 Provider 或降级发布</td></tr>
+<tr><td><strong>🧭 可解释追踪与视频候选</strong></td><td>Agent 运行全程可追踪：阶段质量分、Critic 问题、恢复候选与最终决策、Prompt 修改、实际发送参考图清单、成本与耗时；视频生成支持多候选管理（生成、对比、重试、选定），seed 与执行计划哈希全程可追溯</td></tr>
 <tr><td><strong>🎨 素材板</strong></td><td>集中管理角色卡片（6 种情绪变体、服装/配饰锁定）与场景资产（地点+时段分组、光照/道具锁定），可编辑 Prompt 并重新生成</td></tr>
 <tr><td><strong>🔒 视觉一致性 SOP</strong></td><td>角色身份、场景光照、场景组隔离、180 度轴线、参考权重、续帧参考、OpenPose/深度图控制——生成阶段强制注入，跨镜头风格统一</td></tr>
-<tr><td><strong>⚡ 双运行模式</strong></td><td><b>手动审核模式</b>（默认）：每阶段人工卡点，逐镜头确认质量；<b>全自动模式</b>：LangGraph 端到端 <code>ainvoke</code>，一键出片。两种模式复用同一批步骤函数</td></tr>
+<tr><td><strong>⚡ 双运行模式</strong></td><td><b>手动审核模式</b>（默认）：每阶段人工卡点，逐镜头确认质量；<b>全自动模式</b>：LangGraph 十阶段自愈流水线端到端 <code>ainvoke</code>，一键出片。两种模式复用同一批步骤函数</td></tr>
 <tr><td><strong>🎛️ 系统设置</strong></td><td>内置 8 套画风模板 + 自定义画风；LLM / 图像 / 视频 / 配音四类模型 API 可视化配置；子 Agent Skill 方案保存、导入和项目/剧集绑定</td></tr>
 <tr><td><strong>📡 实时进度</strong></td><td>WebSocket 推送阶段进度、镜头更新、故事板就绪、渲染完成等事件，前端实时反馈</td></tr>
 <tr><td><strong>🎥 成片导出</strong></td><td>FFmpeg 负责镜头归一化、Ken Burns 动效、转场、色调统一、环境底噪与最终拼接，输出标准 MP4</td></tr>
@@ -77,7 +79,7 @@
 | 动效 | GSAP | 3.15 | 界面过渡与微交互 |
 | HTTP / 实时 | Axios + WebSocket | — | REST API 调用与任务进度推送 |
 | 后端框架 | FastAPI | latest | REST API + WebSocket 服务 |
-| Agent 编排 | LangGraph | latest | 自动模式端到端状态图 |
+| Agent 编排 | LangGraph | latest | 十阶段自愈生成 Agent 状态图（process / critic / decision / recovery） |
 | ORM | SQLAlchemy 2.0 | — | 数据模型与查询 |
 | 数据库 | SQLite | — | Demo 阶段零运维本地持久化 |
 | LLM | Mimo（小米 MiMo）/ OpenAI 兼容 | — | 剧本生成、剧本解析、分镜决策、自然语言交互 |
@@ -108,7 +110,8 @@ ComicAgent/
 │   │       │   ├── MainWorkspace.tsx    # 主区：剧本编辑、画面预览、镜头缩略图
 │   │       │   ├── RightSidebar.tsx     # 右栏：风格设置、镜头控制、运行日志
 │   │       │   ├── BottomBar.tsx        # 底栏：任务进度、时长统计
-│   │       │   ├── FlowGraph.tsx        # 自动模式流程图可视化
+│   │       │   ├── FlowGraph.tsx        # 自动模式十阶段流程图可视化
+│   │       │   ├── AgentTracePanel.tsx  # Agent 运行可解释追踪面板（阶段/质量/恢复/候选）
 │   │       │   ├── SystemSettingsPage.tsx # 系统设置全屏页
 │   │       │   └── GlobalPlayfulMotion.tsx # 全局微动效
 │   │       ├── stores/
@@ -134,8 +137,13 @@ ComicAgent/
 │   ├── requirements-dev.lock            # 带哈希的锁定开发依赖
 │   ├── .env.example                     # 环境变量模板
 │   ├── agent/                           # LangGraph 自动模式
-│   │   ├── state.py                     # AgentState TypedDict 定义
-│   │   ├── graph.py                     # 自动模式状态图（5 节点线性串联）
+│   │   ├── state.py                     # AgentState TypedDict 定义（含 ExecutionIdentity 身份契约）
+│   │   ├── graph.py                     # 十阶段自愈生成 Agent 状态图
+│   │   ├── contracts.py                 # 阶段契约、视频候选、质量策略与状态机迁移校验
+│   │   ├── checkpoints.py               # 幂等检查点存取、级联失效与追踪汇总
+│   │   ├── critic.py                    # 阶段质量审查与最终报告契约
+│   │   ├── decision.py                  # 恢复决策：失败分类、策略选择、候选评分
+│   │   ├── shot_work.py                 # 逐镜头 fan-out/fan-in 执行
 │   │   ├── nodes/                       # 图节点实现
 │   │   │   ├── script_parser.py         # 剧本解析（LLM）
 │   │   │   ├── storyboard_gen.py        # 分镜生成（LLM）
@@ -157,12 +165,16 @@ ComicAgent/
 │   │       ├── graph.py                 # 流程图结构（由 build_graph 动态派生）
 │   │       └── chat.py                  # 自然语言交互
 │   ├── services/                        # 外部服务封装
-│   │   ├── llm_service.py               # Mimo/OpenAI 兼容 LLM 调用（含兜底链）
+│   │   ├── llm_service.py               # Mimo/OpenAI 兼容 LLM 调用（含兜底链、截断防护）
+│   │   ├── prompts.py                   # 子 Agent 系统提示词唯一事实源 + 固定 JSON 输出契约
 │   │   ├── image_service.py             # 图像生成（Seedream/Qwen-Image/Stability/PIL 占位，含角色卡片注入）
 │   │   ├── video_service.py             # SeedDance 视频生成（异步任务轮询）
 │   │   ├── tts_service.py               # Mimo 内置 TTS 配音
 │   │   ├── ffmpeg_service.py            # FFmpeg 成片合成（Ken Burns/字幕/转场/混音）
 │   │   ├── consistency_service.py       # 视觉一致性 SOP 注入引擎
+│   │   ├── story_timing.py              # 统一镜头执行计划（时长/裁剪/连续性/视频模式/recipe_hash）
+│   │   ├── shot_split_service.py        # 带版本围栏的镜头安全重切
+│   │   ├── video_ab_evaluation.py       # 视频策略 A/B 离线评估（四策略对比报告）
 │   │   ├── reference_asset_service.py   # 参考图/连续帧/OpenPose/深度图物料化
 │   │   ├── style_templates.py           # 8 套内置画风模板 + 自定义模板管理
 │   │   ├── model_config_service.py      # 模型 API 配置持久化（覆盖 .env）
@@ -193,16 +205,18 @@ ComicAgent/
 │   │   ├── api_diagnostics.py           # API Key 连通性诊断
 │   │   ├── sop_completion_audit.py      # SOP 合规性审计
 │   │   ├── sop_payload_smoke.py         # SOP Payload 冒烟检查
-│   │   └── iteration_flow_audit.py      # 迭代流程审计
+│   │   ├── iteration_flow_audit.py      # 迭代流程审计
+│   │   └── video_ab_evaluate.py         # 视频策略 A/B 评估 CLI（离线，只出报告）
 │   └── data/                            # 运行时数据（gitignore）
 │       ├── comic_agent.db               # SQLite 数据库
-│       ├── model_api_config.json        # 模型 API 配置持久化
 │       ├── skill_config_templates.json  # Skill 方案持久化
-│       └── custom_style_templates.json  # 自定义画风模板
+│       └── model_api_config.json        # 模型 API 配置持久化（见下方配置说明）
 │
 ├── output/                              # 生成的项目素材与成片（gitignore）
 ├── docs/
-│   └── FULL_FLOW_TEST.md                # 全链路测试说明
+│   ├── FULL_FLOW_TEST.md                # 全链路测试说明
+│   ├── GENERATIVE_AGENT.md              # 生成 Agent 契约：十阶段流程、质量档位、恢复策略、追踪 API
+│   └── VIDEO_AB_EVALUATION.md           # 视频策略 A/B 离线评估工具说明
 ├── PRODUCT.md                           # 产品定位与品牌策略
 ├── DESIGN.md                            # 设计系统（OKLCH 色彩 + 毛玻璃层次）
 └── README.md                            # 本文件
@@ -229,11 +243,10 @@ ComicAgent/
 │  ────────  │  │    画面预览区      │  │   运行模式切换    │
 │  Agent     │  │   (故事板/成片)    │  │   ───────────    │
 │  流程状态  │  │                    │  │   镜头详情编辑    │
-│  ① 解析   │  ├────────────────────┤  │   镜头类型/情绪   │
-│  ② 分镜   │  │ [缩略图1][缩2]...  │  │   机位/运镜/时长  │
-│  ③ 故事板 │  │   镜头缩略图条     │  │   ───────────    │
-│  ④ 视频   │  └────────────────────┘  │   运行日志        │
-│  ⑤ 合成   │                          │                   │
+│  (十阶段   │  ├────────────────────┤  │   镜头类型/情绪   │
+│  状态条    │  │ [缩略图1][缩2]...  │  │   机位/运镜/时长  │
+│  ①…⑩)    │  │   镜头缩略图条     │  │   ───────────    │
+│            │  └────────────────────┘  │   运行日志        │
 ├────────────┴──────────────────────────┴───────────────────┤
 │                     BottomBar (32px)                       │
 │   进度条 ████░░░░ 40%  │  预估剩余 2:30  │  总时长 1:45    │
@@ -243,7 +256,7 @@ ComicAgent/
 | 组件 | 尺寸 | 核心职责 |
 |------|------|---------|
 | `TopBar` | 44px 全宽 | 项目标题显示、新建/导入/生成/导出操作按钮、系统设置入口 |
-| `LeftSidebar` | 240px | 项目列表（支持系列/剧集切换）、Agent 5 步流水线状态指示灯 |
+| `LeftSidebar` | 240px | 项目列表（支持系列/剧集切换）、Agent 十阶段流水线状态条 |
 | `MainWorkspace` | flex:1 | 剧本编辑区（32%）+ 画面预览区（flex:1）+ 镜头缩略图拖拽排序条 |
 | `RightSidebar` | 300px 可折叠 | 画风/分辨率/平台选择、Agent 运行模式、镜头详情编辑表单、运行日志 |
 | `BottomBar` | 32px 全宽 | 任务进度条、当前步骤提示、预估剩余时间、总时长统计 |
@@ -274,18 +287,21 @@ ComicAgent/
 │                                                         │
 │  POST /api/script/parse (mode=auto)                      │
 │    ↓  get_graph().ainvoke(state)                         │
-│  START → parse_and_storyboard                            │
-│       → generate_storyboard_images                       │
-│       → auto_approve_storyboard                          │
-│       → generate_shot_videos                             │
-│       → compose → END                                    │
+│  ①导演规划 → ②分镜设计 → ③素材准备 → ④图像生成           │
+│     → ⑤质量审核 → ⑥音频制作 → ⑦视频生成                  │
+│     → ⑧视频检查 → ⑨剪辑合成 → ⑩成片复审 → END            │
+│                                                         │
+│  每阶段附 critic / decision / recovery 子循环：           │
+│    审查不过 → 恢复决策（局部补拍 / Prompt 修改 /          │
+│    Provider 切换 / 降分辨率 / 镜头重切）→ 原地续跑        │
 │                                                         │
 │  特点：一键端到端，中途无人工卡点，适合快速验证和批量出片  │
-│        任意节点失败即短路至 END，经 WebSocket 上报错误     │
+│        检查点幂等可恢复；无法自动修复时显式终止或          │
+│        降级发布（degraded），不静默丢弃                   │
 └─────────────────────────────────────────────────────────┘
 ```
 
-> **关键设计**：两种模式的步骤函数完全复用。自动模式图节点（`agent/graph.py`）只是薄包装，惰性 import 并调用 `api/routes/` 中手动模式的同一批函数，新增/修改流程逻辑只需改一处。`/api/graph/structure` 由已编译图动态派生，前端流程图可视化与真实执行器保持一致。
+> **关键设计**：两种模式的步骤函数完全复用。自动模式图节点（`agent/graph.py`）只是薄包装，惰性 import 并调用 `api/routes/` 中手动模式的同一批函数，新增/修改流程逻辑只需改一处。`/api/graph/structure` 由已编译图动态派生，前端流程图可视化与真实执行器保持一致。自动模式图已升级为十阶段自愈流水线，旧五节点线性入口保留兼容并委托新图。
 
 ### 流水线流程
 
@@ -305,6 +321,34 @@ ComicAgent/
 ```
 
 每步异步执行（`asyncio.create_task`），不阻塞 API 响应。WebSocket 客户端每 30 秒发送 `ping` 保持连接。
+
+### 十阶段自愈流水线
+
+全自动模式由 `agent/graph.py` 编排十个阶段（旧五节点线性路径保留兼容入口并委托新图）：
+
+```text
+① 导演规划 → ② 分镜设计 → ③ 素材准备 → ④ 图像生成 → ⑤ 质量审核
+     → ⑥ 音频制作 → ⑦ 视频生成 → ⑧ 视频检查 → ⑨ 剪辑合成 → ⑩ 成片复审
+```
+
+每个阶段都由四类节点组成，形成「生成 → 审查 → 决策 → 恢复」的自愈闭环：
+
+| 节点 | 职责 |
+|------|------|
+| process | 执行该阶段的实际生成工作（逐镜头 fan-out/fan-in） |
+| critic / reviewer | 对照阶段契约审查产物，输出结构化问题清单 |
+| decision | 失败分类 → 恢复策略选择与候选评分（质量增益 / 成本 / 耗时） |
+| recovery | 执行恢复；支持按镜头 scope 局部恢复，不影响已完成镜头 |
+
+关键机制：
+
+- **幂等检查点**（`agent/checkpoints.py`）：阶段产物落盘可复用，进程重启后不重做已完成阶段；后置阶段失败会级联失效下游检查点。
+- **统一镜头执行计划**（`services/story_timing.py`）：叙事时长、Provider 生成时长、trim 窗口、音频模式、连续性模式、视频模式与 `recipe_hash` 在分镜阶段一次性确定并落库，保证重试与恢复可追溯；复杂动作自动拆分节拍，支持带版本围栏的镜头安全重切（`services/shot_split_service.py`）。
+- **视频候选管理**：每个镜头保留多候选视频（seed、`execution_plan_hash`、决策追踪、状态），支持列表查询与失败候选重试，人工对比后选定。
+- **视觉待审收口**：视频检查固定分三类——`structural_validity`（可播放性）、`technical_quality`（时长 / 分辨率 / 黑帧 / 空帧 / 冻结 / 音画）、`visual_quality_pending`（五项视觉维度，无视觉模型时**恒为 pending**，不伪造通过）。显式 `mode=auto` 由 `QUALITY_VISUAL_PENDING_POLICY` 收口：`continue`（默认）按结构 + 技术门禁自动继续、成片标 `degraded` 并把待审项写入最终报告；`block` 保持 fail-closed 终止。两条路径都不进人工卡点，结构或技术不合格时一律拦截。
+- **最终报告**（`agent/critic.py`）：成片复审输出结构化最终报告，包含未解决风险与自动降级原因。
+- **可解释追踪**：`GET /api/graph/runs/{project_id}/trace` 返回面向展示的 `summary`（当前阶段、镜头状态、阶段质量分、Critic 问题、恢复候选与最终决策、Prompt 修改、候选结果、实际发送参考图清单、成本与耗时），前端 `AgentTracePanel` 可视化呈现。
+- **视频策略 A/B 评估**（`scripts/video_ab_evaluate.py`）：离线对比四类视频策略（首帧 I2V / +条件连续性参考 / 多参考 R2V / 首尾帧或续写）在五类镜头上的表现，只出报告、不改线上策略，详见 [docs/VIDEO_AB_EVALUATION.md](docs/VIDEO_AB_EVALUATION.md)。
 
 ### 视觉一致性系统
 
@@ -497,6 +541,12 @@ runner 上成套构建三个平台的安装包并发布到 GitHub Releases（当
 | `MIMO_MODEL` | `mimo-v2.5` | Mimo 模型名称 |
 | `MIMO_MULTIMODAL_MODEL` | `mimo-v2-omni` | 图像理解/诊断用多模态模型 |
 | `LLM_MAX_TOKENS` | `4096` | LLM 最大输出 Token 数 |
+| `LLM_LARGE_JSON_MAX_TOKENS` | `16384` | 剧本解析 / 分镜等大 JSON 输出的 max_tokens（取端点实际上限的较小值），避免长剧本解析中途截断 |
+| `LLM_SCRIPT_PARSE_WHOLE_INPUT_CHARS` | `9000` | 超过该字符数的剧本不再单次解析，直接按场次边界分段 |
+| `LLM_SCRIPT_PARSE_SEGMENT_CHARS` | `7000` | 分段解析的单段目标字符数 |
+| `LLM_SCRIPT_PARSE_SEGMENT_MIN_CHARS` | `1600` | 分段解析的最小段长 |
+
+> LLM 输出被截断（`finish_reason=length`）时抛出专用错误 `llm_output_truncated`，绝不按原配置盲目重试；超长剧本自动降级为按场次分段解析。子 Agent 系统提示词集中在 `services/prompts.py`，固定 JSON 输出契约不可被自定义提示词删除。
 
 #### 图像生成配置
 
@@ -550,6 +600,13 @@ runner 上成套构建三个平台的安装包并发布到 GitHub Releases（当
 | `DASHSCOPE_TTS_VOICE` | `longwan_v2` | 默认音色（CosyVoice 音色 ID，`longwan_v2`=龙婉·温柔女声） |
 | `DASHSCOPE_TTS_FORMAT` | `wav` | 音频格式 |
 | `TTS_DEFAULT_VOICE` | `zh-CN-XiaoyiNeural` | 历史字段（旧 edge-tts 音色名），已被 `MIMO_TTS_VOICE` 取代 |
+
+#### 质量与自动模式收口配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LANGGRAPH_RECURSION_LIMIT` | `120` | 自动模式单次运行的最大 super-step 数（十阶段图 + 局部恢复会超过 LangGraph 默认 25 步上限） |
+| `QUALITY_VISUAL_PENDING_POLICY` | `continue` | 无视觉模型时显式 `mode=auto` 的收口策略：`continue`＝结构 + 技术门禁达标即自动继续，视觉质量记为 pending 写入最终报告、成片标 `degraded`；`block`＝能力缺失即明确终止。manual 与兼容入口不受影响 |
 
 #### 渲染与数据库配置
 
@@ -627,6 +684,8 @@ runner 上成套构建三个平台的安装包并发布到 GitHub Releases（当
 | `POST` | `/api/shot/{shot_id}/approve-storyboard` | 单镜头故事板审核通过 |
 | `POST` | `/api/shot/{project_id}/confirm-storyboard` | 批量确认全部故事板 |
 | `POST` | `/api/shot/{shot_id}/generate-video` | 单镜头配音 + SeedDance 视频生成 |
+| `GET` | `/api/shot/{shot_id}/video-candidates` | 获取镜头视频候选列表（seed、执行计划哈希、决策追踪、状态） |
+| `POST` | `/api/shot/{shot_id}/video-candidates/{candidate_id}/retry` | 重试失败的视频候选（沿用原执行计划） |
 | `GET` | `/api/asset/{project_id}/board` | 获取素材板（角色 + 场景资产列表） |
 | `PUT` | `/api/asset/shot/{shot_id}` | 重新绑定镜头的场景/角色资产 |
 | `PUT` | `/api/asset/character/{character_id}` | 更新角色资产（Prompt、外观、服装锁定等） |
@@ -645,10 +704,11 @@ runner 上成套构建三个平台的安装包并发布到 GitHub Releases（当
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` `POST` | `/api/settings/style-templates` | 画风模板列表 / 新建自定义模板 |
-| `GET` `POST` | `/api/settings/skill-configs` | Skill 方案列表 / 保存方案 |
+| `GET` `POST` | `/api/settings/skill-configs` | Skill 方案列表 / 保存方案（支持自定义子 Agent 系统提示词，非法值返回 400） |
 | `PUT` | `/api/settings/skill-configs/bindings` | Skill 方案绑定（全局 / 项目 / 剧集） |
 | `GET` `PUT` | `/api/settings/model-configs` | 模型 API 配置读取 / 保存 |
-| `GET` | `/api/graph/structure` | 获取自动模式流程图结构（节点+边，含中文标签和描述） |
+| `GET` | `/api/graph/structure` | 获取自动模式流程图结构（十阶段节点+边、阶段角色、契约与质量档位） |
+| `GET` | `/api/graph/runs/{project_id}/trace` | Agent 可解释追踪：决策、候选、恢复明细 + 面向展示的 `summary` 汇总 |
 | `POST` | `/api/chat` | 自然语言交互（返回操作建议和项目/镜头上下文） |
 
 ### 成本、用量与预算
@@ -744,6 +804,9 @@ python scripts/iteration_flow_audit.py      # 迭代流程审计
 python scripts/sop_completion_audit.py       # SOP 合规性审计
 python scripts/sop_payload_smoke.py          # SOP Payload 冒烟检查
 
+# 视频策略 A/B 离线评估（只生成对比报告，不调用视频 Provider、不改线上策略）
+python scripts/video_ab_evaluate.py --input tests/fixtures/video_ab_evaluation/fixture.json --output-dir output/video-ab-evaluation
+
 # API 连通性诊断（不打印 Key）
 python scripts/api_diagnostics.py
 
@@ -789,6 +852,7 @@ pnpm --dir client run build:web
 - **RAG 暂停使用**：`chromadb` 与 `sentence-transformers` 依赖已在 `requirements.txt` 中注释，代码保留可随时启用
 - **重复解析保护**：已有已确认/已出片镜头的项目再次解析会被拒绝，避免误删既有成果
 - **无独立数据库迁移工具**：列级增量补齐在 `db/database.py::_ensure_sqlite_columns()` 中完成
+- **视觉质量待审**：无视觉模型（VLM）时视频五项视觉维度恒为 `pending`，不伪造通过；显式自动模式按 `QUALITY_VISUAL_PENDING_POLICY=continue` 默认自动继续并把成片标记为 `degraded`
 - **Electron 下载问题**：国内网络可能超时，项目 `.npmrc` 已配置镜像源；纯 Web 开发模式（`vite.config.web.ts`）可绕过此问题
 
 ---
@@ -802,3 +866,5 @@ pnpm --dir client run build:web
 | [client/CLAUDE.md](client/CLAUDE.md) | 前端技术文档：组件架构、状态管理、API 封装、Electron 配置 |
 | [server/CLAUDE.md](server/CLAUDE.md) | 后端技术文档：流水线架构、双运行模式、服务层、数据模型、API 参考 |
 | [docs/FULL_FLOW_TEST.md](docs/FULL_FLOW_TEST.md) | 全链路测试说明：启动、冒烟测试、手动 UI 验收、常用校验命令 |
+| [docs/GENERATIVE_AGENT.md](docs/GENERATIVE_AGENT.md) | 生成 Agent 完整契约：十阶段流程、质量档位、恢复策略、追踪 API |
+| [docs/VIDEO_AB_EVALUATION.md](docs/VIDEO_AB_EVALUATION.md) | 视频策略 A/B 离线评估：四策略对比、指标口径、运行方式 |

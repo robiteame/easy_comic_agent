@@ -51,6 +51,7 @@ def init_db():
         SceneAsset,
         Shot,
         ShotVersion,
+        ShotVideoCandidate,
         SubtitleCue,
         SubtitleTrack,
         UsageRecord,
@@ -99,6 +100,7 @@ def _ensure_sqlite_columns() -> None:
                 "storyboard_path": "VARCHAR DEFAULT ''",
                 "storyboard_status": "VARCHAR DEFAULT 'pending'",
                 "video_path": "VARCHAR DEFAULT ''",
+                "estimated_speech_ms": "INTEGER DEFAULT 0",
                 "visual_notes": "TEXT DEFAULT ''",
                 "scene_group_id": "VARCHAR DEFAULT ''",
                 "consistency_context": "TEXT DEFAULT ''",
@@ -124,6 +126,8 @@ def _ensure_sqlite_columns() -> None:
                 "output_format": "VARCHAR DEFAULT '9:16'",
                 "resolution": "VARCHAR DEFAULT '1080p'",
                 "platform": "VARCHAR DEFAULT 'douyin'",
+                "target_duration": "INTEGER DEFAULT 0",
+                "timing_plan": "TEXT DEFAULT '{}'",
                 "parent_project_id": "VARCHAR DEFAULT ''",
                 "project_type": "VARCHAR DEFAULT 'series'",
                 "episode_number": "INTEGER DEFAULT 0",
@@ -176,6 +180,27 @@ def _ensure_sqlite_columns() -> None:
                 "reference_impact": "TEXT DEFAULT '{}'",
             },
         )
+    if "shot_versions" in inspector.get_table_names():
+        _add_missing_columns(
+            "shot_versions",
+            {
+                "candidate_selection": "TEXT DEFAULT '{}'",
+                "decision_trace": "TEXT DEFAULT '{}'",
+            },
+        )
+    if "shot_video_candidates" in inspector.get_table_names():
+        _add_missing_columns(
+            "shot_video_candidates",
+            {
+                "path": "VARCHAR DEFAULT ''",
+                "last_frame_path": "VARCHAR DEFAULT ''",
+                "seed": "INTEGER",
+                "recipe_hash": "VARCHAR DEFAULT ''",
+                "metrics": "TEXT DEFAULT '{}'",
+                "failure": "TEXT DEFAULT '{}'",
+            },
+        )
+        _backfill_video_candidate_contract()
     if "background_jobs" in inspector.get_table_names():
         _add_missing_columns(
             "background_jobs",
@@ -222,6 +247,16 @@ def _add_missing_columns(table: str, columns: dict[str, str]) -> None:
         for name, ddl in columns.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
+
+def _backfill_video_candidate_contract() -> None:
+    """把旧候选的兼容字段回填到稳定契约字段，不让历史记录在 API 中丢元数据。"""
+
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE shot_video_candidates SET path = video_path WHERE path = '' AND video_path <> ''"))
+        conn.execute(text("UPDATE shot_video_candidates SET last_frame_path = tail_frame_path WHERE last_frame_path = '' AND tail_frame_path <> ''"))
+        conn.execute(text("UPDATE shot_video_candidates SET recipe_hash = execution_plan_hash WHERE recipe_hash = '' AND execution_plan_hash <> ''"))
+        conn.execute(text("UPDATE shot_video_candidates SET metrics = structural_metrics WHERE metrics IN ('', '{}') AND structural_metrics NOT IN ('', '{}')"))
 
 
 def _backfill_background_job_metadata() -> None:

@@ -59,7 +59,9 @@ def native_audio_capable(endpoint: EndpointConfig | None = None) -> bool:
         adapter_cls = get_adapter("video", endpoint.protocol)
     except UnknownProtocolError:
         return False
-    capabilities = getattr(adapter_cls, "capabilities", None)
+    # 模型级能力判断优先；测试替身/未声明 effective_capabilities 的适配器回落类级声明。
+    effective = getattr(adapter_cls, "effective_capabilities", None)
+    capabilities = effective(endpoint.model) if callable(effective) else getattr(adapter_cls, "capabilities", None)
     if capabilities is None:
         return False
     return bool(capabilities.native_audio and getattr(adapter_cls, "production_ready", True))

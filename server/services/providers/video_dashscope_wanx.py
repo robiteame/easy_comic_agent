@@ -32,6 +32,7 @@ import httpx
 
 from config import settings
 from services.providers.base import BaseAdapter, VideoCapabilities, VideoRequest, VideoResult
+from services.providers.capability_matrix import reference_send_priority, supports_first_last_frame
 from services.providers.http_retry import request_with_retry
 from services.providers.usage import CAPABILITY_VIDEO, UsageMetadata
 from services.reference_asset_service import ReferenceAssetService
@@ -230,20 +231,44 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
         return model.startswith("wan2.6") or model.startswith("wan2.7")
 
     def _media_entries(self, img_url: str, request: VideoRequest | None = None) -> list[dict[str, str]]:
-        """构造 input.media 素材数组（首帧驱动 + r2v 多参考素材契约）。"""
+        """构造 input.media 素材数组（首帧驱动 + r2v 多参考素材契约）。
+
+        服务层已按优先级与数量上限筛出参考集；这里按同一规则兜底排序/截断，
+        保证直连调用也满足「首帧 → 角色身份 → 场景基准 → 连续性参考」的
+        发送顺序与 ``max_reference_images`` 上限。路由判断一律以
+        ``effective_capabilities(model)`` 为准，不做模型名字符串嗅探。
+        """
 
         media: list[dict[str, str]] = [{"type": "first_frame", "url": img_url}]
-        if not self._is_reference_to_video_model():
+        capabilities = self.effective_capabilities(self.endpoint.model)
+        end_frame_url = ""
+        if supports_first_last_frame(capabilities):
+            end_frame_url = self.reference_assets.to_image_url(
+                getattr(request, "end_frame", "") or "",
+                max_bytes=settings.VIDEO_REFERENCE_INLINE_BUDGET_BYTES,
+            )
+            if end_frame_url and end_frame_url != img_url:
+                media.append({"type": "end_frame", "url": end_frame_url})
+        if str(getattr(capabilities, "reference_mode", "") or "") != "multi_reference":
             return media
-        seen: set[str] = set()
-        for asset in getattr(request, "reference_assets", None) or []:
-            if getattr(asset, "type", "") == "approved_storyboard_first_frame":
-                continue
+        max_refs = max(0, int(getattr(capabilities, "max_reference_images", 0) or 0))
+        assets = sorted(
+            (
+                asset
+                for asset in getattr(request, "reference_assets", None) or []
+                if getattr(asset, "type", "") not in {"approved_storyboard_first_frame", "end_frame"}
+            ),
+            key=lambda asset: reference_send_priority(getattr(asset, "type", "")),
+        )
+        seen: set[str] = {img_url, end_frame_url} - {""}
+        for asset in assets:
+            if max_refs and len(media) - 1 >= max_refs:
+                break
             url = self.reference_assets.to_image_url(
                 getattr(asset, "url", "") or getattr(asset, "source_path", ""),
                 max_bytes=settings.VIDEO_REFERENCE_INLINE_BUDGET_BYTES,
             )
-            if not url or url == img_url or url in seen:
+            if not url or url in seen:
                 continue
             seen.add(url)
             media.append({"type": getattr(asset, "provider_type", "") or "reference_image", "url": url})
@@ -251,12 +276,12 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
             # r2v 至少需要一个 reference_image；没有额外素材时，首帧只以
             # generic reference_image 重复一次，manifest 会如实记录重复项。
             media.append({"type": "reference_image", "url": img_url})
-        return media[: 1 + max(0, int(self.capabilities.max_reference_images or 4))]
+        return media
 
     def _is_reference_to_video_model(self) -> bool:
-        """r2v（参考生视频）模型，含带日期后缀的变体（wan2.7-r2v-2026-06-12）。"""
+        """r2v（参考生视频）模型，以模型级生效能力声明为准。"""
 
-        return "-r2v" in (self.endpoint.model or "").strip().lower()
+        return str(getattr(self.effective_capabilities(self.endpoint.model), "reference_mode", "") or "") == "multi_reference"
 
     def _uses_media_input(self) -> bool:
         """Wan 2.7 / 3.0 新一代接口以 input.media 数组承载参考素材。"""

@@ -16,6 +16,18 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = ""
     OPENAI_MODEL: str = "gpt-4o"
     LLM_MAX_TOKENS: int = 4096
+    # 剧本解析/分镜等大 JSON 输出的目标输出额度。4096 会让长剧本解析结果在
+    # 中途被截断（JSON 解析必然失败），这里把解析类调用的 max_tokens 提到
+    # 16384；端点配置声明了更小的 max_output_tokens 时按端点实际上限取 min。
+    LLM_LARGE_JSON_MAX_TOKENS: int = 16384
+    # 超过该输入字符数的剧本不再单次调用 LLM 解析，直接按场次边界分段；
+    # 单次调用被截断时也会自动降级为分段解析（改变策略，而非同配置重试）。
+    LLM_SCRIPT_PARSE_WHOLE_INPUT_CHARS: int = 9000
+    LLM_SCRIPT_PARSE_SEGMENT_CHARS: int = 7000
+    LLM_SCRIPT_PARSE_SEGMENT_MIN_CHARS: int = 1600
+    # LangGraph 一次 auto 运行的最大 super-step 数。十阶段图加上局部恢复会
+    # 超过库默认的 25 步，导致健康任务被 GraphRecursionError 误杀。
+    LANGGRAPH_RECURSION_LIMIT: int = 120
     # 任务失败原因的 LLM 自动识别：关闭后只保留规则分类（离线/测试环境用）。
     ERROR_ANALYSIS_LLM_ENABLED: bool = True
 
@@ -86,6 +98,12 @@ class Settings(BaseSettings):
     QUALITY_VIDEO_MAX_RETRIES: int = 1
     QUALITY_DEGRADATION_POLICY: str = "strict"  # strict | lenient
     QUALITY_IDENTITY_SIMILARITY_THRESHOLD: float = 0.75
+    # 没有真实视觉模型（VLM）时自动模式的收口策略：
+    # - continue：结构 + 技术门禁（可测量维度）达标即自动继续，视觉质量如实记为
+    #   pending 并写入未解决风险，成片按 degraded 发布——闭环不等人、也不伪造通过；
+    # - block：保持旧的 fail-closed 语义，能力缺失即明确终止（不进入人工卡点）。
+    # 只有显式 mode=auto 的运行受此开关影响；manual/legacy 调用一律不受影响。
+    QUALITY_VISUAL_PENDING_POLICY: str = "continue"  # continue | block
 
     # 角色身份 embedding Provider（OpenAI 兼容多模态 /embeddings 接口）。
     # 未配置时身份相似度证据如实标记 unsupported，绝不假装通过。

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -16,6 +17,7 @@ if str(_SERVER_DIR) not in sys.path:
 from PIL import Image  # noqa: E402
 
 from agent import graph, shot_work  # noqa: E402
+from agent import nodes as agent_nodes  # noqa: E402
 from agent.checkpoints import CheckpointStore  # noqa: E402
 from agent.contracts import (  # noqa: E402
     QUALITY_STRATEGIES,
@@ -49,6 +51,19 @@ def _image(path: Path) -> str:
 
 
 class ContractAndStateMachineTests(unittest.TestCase):
+    def test_automatic_graph_prepares_audio_before_video(self) -> None:
+        self.assertLess(
+            graph.GRAPH_STAGE_ORDER.index(StageName.AUDIO_PRODUCTION.value),
+            graph.GRAPH_STAGE_ORDER.index(StageName.VIDEO_GENERATION.value),
+        )
+        edges = {
+            (edge.source, edge.target, edge.data)
+            for edge in graph.build_graph().compile().get_graph().edges
+        }
+        self.assertIn(("quality_decision", "audio_production", "next"), edges)
+        self.assertIn(("audio_decision", "video_generation", "next"), edges)
+        self.assertIn(("video_decision", "edit_composition", "next"), edges)
+
     def test_all_stages_have_structured_contracts(self) -> None:
         self.assertEqual(
             set(STAGE_CONTRACTS),
@@ -58,11 +73,27 @@ class ContractAndStateMachineTests(unittest.TestCase):
                 StageName.ASSET_PREPARATION,
                 StageName.IMAGE_GENERATION,
                 StageName.QUALITY_REVIEW,
-                StageName.VIDEO_GENERATION,
                 StageName.AUDIO_PRODUCTION,
+                StageName.VIDEO_GENERATION,
+                StageName.VIDEO_REVIEW,
                 StageName.EDIT_COMPOSITION,
                 StageName.FINAL_REVIEW,
             },
+        )
+        self.assertEqual(
+            graph.GRAPH_STAGE_ORDER,
+            (
+                StageName.DIRECTOR_PLANNING.value,
+                StageName.STORYBOARD_DESIGN.value,
+                StageName.ASSET_PREPARATION.value,
+                StageName.IMAGE_GENERATION.value,
+                StageName.QUALITY_REVIEW.value,
+                StageName.AUDIO_PRODUCTION.value,
+                StageName.VIDEO_GENERATION.value,
+                StageName.VIDEO_REVIEW.value,
+                StageName.EDIT_COMPOSITION.value,
+                StageName.FINAL_REVIEW.value,
+            ),
         )
         for contract in STAGE_CONTRACTS.values():
             self.assertTrue(contract.input_model)
@@ -85,7 +116,9 @@ class ContractAndStateMachineTests(unittest.TestCase):
             QUALITY_STRATEGIES[QualityProfileName.FINISHING].cost_multiplier,
         )
         for item in QUALITY_STRATEGIES.values():
-            self.assertTrue(item.human_intervention)
+            self.assertEqual(item.human_intervention.value, "disabled")
+            self.assertGreater(item.expected_duration, 0)
+            self.assertTrue(item.publish_policy.value)
             self.assertGreaterEqual(item.max_recovery_attempts, 1)
 
     def test_run_state_machine_rejects_silent_completed_restart(self) -> None:
@@ -288,9 +321,10 @@ class GraphIntegrationTests(unittest.TestCase):
             async def invalid_run(_state):
                 raise RuntimeError("Mimo 剧本解析结果无法使用: JSON 结构非法")
 
+            fake_parser = types.SimpleNamespace(run=invalid_run)
             with (
                 patch.object(graph.CheckpointStore, "get", return_value=fake_store),
-                patch("agent.nodes.script_parser.run", side_effect=invalid_run),
+                patch.object(agent_nodes, "script_parser", fake_parser, create=True),
             ):
                 state = asyncio.run(
                     graph._director_planning(
@@ -317,7 +351,7 @@ class GraphIntegrationTests(unittest.TestCase):
             fake_store = CheckpointStore("image-node", "auto", root=Path(root))
             image = _image(Path(root) / "ok.png")
 
-            async def fake_generate(shot_id, expected_version, *, project_id, provider_override="", preferred_size=""):
+            async def fake_generate(shot_id, expected_version, *, project_id, provider_override="", preferred_size="", seed_override=None, recovery_revisions=None):
                 if shot_id == "bad":
                     raise RuntimeError("image generation failed")
                 return {"shot_id": shot_id, "shot_version": expected_version, "status": "succeeded", "path": image}

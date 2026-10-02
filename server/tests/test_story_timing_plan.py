@@ -10,6 +10,8 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
+from test_environment import TEST_ROOT  # noqa: F401,E402
+
 from services.story_timing import (  # noqa: E402
     ProviderDurationCapability,
     StoryTimingError,
@@ -41,7 +43,7 @@ class StoryTimingPlanTests(unittest.TestCase):
         self.assertTrue(all(item["duration"] == 5 for item in result))
         self.assertEqual(plan.to_dict()["target_duration_s"], 30)
 
-    def test_six_second_complex_action_is_split_into_continuous_shots(self) -> None:
+    def test_six_second_complex_action_is_split_into_prepare_action_reaction(self) -> None:
         capability = ProviderDurationCapability(
             protocol="flexible-test",
             fixed_duration=None,
@@ -52,6 +54,12 @@ class StoryTimingPlanTests(unittest.TestCase):
         shot = {
             "shot_id": "complex_001",
             "scene_number": 1,
+            "scene_description": "雨夜天台",
+            "characters_in_scene": ["主角", "反派"],
+            "gaze_direction": "主角锁定反派",
+            "screen_axis": "两人保持左侧入画轴线",
+            "action_entry_state": "持剑静止",
+            "action_exit_state": "反击后侧身戒备",
             "duration": 6.0,
             "character_action": "主角冲刺，翻滚，躲闪，挥剑反击",
             "dialogue": [{"speaker": "主角", "line": "来了！"}],
@@ -60,10 +68,72 @@ class StoryTimingPlanTests(unittest.TestCase):
         plan = StoryTimingPlan(target_duration_s=6, provider=capability)
         result = plan.rebalance([shot])
 
-        self.assertEqual(len(result), 2)
-        self.assertEqual([item["timing"]["split_part"] for item in result], [1, 2])
+        self.assertEqual(len(result), 3)
+        self.assertEqual([item["action_beats"][0]["phase"] for item in result], ["preparation", "action", "reaction"])
+        self.assertEqual([item["timing"]["split_part"] for item in result], [1, 2, 3])
         self.assertEqual(sum(item["duration"] for item in result), 6.0)
         self.assertTrue(all(capability.contains(item["duration"]) for item in result))
+        self.assertEqual({tuple(item["characters_in_scene"]) for item in result}, {("主角", "反派")})
+        self.assertEqual({item["scene_description"] for item in result}, {"雨夜天台"})
+        self.assertEqual({item["gaze_direction"] for item in result}, {"主角锁定反派"})
+        self.assertEqual({item["screen_axis"] for item in result}, {"两人保持左侧入画轴线"})
+        self.assertEqual({item["action_entry_state"] for item in result}, {"持剑静止"})
+        self.assertEqual({item["action_exit_state"] for item in result}, {"反击后侧身戒备"})
+        retained_action = " ".join(item["character_action"] for item in result)
+        for fragment in ("冲刺", "翻滚", "躲闪", "挥剑反击"):
+            self.assertIn(fragment, retained_action)
+
+    def test_each_simple_action_beat_gets_one_shot(self) -> None:
+        capability = ProviderDurationCapability(
+            protocol="beat-test",
+            fixed_duration=None,
+            min_duration=1,
+            max_duration=5,
+            duration_step=1,
+        )
+        plan = StoryTimingPlan(target_duration_s=4, provider=capability)
+        result = plan.rebalance(
+            [
+                {
+                    "shot_id": "beat_001",
+                    "scene_number": 1,
+                    "duration": 2.0,
+                    "character_action": "站起来，走向门口",
+                    "action_beats": ["站起来", "走向门口"],
+                    "dialogue": [],
+                }
+            ]
+        )
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual([item["action_beats"][0]["text"] for item in result], ["站起来", "走向门口"])
+        self.assertTrue(all(len(item["action_beats"]) == 1 for item in result))
+
+    def test_first_frame_only_provider_uses_short_action_shots(self) -> None:
+        capability = ProviderDurationCapability(
+            protocol="first-frame-only-test",
+            fixed_duration=5,
+            min_duration=5,
+            max_duration=5,
+            duration_step=5,
+            reference_mode="first_frame_only",
+        )
+        plan = StoryTimingPlan(target_duration_s=15, provider=capability)
+        result = plan.rebalance(
+            [
+                {
+                    "shot_id": "short_001",
+                    "scene_number": 1,
+                    "duration": 5.0,
+                    "character_action": "连续转身三次",
+                    "dialogue": [],
+                }
+            ]
+        )
+
+        self.assertEqual([item["action_beats"][0]["phase"] for item in result], ["preparation", "action", "reaction"])
+        self.assertTrue(all(item["timing"]["short_shot"] for item in result))
+        self.assertTrue(all(item["timing"]["video_mode"] == "first_frame_i2v" for item in result))
 
     def test_dialogue_that_cannot_fit_is_rejected_with_shot_id(self) -> None:
         capability = ProviderDurationCapability(

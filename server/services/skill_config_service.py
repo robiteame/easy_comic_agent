@@ -8,6 +8,7 @@ from typing import Any
 
 from config import settings
 from services.atomic_json import atomic_write_json, path_lock, read_json_file
+from services.prompts import sanitize_system_prompt
 
 
 DEFAULT_AGENT_CONFIG: dict[str, Any] = {
@@ -16,6 +17,8 @@ DEFAULT_AGENT_CONFIG: dict[str, Any] = {
     "style_template_id": "",
     "style_override_enabled": False,
     "custom_style_keywords": "",
+    # 空字符串 = 使用各调用点的内置默认系统提示词（services.prompts）。
+    "system_prompt": "",
     "filter_tts_instruction_text": True,
     "camera_composition": "medium shot, vertical 9:16, clear subject staging, readable foreground and background layers",
     "force_character_scene_references": True,
@@ -269,6 +272,10 @@ def _normalize_agent_config(config: dict[str, Any]) -> dict[str, Any]:
     if not normalized.get("style_override_enabled") and normalized.get("style_template_id") == "anime":
         normalized["style_template_id"] = ""
     normalized["openpose_lock_enabled"] = False
+    # 旧配置文件没有 system_prompt 时由 DEFAULT_AGENT_CONFIG 补空串（= 使用
+    # 内置默认提示词）；手改文件里的非法值（非字符串/超长/纯控制字符）也
+    # 在读取时归一化为空，保证历史文件永远可读。
+    normalized["system_prompt"] = sanitize_system_prompt(normalized.get("system_prompt"))
     normalized["style_reference_weight"] = _clamp_float(normalized.get("style_reference_weight"), 0, 1, 0.45)
     normalized["action_reference_weight"] = _clamp_float(normalized.get("action_reference_weight"), 0, 1, 0.30)
     for key in (

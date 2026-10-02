@@ -1420,6 +1420,25 @@ button {
   white-space: nowrap;
 }
 
+.skill-system-prompt-field .skill-system-prompt-count {
+  margin-left: 6px;
+  color: var(--text-secondary);
+  font-size: var(--font-meta);
+  font-style: normal;
+  font-weight: 500;
+}
+
+.skill-system-prompt-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.skill-system-prompt-error {
+  color: #cf1322;
+  font-size: var(--font-meta);
+}
+
 /* ---- Settings: modular tab shell ---- */
 .settings-shell {
   min-width: 0;
@@ -2599,6 +2618,319 @@ button {
 
 .flow-graph.compact {
   height: 180px;
+}
+
+/* --- Agent 可解释追踪（FlowGraph 内嵌 + 任务中心详情复用） --- */
+
+.flow-steps-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flow-step-agent.degraded .flow-step-dot {
+  background: var(--amber);
+}
+
+.flow-step-agent.failed .flow-step-dot {
+  background: var(--red, #d46b6b);
+}
+
+.flow-step-note {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.flow-trace-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  color: var(--text-secondary);
+  font-size: var(--font-label);
+  cursor: pointer;
+  text-align: left;
+}
+
+.flow-trace-toggle:hover {
+  color: var(--text);
+}
+
+.agent-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft, rgba(127, 127, 127, 0.06));
+  font-size: var(--font-label);
+}
+
+.agent-trace-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-trace-status {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--line-soft);
+  color: var(--text-secondary);
+}
+
+.agent-trace-status-running,
+.agent-trace-status-recovering {
+  background: rgba(79, 127, 216, 0.16);
+  color: var(--text);
+}
+
+.agent-trace-status-completed {
+  background: rgba(82, 160, 110, 0.18);
+  color: var(--text);
+}
+
+.agent-trace-status-degraded {
+  background: rgba(200, 140, 60, 0.2);
+  color: var(--text);
+}
+
+.agent-trace-status-failed {
+  background: rgba(200, 80, 80, 0.18);
+  color: var(--text);
+}
+
+.agent-trace-stage {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.agent-trace-reason {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.agent-trace-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.agent-trace-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--line-soft);
+}
+
+.agent-trace-stats dt {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.agent-trace-stats dd {
+  margin: 0;
+  color: var(--text);
+}
+
+.agent-trace-degradations {
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(200, 140, 60, 0.12);
+}
+
+.agent-trace-degradations ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  color: var(--text-secondary);
+}
+
+.agent-trace-subtitle {
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: var(--font-label);
+}
+
+.agent-trace-empty {
+  margin: 0;
+  color: var(--text-tertiary);
+}
+
+.agent-trace-error {
+  color: var(--red, #d46b6b);
+}
+
+.agent-trace-quality {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-trace-quality-stage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+.agent-trace-quality-score {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.agent-trace-quality-score.agent-trace-quality-failed {
+  color: var(--red, #d46b6b);
+}
+
+.agent-trace-quality-score.agent-trace-quality-degraded {
+  color: var(--amber);
+}
+
+.agent-trace-issues {
+  margin: 2px 0 0;
+  padding-left: 14px;
+  list-style: disc;
+  color: var(--text-secondary);
+}
+
+.agent-trace-issue-error {
+  color: var(--red, #d46b6b);
+}
+
+.agent-trace-issue-warning {
+  color: var(--amber);
+}
+
+.agent-trace-decisions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text);
+}
+
+.agent-trace-decision-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-trace-decision-strategy {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(79, 127, 216, 0.16);
+  font-size: 11px;
+}
+
+.agent-trace-decision-provider,
+.agent-trace-decision-cost {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.agent-trace-decision-reason,
+.agent-trace-decision-rejected {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+}
+
+.agent-trace-decision-rejected {
+  font-size: 11px;
+}
+
+.agent-trace-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.agent-trace-table th,
+.agent-trace-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  color: var(--text-secondary);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-trace-table th {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.agent-trace-candidate-selected td {
+  color: var(--text);
+  background: rgba(82, 160, 110, 0.1);
+}
+
+.agent-trace-prompts,
+.agent-trace-references {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 14px;
+  list-style: disc;
+  color: var(--text-secondary);
+}
+
+.agent-trace-prompts code {
+  margin: 0 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--line-soft);
+  font-size: 11px;
+}
+
+.agent-trace-prompts em {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.agent-trace-prompt-scope {
+  margin-right: 6px;
+  color: var(--text);
+}
+
+.task-agent-trace {
+  margin: 4px 0 8px;
+}
+
+.task-agent-trace summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--font-label);
+}
+
+.task-agent-trace[open] summary {
+  margin-bottom: 8px;
+  color: var(--text);
 }
 
 .panel-enter,

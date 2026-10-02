@@ -10,6 +10,7 @@ from config import settings
 from services.atomic_json import read_json_file
 from services.model_config_service import get_model_config, save_model_config
 from services.model_discovery_service import ModelDiscoveryError, discover_models
+from services.prompts import validate_system_prompt
 from services.providers.capability_matrix import capability_report
 from services.providers.endpoint import KNOWN_PROTOCOLS, endpoint_identity, get_endpoint
 from services.skill_config_service import list_skill_templates, save_skill_template, set_skill_bindings
@@ -83,6 +84,15 @@ async def get_skill_configs():
 
 @router.post("/skill-configs")
 async def save_skill_config(data: SkillTemplateSave):
+    # system_prompt 的类型/长度/控制字符校验在这里显式拒绝（400），
+    # 不让非法值落盘、也不以裸异常冒泡。空字符串合法 = 使用默认提示词。
+    for agent in ("script_agent", "storyboard_agent"):
+        config = getattr(data, agent)
+        if isinstance(config, dict) and "system_prompt" in config:
+            try:
+                validate_system_prompt(config.get("system_prompt"), field=f"{agent}.system_prompt")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
     return save_skill_template(data.model_dump(exclude_none=True))
 
 

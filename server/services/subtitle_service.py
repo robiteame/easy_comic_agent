@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
 from services.shot_dialogue import parse_shot_dialogue
+from services.story_timing import ShotExecutionPlan
 
 from config import settings
 
@@ -257,7 +258,9 @@ class ShotDialogueInput:
     """生成字幕所需的镜头信息（由路由层从 Shot ORM 构建）。
 
     ``lines`` 为结构化对白（新口径，逐句生成 cue）；为空时回落到旧口径——
-    整镜一条 ``dialogue`` 文本 + 单一 ``character_name``。
+    整镜一条 ``dialogue`` 文本 + 单一 ``character_name``。``execution_plan``
+    是镜头统一执行计划：存在时剪辑窗口取 ``effective_duration_ms``，逐句
+    时间轴优先用计划里的实测对白（与视频生成、后期合成同一份计划）。
     """
 
     shot_id: str
@@ -268,6 +271,7 @@ class ShotDialogueInput:
     character_name: str = ""
     tts_duration_ms: int = 0  # TTS 音频实际时长；0 表示未知
     lines: list[DialogueLineInput] = field(default_factory=list)
+    execution_plan: ShotExecutionPlan | None = None
 
 
 def _cue_text_safe(text: str) -> str:
@@ -280,11 +284,49 @@ def _cue_text_safe(text: str) -> str:
         return text[: settings.MAX_SUBTITLE_CUE_CHARS].strip()
 
 
+def _shot_window_ms(shot: ShotDialogueInput) -> int:
+    """镜头在成片时间线上的窗口长度：优先执行计划的剪辑区间。"""
+
+    plan = shot.execution_plan
+    if plan is not None:
+        window = int(plan.effective_duration_ms)
+        if window > 0:
+            return window
+    return max(0, int(shot.duration_ms))
+
+
+def _plan_timed_lines(shot: ShotDialogueInput, lines: Sequence[DialogueLineInput]) -> list[DialogueLineInput]:
+    """用执行计划里的实测对白时间轴替换逐句时间；计划缺句时保留原值。"""
+
+    plan = shot.execution_plan
+    if plan is None or not plan.dialogue_timing:
+        return list(lines)
+    timings = list(plan.dialogue_timing)
+
+    def merge(line: DialogueLineInput, timing: Any) -> DialogueLineInput:
+        return DialogueLineInput(
+            speaker=line.speaker or timing.speaker,
+            line=line.line,
+            start_ms=max(0, int(timing.start_ms)),
+            end_ms=max(0, int(timing.end_ms)),
+        )
+
+    if len(timings) == len(lines):
+        return [merge(line, timing) for line, timing in zip(lines, timings)]
+    # 句数与计划不一致（计划只覆盖部分句子）时按文本匹配，匹配不上的保留原值。
+    by_text = {str(item.text or "").strip(): item for item in timings}
+    return [
+        merge(line, by_text[stripped]) if (stripped := str(line.line or "").strip()) in by_text else line
+        for line in lines
+    ]
+
+
 def _cues_from_lines(shot: ShotDialogueInput, lines: Sequence[DialogueLineInput]) -> list[SubtitleCueData]:
     """逐句字幕：优先使用结构化对白的实测时间轴，缺失时按句均分镜头预算。"""
 
     shot_start = max(0, int(shot.start_ms))
-    shot_end = shot_start + max(0, int(shot.duration_ms))
+    shot_end = shot_start + _shot_window_ms(shot)
+    lines = _plan_timed_lines(shot, lines)
     usable = [line for line in lines if str(line.line or "").strip()]
     if not usable:
         return []
@@ -315,7 +357,7 @@ def _cues_from_lines(shot: ShotDialogueInput, lines: Sequence[DialogueLineInput]
 
     # 时间轴不完整（原生音视频镜头 / 旧数据）：TTS 总时长（不越出镜头）按句
     # 均分，保证多句对白严格按顺序错开。
-    budget = max(0, int(shot.duration_ms))
+    budget = _shot_window_ms(shot)
     if shot.tts_duration_ms > 0:
         budget = max(min(int(shot.tts_duration_ms), budget), min(MIN_CUE_MS, budget))
     share = max(50, budget // max(1, len(usable)))
@@ -370,7 +412,7 @@ def cues_from_shots(shots: Sequence[ShotDialogueInput]) -> list[SubtitleCueData]
         if not text:
             continue
         start = max(0, int(shot.start_ms))
-        available = max(0, int(shot.duration_ms))
+        available = _shot_window_ms(shot)
         duration = available
         if shot.tts_duration_ms > 0:
             # 对白读完即可收字幕，但至少停留 MIN_CUE_MS 且不越出镜头。

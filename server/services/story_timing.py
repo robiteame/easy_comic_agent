@@ -9,6 +9,7 @@ can be regression-tested as a deterministic service.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -16,12 +17,19 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
 from config import settings
+from services.consistency_service import normalize_continuity_mode
 
 PROVIDER_TIMELINE_TOLERANCE_MS = 500
 ACTION_LEAD_RESERVE_MS = 250
 COMPLEX_ACTION_MAX_SECONDS = 5.0
 DEFAULT_DURATION_STEP_SECONDS = 1.0
 MAX_PLANNED_SHOTS = 200
+
+# 执行计划存放在 shots.continuity_profile JSON 的这个键下（复用现有字段，
+# 不引入数据库迁移）。
+EXECUTION_PLAN_PROFILE_KEY = "execution_plan"
+EXECUTION_PLAN_SCHEMA_VERSION = 1
+EXECUTION_PLAN_AUDIO_MODES = ("tts", "native")
 
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _LATIN_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*")
@@ -38,6 +46,9 @@ _COMPLEX_ACTION_MARKERS = (
     "交手",
     "冲刺",
     "飞奔",
+    "奔跑",
+    "跑步",
+    "跑",
     "翻滚",
     "闪避",
     "跳跃",
@@ -46,19 +57,26 @@ _COMPLEX_ACTION_MARKERS = (
     "踢",
     "摔",
     "转身走位",
+    "连续转身",
+    "连续转体",
     "连续",
     "翻越",
     "攀爬",
     "躲闪",
     "chase",
+    "chasing",
     "fight",
+    "fighting",
     "combat",
+    "run",
+    "running",
     "sprint",
     "roll",
     "vault",
     "dodge",
 )
 _ACTION_CONJUNCTIONS = ("然后", "接着", "随后", "同时", "之后", "再", "and then", "then", "after that")
+ACTION_BEAT_PHASES = ("preparation", "action", "reaction", "continuation")
 
 
 @dataclass(frozen=True)
@@ -70,6 +88,8 @@ class ProviderDurationCapability:
     min_duration: float = settings.MIN_SHOT_DURATION_SECONDS
     max_duration: float = settings.MAX_SHOT_DURATION_SECONDS
     duration_step: float = DEFAULT_DURATION_STEP_SECONDS
+    # 规划侧的视频路由事实；首尾帧能力由视频服务按模型级 capability 裁决。
+    reference_mode: str = ""
 
     def __post_init__(self) -> None:
         fixed = self.fixed_duration
@@ -92,6 +112,10 @@ class ProviderDurationCapability:
     @property
     def is_fixed(self) -> bool:
         return self.fixed_duration is not None
+
+    @property
+    def first_frame_only(self) -> bool:
+        return str(self.reference_mode or "").strip().lower() == "first_frame_only"
 
     @property
     def tolerance_s(self) -> float:
@@ -190,6 +214,7 @@ def provider_duration_capability(
         min_duration=float(raw_min) if raw_min is not None else default_min,
         max_duration=float(raw_max) if raw_max is not None else default_max,
         duration_step=float(raw_step) if raw_step not in (None, 0) else default_step,
+        reference_mode=str(getattr(capabilities, "reference_mode", "") or ""),
     )
 
 
@@ -197,19 +222,41 @@ def provider_duration_capability(
 class ActionBeat:
     text: str
     complex_motion: bool = False
+    phase: str = "continuation"
+    entry_state: str = ""
+    exit_state: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "text": self.text,
+            "phase": self.phase if self.phase in ACTION_BEAT_PHASES else "continuation",
+            "complex_motion": bool(self.complex_motion),
+            "entry_state": self.entry_state,
+            "exit_state": self.exit_state,
+        }
 
 
 @dataclass(frozen=True)
 class TimingAdjustment:
+    """拆镜/合镜/时长调整的可追溯记录：原因 + 前后结构快照。"""
+
     code: str
     message: str
     shot_ids: tuple[str, ...] = ()
+    reason: str = ""
+    # before/after 记录拆合前后的镜头结构（shot_id/duration/version/plan 摘要），
+    # 供版本历史与下游失效决策追溯；普通时长调整可为空。
+    before: tuple[Mapping[str, Any], ...] = ()
+    after: tuple[Mapping[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "code": self.code,
             "message": self.message,
             "shot_ids": list(self.shot_ids),
+            "reason": self.reason,
+            "before": [dict(item) for item in self.before],
+            "after": [dict(item) for item in self.after],
         }
 
 
@@ -320,8 +367,123 @@ def estimate_speech_ms(text: Any) -> int:
     return max(300, int(round(speech_seconds * 1000)))
 
 
+def _has_complex_motion(text: Any) -> bool:
+    value = str(text or "").strip().lower()
+    return any(marker.lower() in value for marker in _COMPLEX_ACTION_MARKERS)
+
+
+def _coerce_action_beat(value: Any) -> ActionBeat | None:
+    if isinstance(value, ActionBeat):
+        return value
+    if hasattr(value, "model_dump"):
+        value = value.model_dump()
+    if isinstance(value, str):
+        text = value.strip()
+        return ActionBeat(text=text, complex_motion=_has_complex_motion(text)) if text else None
+    if isinstance(value, Mapping):
+        text = str(value.get("text") or value.get("action") or value.get("description") or "").strip()
+        if not text:
+            return None
+        phase = str(value.get("phase") or value.get("kind") or "continuation").strip().lower()
+        aliases = {
+            "prepare": "preparation",
+            "setup": "preparation",
+            "准备": "preparation",
+            "动作": "action",
+            "反应": "reaction",
+            "续接": "continuation",
+        }
+        phase = aliases.get(phase, phase)
+        return ActionBeat(
+            text=text,
+            complex_motion=bool(value.get("complex_motion")) or _has_complex_motion(text),
+            phase=phase if phase in ACTION_BEAT_PHASES else "continuation",
+            entry_state=str(value.get("entry_state") or ""),
+            exit_state=str(value.get("exit_state") or ""),
+        )
+    return None
+
+
+def normalize_action_beats(value: Any, *, fallback_text: Any = "") -> list[ActionBeat]:
+    """Normalize explicit beats; fall back to deterministic action segmentation."""
+
+    explicit: list[ActionBeat] = []
+    if isinstance(value, Mapping):
+        value = [value]
+    if isinstance(value, (list, tuple)):
+        explicit = [beat for beat in (_coerce_action_beat(item) for item in value) if beat]
+    if explicit:
+        return _expand_complex_beats(explicit, source_text=str(fallback_text or ""))
+    return estimate_action_beats(fallback_text)
+
+
+def _inherit_action_states(beats: Sequence[ActionBeat], shot: Mapping[str, Any]) -> list[ActionBeat]:
+    entry = str(shot.get("action_entry_state") or "")
+    exit_state = str(shot.get("action_exit_state") or "")
+    output: list[ActionBeat] = []
+    for beat in beats:
+        # 镜头级边界状态是拆镜前后的连续性契约；只有节拍自带更细状态时才覆盖。
+        beat_entry = beat.entry_state or entry
+        beat_exit = beat.exit_state or exit_state
+        output.append(
+            ActionBeat(
+                text=beat.text,
+                complex_motion=beat.complex_motion,
+                phase=beat.phase,
+                entry_state=beat_entry,
+                exit_state=beat_exit,
+            )
+        )
+    return output
+
+
+def _complex_phase_beats(source_text: str, *, entry_state: str = "", exit_state: str = "") -> list[ActionBeat]:
+    """Prepare/action/reaction shots for chase, fight, run, roll and turn sequences."""
+
+    source = " ".join(str(source_text or "").split())
+    first = re.split(r"[，,。！？!?；;：:\n]+", source)[0].strip() or source
+    last = re.split(r"[，,。！？!?；;：:\n]+", source)[-1].strip() or source
+    return [
+        ActionBeat(
+            text=f"准备：调整重心、视线和身体朝向，进入「{first}」的起始状态",
+            complex_motion=True,
+            phase="preparation",
+            entry_state=entry_state,
+            exit_state=entry_state,
+        ),
+        ActionBeat(
+            text=f"动作：{source}",
+            complex_motion=True,
+            phase="action",
+            entry_state=entry_state,
+            exit_state=exit_state,
+        ),
+        ActionBeat(
+            text=f"反应：完成「{last}」后稳住动作，确认落点并进入退出状态",
+            complex_motion=True,
+            phase="reaction",
+            entry_state=exit_state,
+            exit_state=exit_state,
+        ),
+    ]
+
+
+def _expand_complex_beats(beats: Sequence[ActionBeat], *, source_text: str) -> list[ActionBeat]:
+    if not any(beat.complex_motion for beat in beats):
+        return list(beats[:12])
+    source = source_text or "；".join(beat.text for beat in beats)
+    phases = {beat.phase for beat in beats}
+    if {"preparation", "action", "reaction"}.issubset(phases):
+        return list(beats[:12])
+    return _complex_phase_beats(
+        source,
+        entry_state=next((beat.entry_state for beat in beats if beat.entry_state), ""),
+        exit_state=next((beat.exit_state for beat in reversed(beats) if beat.exit_state), ""),
+    )
+
+
 def estimate_action_beats(text: Any) -> list[ActionBeat]:
-    """Split an action description into narrative beats and classify complex motion."""
+    """Split an action description into one-narrative-beat segments."""
 
     value = str(text or "").strip()
     if not value:
@@ -332,13 +494,15 @@ def estimate_action_beats(text: Any) -> list[ActionBeat]:
     pieces = [piece.strip() for piece in _CLAUSE_BREAK_RE.split(normalized) if piece.strip()]
     if not pieces:
         pieces = [value]
-    return [
+    beats = [
         ActionBeat(
             text=piece,
-            complex_motion=any(marker.lower() in piece.lower() for marker in _COMPLEX_ACTION_MARKERS),
+            complex_motion=_has_complex_motion(piece),
+            phase="action",
         )
         for piece in pieces[:12]
     ]
+    return _expand_complex_beats(beats, source_text=value)
 
 
 def action_is_complex(text: Any) -> bool:
@@ -360,6 +524,431 @@ def usable_speech_ms(shot: Mapping[str, Any], duration_s: float | None = None) -
     duration_ms = int(round(float(duration_s if duration_s is not None else shot.get("duration") or 0) * 1000))
     reserve = ACTION_LEAD_RESERVE_MS if str(shot.get("character_action") or "").strip() else 0
     return max(0, duration_ms - reserve)
+
+
+@dataclass(frozen=True)
+class DialogueTiming:
+    """单句对白的实际时间轴（相对镜头起点，毫秒）。"""
+
+    speaker: str = ""
+    text: str = ""
+    start_ms: int = 0
+    end_ms: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "speaker": self.speaker,
+            "text": self.text,
+            "start_ms": self.start_ms,
+            "end_ms": self.end_ms,
+        }
+
+    @classmethod
+    def from_mapping(cls, item: Any) -> "DialogueTiming | None":
+        if not isinstance(item, Mapping):
+            return None
+        text = str(item.get("text") or item.get("line") or item.get("dialogue") or "").strip()
+        if not text:
+            return None
+        try:
+            start_ms = max(0, int(round(float(item.get("start_ms") or 0))))
+            end_ms = max(0, int(round(float(item.get("end_ms") or 0))))
+        except (TypeError, ValueError):
+            return None
+        return cls(speaker=str(item.get("speaker") or ""), text=text, start_ms=start_ms, end_ms=end_ms)
+
+
+@dataclass(frozen=True)
+class ShotExecutionPlan:
+    """镜头统一执行计划：故事时间、Provider 生成时长与最终剪辑区间同源。
+
+    视频 Prompt 的有效时长、TTS 实测对白时间轴和后期合成时间线都消费同一份
+    计划，避免各阶段从 ``duration`` / ``estimated_speech_ms`` 等旧字段各自推导
+    出不一致的结果。固定档 Provider（如固定 5 秒）允许生成满固定秒数，再在
+    成片中按 ``trim_start_ms`` / ``trim_end_ms`` 裁剪为更短的故事时长；TTS 实测
+    对白超出故事时间但在生成片段内时，剪辑区间延伸到实测对白结束。旧数据没有
+    计划时由 :meth:`derive` 从旧字段推导，行为与历史路径一致。
+    """
+
+    shot_id: str
+    narrative_duration_ms: int
+    provider_generation_duration_s: float
+    trim_start_ms: int = 0
+    trim_end_ms: int = 0
+    audio_mode: str = "tts"
+    # tts_measured（本轮 TTS 实测）| stored（库内既有时间戳）| native_prompt
+    #（编入视频 Prompt 的时间）| none（无对白时间轴）
+    dialogue_timing_source: str = "none"
+    dialogue_timing: tuple[DialogueTiming, ...] = ()
+    continuity_mode: str = "independent"
+    video_mode: str = "text_only"
+    # 本镜头计划并行生成的候选数与允许的自动恢复次数（质量档位决定）。
+    candidate_count: int = 1
+    # 镜头执行所需的 Provider 能力（first_frame/character_identity/...）；
+    # 视频路由按可加载参考素材给出权威清单后回写计划。
+    required_capabilities: tuple[str, ...] = ()
+    recovery_budget: int = 0
+    provider: str = ""
+    recipe_hash: str = ""
+    warnings: tuple[str, ...] = ()
+    schema_version: int = EXECUTION_PLAN_SCHEMA_VERSION
+
+    @property
+    def generation_duration_ms(self) -> int:
+        return int(round(self.provider_generation_duration_s * 1000))
+
+    @property
+    def effective_duration_ms(self) -> int:
+        """最终剪辑区间长度，即镜头在成片时间线上的实际时长。"""
+
+        return max(0, self.trim_end_ms - max(0, self.trim_start_ms))
+
+    @property
+    def dialogue_end_ms(self) -> int:
+        return max((item.end_ms for item in self.dialogue_timing), default=0)
+
+    @property
+    def has_measured_dialogue(self) -> bool:
+        return self.dialogue_timing_source in {"tts_measured", "stored"} and bool(self.dialogue_timing)
+
+    def to_dict(self) -> dict[str, Any]:
+        dialogue_timing = [item.to_dict() for item in self.dialogue_timing]
+        return {
+            "schema_version": self.schema_version,
+            "shot_id": self.shot_id,
+            "narrative_duration_ms": self.narrative_duration_ms,
+            "provider_generation_duration_s": self.provider_generation_duration_s,
+            "trim_start_ms": self.trim_start_ms,
+            "trim_end_ms": self.trim_end_ms,
+            "audio_mode": self.audio_mode,
+            "dialogue_timing_source": self.dialogue_timing_source,
+            # actual_dialogue_timing 是对外契约名；dialogue_timing 旧键保留，
+            # 两处始终同值，旧消费者不受影响。
+            "actual_dialogue_timing": dialogue_timing,
+            "dialogue_timing": dialogue_timing,
+            "continuity_mode": self.continuity_mode,
+            "video_mode": self.video_mode,
+            "candidate_count": self.candidate_count,
+            "required_capabilities": list(self.required_capabilities),
+            "recovery_budget": self.recovery_budget,
+            "provider": self.provider,
+            "recipe_hash": self.recipe_hash,
+            "warnings": list(self.warnings),
+        }
+
+    @classmethod
+    def from_mapping(cls, payload: Any) -> "ShotExecutionPlan | None":
+        """解析持久化计划；无法识别/非法时返回 None（调用方走旧字段推导）。"""
+
+        if not isinstance(payload, Mapping):
+            return None
+        try:
+            narrative_ms = int(round(float(payload.get("narrative_duration_ms"))))
+            generation_s = float(payload.get("provider_generation_duration_s"))
+        except (TypeError, ValueError):
+            return None
+        if narrative_ms <= 0 or not math.isfinite(generation_s) or generation_s <= 0:
+            return None
+
+        def _int_ms(value: Any, default: int) -> int:
+            try:
+                return max(0, int(round(float(value))))
+            except (TypeError, ValueError):
+                return default
+
+        trim_start = _int_ms(payload.get("trim_start_ms"), 0)
+        trim_end = _int_ms(payload.get("trim_end_ms"), narrative_ms)
+        raw_timing = payload.get("actual_dialogue_timing")
+        if raw_timing is None:
+            raw_timing = payload.get("dialogue_timing")
+        timings = tuple(filter(None, (DialogueTiming.from_mapping(item) for item in (raw_timing or []))))
+        audio_mode = str(payload.get("audio_mode") or "").strip().lower()
+        if audio_mode not in EXECUTION_PLAN_AUDIO_MODES:
+            audio_mode = "tts"
+        try:
+            schema_version = int(payload.get("schema_version") or 0)
+        except (TypeError, ValueError):
+            schema_version = 0
+        try:
+            candidate_count = max(1, int(payload.get("candidate_count") or 1))
+        except (TypeError, ValueError):
+            candidate_count = 1
+        try:
+            recovery_budget = max(0, int(payload.get("recovery_budget") or 0))
+        except (TypeError, ValueError):
+            recovery_budget = 0
+        return cls(
+            shot_id=str(payload.get("shot_id") or ""),
+            narrative_duration_ms=narrative_ms,
+            provider_generation_duration_s=generation_s,
+            trim_start_ms=trim_start,
+            trim_end_ms=max(trim_start, trim_end),
+            audio_mode=audio_mode,
+            dialogue_timing_source=str(payload.get("dialogue_timing_source") or ("stored" if timings else "none")),
+            dialogue_timing=timings,
+            continuity_mode=normalize_continuity_mode(payload.get("continuity_mode")),
+            video_mode=str(payload.get("video_mode") or "text_only"),
+            candidate_count=candidate_count,
+            required_capabilities=tuple(
+                dict.fromkeys(str(item) for item in (payload.get("required_capabilities") or []) if str(item).strip())
+            ),
+            recovery_budget=recovery_budget,
+            provider=str(payload.get("provider") or ""),
+            recipe_hash=str(payload.get("recipe_hash") or ""),
+            warnings=tuple(str(item) for item in (payload.get("warnings") or [])),
+            schema_version=schema_version or EXECUTION_PLAN_SCHEMA_VERSION,
+        )
+
+    @classmethod
+    def derive(
+        cls,
+        shot: Mapping[str, Any],
+        *,
+        provider: ProviderDurationCapability | None = None,
+        audio_mode: str = "",
+        dialogue_timing: Sequence[Any] | None = None,
+        dialogue_timing_source: str = "",
+        shot_id: str = "",
+        candidate_count: int = 0,
+        required_capabilities: Sequence[str] | None = None,
+        recovery_budget: int = -1,
+    ) -> "ShotExecutionPlan":
+        """从镜头字段（或旧数据）推导执行计划。
+
+        ``dialogue_timing`` 传入本轮 TTS 实测时间轴时（``tts_measured``），实测
+        对白决定剪辑下限：故事时间在生成片段容量内延伸到实测结束，超出容量则
+        封顶并记录 warning。其余情况从库内对白时间戳（``stored``）或空时间轴
+        推导，行为与历史 duration 语义一致。``candidate_count`` /
+        ``recovery_budget`` 来自质量档位；``required_capabilities`` 未显式给出
+        时按镜头内容确定性推导（视频路由会按可加载素材覆写为权威清单）。
+        """
+
+        shot_id = shot_id or str(shot.get("shot_id") or shot.get("id") or "")
+        try:
+            narrative_ms = max(1, int(round(float(shot.get("duration") or 3.0) * 1000)))
+        except (TypeError, ValueError):
+            narrative_ms = 3000
+
+        profile = shot.get("continuity_profile") if isinstance(shot.get("continuity_profile"), Mapping) else {}
+        timing = shot.get("timing") if isinstance(shot.get("timing"), Mapping) else {}
+
+        source = str(dialogue_timing_source or "").strip().lower()
+        timings: list[DialogueTiming] = []
+        if dialogue_timing is not None:
+            timings = [item for item in (DialogueTiming.from_mapping(entry) for entry in dialogue_timing) if item]
+            if not source:
+                source = "tts_measured" if timings else "none"
+        else:
+            raw = shot.get("dialogue_timing")
+            if raw is None:
+                raw = shot.get("dialogue")
+            timings = [
+                item
+                for item in (
+                    DialogueTiming.from_mapping(entry)
+                    if entry.get("start_ms") is not None and entry.get("end_ms") is not None
+                    else None
+                    for entry in dialogue_items(raw)
+                )
+                if item
+            ]
+            if not source:
+                source = "stored" if timings else ""
+        dialogue_end_ms = max((item.end_ms for item in timings), default=0)
+
+        mode = str(audio_mode or "").strip().lower()
+        if not mode:
+            mode = str(
+                shot.get("audio_mode")
+                or timing.get("audio_mode")
+                or timing.get("audio_source")
+                or profile.get("audio_mode")
+                or profile.get("audio_source")
+                or ""
+            ).strip().lower()
+        if mode not in EXECUTION_PLAN_AUDIO_MODES:
+            mode = "tts"
+
+        # continuity_mode 的五种规范值由一致性策略统一归一化；旧计划里的
+        # previous_final_frame 映射为 continuous_action，其余旧控制源回落独立镜头。
+        continuity_mode = normalize_continuity_mode(
+            shot.get("continuity_mode") or profile.get("continuity_mode") or profile.get("control_source"),
+            default="independent",
+        )
+
+        video_mode = str(shot.get("video_mode") or profile.get("reference_mode") or "").strip().lower()
+        if not video_mode:
+            video_mode = "first_frame_reference" if (shot.get("storyboard_path") or shot.get("image_path")) else "text_only"
+
+        warnings: list[str] = []
+        needed_ms = narrative_ms
+        if mode == "tts" and source == "tts_measured" and dialogue_end_ms > needed_ms:
+            needed_ms = dialogue_end_ms
+            warnings.append("narrative_extended_for_dialogue")
+
+        try:
+            requested_generation_s = float(shot.get("generation_duration_s") or 0)
+        except (TypeError, ValueError):
+            requested_generation_s = 0.0
+        if provider is not None and provider.is_fixed:
+            generation_s = float(provider.fixed_duration or 0) or needed_ms / 1000
+        elif provider is not None:
+            step_ms = max(1, int(round(provider.duration_step * 1000)))
+            snapped_ms = int(math.ceil(needed_ms / step_ms - 1e-6)) * step_ms
+            generation_s = min(max(snapped_ms / 1000, provider.min_duration), provider.max_duration)
+        else:
+            generation_s = requested_generation_s if requested_generation_s > 0 else needed_ms / 1000
+        generation_s = round(max(generation_s, 0.001), 3)
+        generation_ms = int(round(generation_s * 1000))
+
+        trim_start_ms = 0
+        trim_end_ms = min(generation_ms, needed_ms)
+        if provider is not None and not provider.is_fixed:
+            # 非固定档的最终时长必须落在步长网格上，否则扩展后的 duration
+            # 会在下一次生成入口被步长校验拒绝。
+            step_ms = max(1, int(round(provider.duration_step * 1000)))
+            trim_end_ms = min(generation_ms, int(math.ceil(trim_end_ms / step_ms - 1e-6)) * step_ms)
+        if narrative_ms > generation_ms:
+            warnings.append("narrative_exceeds_provider_clip")
+        if mode == "tts" and source == "tts_measured" and dialogue_end_ms > generation_ms:
+            warnings.append("dialogue_exceeds_provider_clip")
+
+        recipe_payload = {
+            "schema_version": EXECUTION_PLAN_SCHEMA_VERSION,
+            "shot_id": shot_id,
+            "narrative_duration_ms": narrative_ms,
+            "provider_generation_duration_s": generation_s,
+            "audio_mode": mode,
+            "continuity_mode": continuity_mode,
+            "video_mode": video_mode,
+            "provider": str(provider.protocol if provider is not None else ""),
+            "dialogue": [
+                {"speaker": str(item.get("speaker") or ""), "text": str(item.get("line") or "")}
+                for item in dialogue_items(shot.get("dialogue"))
+            ],
+        }
+        recipe_hash = hashlib.sha256(
+            json.dumps(recipe_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16]
+        try:
+            planned_candidates = max(1, int(candidate_count or shot.get("candidate_count") or 1))
+        except (TypeError, ValueError):
+            planned_candidates = 1
+        try:
+            planned_recovery = int(
+                recovery_budget if recovery_budget >= 0 else (shot.get("recovery_budget") if shot.get("recovery_budget") is not None else 0)
+            )
+        except (TypeError, ValueError):
+            planned_recovery = 0
+        if required_capabilities is None:
+            capabilities = tuple(plan_required_capabilities(shot))
+        else:
+            capabilities = tuple(dict.fromkeys(str(item) for item in required_capabilities if str(item).strip()))
+        return cls(
+            shot_id=shot_id,
+            # narrative 保持真实故事时间（对白超时时为延展后的需要值）：入口
+            # 校验靠它拒绝超出 Provider 能力的镜头；生成容量上限只约束 trim。
+            narrative_duration_ms=needed_ms,
+            provider_generation_duration_s=generation_s,
+            trim_start_ms=trim_start_ms,
+            trim_end_ms=trim_end_ms,
+            audio_mode=mode,
+            dialogue_timing_source=source or "none",
+            dialogue_timing=tuple(timings),
+            continuity_mode=continuity_mode,
+            video_mode=video_mode,
+            candidate_count=planned_candidates,
+            required_capabilities=capabilities,
+            recovery_budget=max(0, planned_recovery),
+            provider=str(provider.protocol if provider is not None else ""),
+            recipe_hash=recipe_hash,
+            warnings=tuple(dict.fromkeys(warnings)),
+        )
+
+
+def plan_required_capabilities(shot: Mapping[str, Any]) -> list[str]:
+    """按镜头内容确定性推导执行所需的 Provider 能力清单。
+
+    规划阶段（分镜/音频）尚无可加载素材，这里只根据镜头语义给出需求：
+    已审核分镜首帧是视频链路硬性要求；场内角色需要角色身份参考；有场景组
+    需要场景基准；continuous_action 需要上一镜尾帧作为连续性参考；任一非
+    首帧参考都意味着多参考能力。视频生成时按实际可加载素材覆写为权威清单。
+    """
+
+    required: list[str] = ["first_frame"]
+    profile = shot.get("continuity_profile") if isinstance(shot.get("continuity_profile"), Mapping) else {}
+    characters = [str(item) for item in (shot.get("characters_in_scene") or []) if str(item).strip()]
+    has_scene = bool(
+        shot.get("scene_asset_id")
+        or shot.get("scene_group_id")
+        or shot.get("scene_number")
+        or str(shot.get("scene_description") or "").strip()
+    )
+    continuity_mode = normalize_continuity_mode(
+        shot.get("continuity_mode") or profile.get("continuity_mode"),
+        default="independent",
+    )
+    if characters:
+        required.append("character_identity")
+    if has_scene:
+        required.append("scene_reference")
+    extra_references = len(required) > 1 or continuity_mode == "continuous_action"
+    if extra_references:
+        required.append("multiple_reference_images")
+    return list(dict.fromkeys(required))
+
+
+def load_shot_execution_plan(shot: Mapping[str, Any]) -> ShotExecutionPlan | None:
+    """读取已持久化的执行计划；旧数据没有计划时返回 None。"""
+
+    candidates: list[Any] = [shot.get(EXECUTION_PLAN_PROFILE_KEY)]
+    profile = shot.get("continuity_profile")
+    if isinstance(profile, Mapping):
+        candidates.append(profile.get(EXECUTION_PLAN_PROFILE_KEY))
+    timing = shot.get("timing")
+    if isinstance(timing, Mapping):
+        candidates.append(timing.get(EXECUTION_PLAN_PROFILE_KEY))
+    for payload in candidates:
+        plan = ShotExecutionPlan.from_mapping(payload)
+        if plan is not None:
+            return plan
+    return None
+
+
+def resolve_shot_execution_plan(
+    shot: Mapping[str, Any],
+    *,
+    provider: ProviderDurationCapability | None = None,
+    audio_mode: str = "",
+    dialogue_timing: Sequence[Any] | None = None,
+    dialogue_timing_source: str = "",
+    shot_id: str = "",
+    candidate_count: int = 0,
+    required_capabilities: Sequence[str] | None = None,
+    recovery_budget: int = -1,
+) -> ShotExecutionPlan:
+    """优先使用持久化执行计划（后期合成与校验的单一事实源）。
+
+    本轮有新的实测对白时间轴（``dialogue_timing``）、显式音频路由或显式
+    执行参数（候选数/能力/恢复预算）时必须重新推导；否则直接复用已落库
+    计划，旧数据（无计划）从旧字段推导。
+    """
+
+    if dialogue_timing is None and not audio_mode and not candidate_count and required_capabilities is None and recovery_budget < 0:
+        persisted = load_shot_execution_plan(shot)
+        if persisted is not None:
+            return persisted
+    return ShotExecutionPlan.derive(
+        shot,
+        provider=provider,
+        audio_mode=audio_mode,
+        dialogue_timing=dialogue_timing,
+        dialogue_timing_source=dialogue_timing_source,
+        shot_id=shot_id,
+        candidate_count=candidate_count,
+        required_capabilities=required_capabilities,
+        recovery_budget=recovery_budget,
+    )
 
 
 def _unique_id(existing: Iterable[str], base: str) -> str:
@@ -429,7 +1018,24 @@ def _split_dialogue_by_speech(value: Any, parts: int) -> list[list[dict[str, Any
     return output
 
 
-def _split_timing_metadata(shot: Mapping[str, Any], part_number: int, part_count: int) -> dict[str, Any]:
+def _structure_snapshot(shot: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "shot_id": str(shot.get("shot_id") or shot.get("id") or ""),
+        "duration": float(shot.get("duration") or 0),
+        "version": int(shot.get("version") or 1),
+    }
+
+
+def _split_timing_metadata(
+    shot: Mapping[str, Any],
+    part_number: int,
+    part_count: int,
+    beat: ActionBeat | None = None,
+    *,
+    reason: str = "",
+    before: Mapping[str, Any] | None = None,
+    part_shot_id: str = "",
+) -> dict[str, Any]:
     timing = dict(shot.get("timing") or {})
     timing.update(
         {
@@ -437,8 +1043,37 @@ def _split_timing_metadata(shot: Mapping[str, Any], part_number: int, part_count
             "split_part": part_number,
             "split_total": part_count,
             "narrative_continuation": True,
+            "action_phase": beat.phase if beat else "continuation",
+            "action_entry_state": str(
+                (beat.entry_state if beat else "")
+                or shot.get("action_entry_state")
+                or timing.get("action_entry_state")
+                or ""
+            ),
+            "action_exit_state": str(
+                (beat.exit_state if beat else "")
+                or shot.get("action_exit_state")
+                or timing.get("action_exit_state")
+                or ""
+            ),
+            "gaze_direction": str(shot.get("gaze_direction") or timing.get("gaze_direction") or ""),
+            "screen_axis": str(shot.get("screen_axis") or timing.get("screen_axis") or ""),
         }
     )
+    if reason:
+        # 拆镜审计：原因 + 拆镜前后结构（id/时长/版本），与 timing_plan 调整记录同源。
+        fallback_id = f"{_base_shot_id(str(shot.get('shot_id') or shot.get('id') or 'shot'))}_part_{part_number:02d}"
+        timing["structure_change"] = {
+            "kind": "split",
+            "reason": reason,
+            "before": dict(before if before is not None else _structure_snapshot(shot)),
+            "after": {
+                "shot_id": str(part_shot_id or fallback_id),
+                "part": part_number,
+                "part_count": part_count,
+                "version": int(shot.get("version") or 1),
+            },
+        }
     return timing
 
 
@@ -447,14 +1082,46 @@ def split_shot(
     parts: int,
     *,
     existing_ids: Iterable[str] = (),
+    reason: str = "",
 ) -> list[dict[str, Any]]:
-    """Split one shot into continuous parts without dropping action or dialogue."""
+    """Split one shot into continuous one-beat parts without dropping continuity state.
 
-    count = max(2, int(parts))
+    ``reason`` 记录拆镜原因（复杂动作/时长上限/对白容量/目标预算），连同拆镜
+    前的结构快照写入每个子镜头的 ``timing.structure_change``，供版本历史与
+    下游失效决策追溯。
+    """
+
+    requested_count = max(2, int(parts))
     base_id = _base_shot_id(str(shot.get("shot_id") or shot.get("id") or "shot"))
-    actions = _split_text(str(shot.get("character_action") or ""), count)
+    before = _structure_snapshot(shot)
+    beats = _inherit_action_states(
+        normalize_action_beats(shot.get("action_beats"), fallback_text=shot.get("character_action")),
+        shot,
+    )
+    if beats:
+        if len(beats) == 1:
+            text = beats[0].text
+            beats = [
+                ActionBeat(f"准备：进入「{text}」起始状态", True, "preparation"),
+                ActionBeat(f"动作：{text}", True, "action"),
+                ActionBeat(f"反应：完成「{text}」并进入退出状态", True, "reaction"),
+            ] if beats[0].complex_motion else beats
+        count = max(requested_count, len(beats), 3 if any(item.complex_motion for item in beats) else 1)
+    else:
+        count = requested_count
+    while len(beats) < count:
+        beats.append(
+            ActionBeat(
+                text=f"动作延续：保持并推进「{shot.get('character_action') or shot.get('scene_description') or '当前动作'}」",
+                complex_motion=any(item.complex_motion for item in beats),
+                phase="continuation",
+            )
+        )
+    beats = beats[:count]
+    actions = [item.text for item in beats]
     dialogues = _split_dialogue_by_speech(shot.get("dialogue"), count)
-    descriptions = _split_text(str(shot.get("scene_description") or ""), count)
+    source_duration = float(shot.get("duration") or 0)
+    part_duration = round(source_duration / count, 3) if source_duration > 0 else 0.0
     used = set(existing_ids)
     output: list[dict[str, Any]] = []
     for index in range(count):
@@ -463,11 +1130,30 @@ def split_shot(
         shot_id = _unique_id(used, shot_id)
         used.add(shot_id)
         item["shot_id"] = shot_id
-        item["scene_description"] = descriptions[index]
+        # 场景、角色、视线、轴线及动作边界在所有拆分镜头中保持同一份语义，
+        # 不把场景描述切成互不完整的碎片。
+        item["scene_description"] = str(shot.get("scene_description") or "")
+        item["characters_in_scene"] = list(shot.get("characters_in_scene") or [])
+        item["gaze_direction"] = str(shot.get("gaze_direction") or "")
+        item["screen_axis"] = str(shot.get("screen_axis") or "")
+        item["action_entry_state"] = str(beats[index].entry_state or shot.get("action_entry_state") or "")
+        item["action_exit_state"] = str(beats[index].exit_state or shot.get("action_exit_state") or "")
         item["character_action"] = actions[index]
+        item["action_beats"] = [beats[index].to_dict()]
+        item["duration"] = part_duration
         item["dialogue"] = dialogues[index]
         item["estimated_speech_ms"] = estimate_speech_ms(dialogue_text(dialogues[index]))
-        item["timing"] = _split_timing_metadata(shot, index + 1, count)
+        item["timing"] = _split_timing_metadata(
+            shot,
+            index + 1,
+            count,
+            beats[index],
+            reason=reason,
+            before=before,
+            part_shot_id=shot_id,
+        )
+        item["continuity_mode"] = "continuous_action"
+        item["continuity_mode_source"] = "complex_action_split" if any(b.complex_motion for b in beats) else "action_beat_split"
         output.append(item)
     return output
 
@@ -485,7 +1171,11 @@ def _mergeable(left: Mapping[str, Any], right: Mapping[str, Any], capability: Pr
     right_timing = right.get("timing") or {}
     if left_timing.get("split_total") or right_timing.get("split_total"):
         return False
-    combined_action = "；".join(part for part in (str(left.get("character_action") or ""), str(right.get("character_action") or "")) if part)
+    left_action = str(left.get("character_action") or "").strip()
+    right_action = str(right.get("character_action") or "").strip()
+    if (left_action or right_action) and left_action != right_action:
+        return False
+    combined_action = left_action or right_action
     if action_is_complex(combined_action):
         return False
     combined_dialogue = dialogue_text([*dialogue_items(left.get("dialogue")), *dialogue_items(right.get("dialogue"))])
@@ -506,11 +1196,13 @@ def _mergeable_for_budget(
     right_timing = right.get("timing") or {}
     if left_timing.get("split_total") or right_timing.get("split_total"):
         return False
-    combined_action = "；".join(
-        part for part in (str(left.get("character_action") or ""), str(right.get("character_action") or "")) if part
-    )
+    left_action = str(left.get("character_action") or "").strip()
+    right_action = str(right.get("character_action") or "").strip()
+    if (left_action or right_action) and left_action != right_action:
+        return False
+    combined_action = left_action or right_action
     combined_beats = estimate_action_beats(combined_action)
-    if any(beat.complex_motion for beat in combined_beats) or len(combined_beats) > 2:
+    if any(beat.complex_motion for beat in combined_beats) or len(combined_beats) > 1:
         return False
     combined_dialogue = dialogue_text([*dialogue_items(left.get("dialogue")), *dialogue_items(right.get("dialogue"))])
     if estimate_speech_ms(combined_dialogue) > capability.max_duration * 1000 - ACTION_LEAD_RESERVE_MS:
@@ -520,8 +1212,12 @@ def _mergeable_for_budget(
     return _same_story_location(left, right) or not combined_dialogue
 
 
-def merge_shots(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str, Any]:
-    """Merge two adjacent story beats while retaining all source text."""
+def merge_shots(left: Mapping[str, Any], right: Mapping[str, Any], *, reason: str = "") -> dict[str, Any]:
+    """Merge two adjacent story beats while retaining all source text.
+
+    ``reason`` 记录合镜原因；合并前后结构写入 ``timing.structure_change``，
+    与拆镜审计同源。
+    """
 
     item = dict(left)
     right_id = str(right.get("shot_id") or right.get("id") or "")
@@ -530,9 +1226,12 @@ def merge_shots(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str, 
     item["scene_description"] = "；".join(
         dict.fromkeys(part for part in (str(left.get("scene_description") or ""), str(right.get("scene_description") or "")) if part)
     )
-    item["character_action"] = "；然后".join(
-        part for part in (str(left.get("character_action") or ""), str(right.get("character_action") or "")) if part
-    )
+    left_action = str(left.get("character_action") or "").strip()
+    right_action = str(right.get("character_action") or "").strip()
+    item["character_action"] = left_action or right_action
+    left_beats = normalize_action_beats(left.get("action_beats"), fallback_text=left_action)
+    right_beats = normalize_action_beats(right.get("action_beats"), fallback_text=right_action)
+    item["action_beats"] = [(left_beats or right_beats or [ActionBeat("", False, "continuation")])[0].to_dict()]
     item["dialogue"] = [*dialogue_items(left.get("dialogue")), *dialogue_items(right.get("dialogue"))]
     item["duration"] = round(float(left.get("duration") or 0) + float(right.get("duration") or 0), 3)
     item["transition"] = right.get("transition") or left.get("transition") or "cut"
@@ -541,6 +1240,18 @@ def merge_shots(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str, 
     merged_from = [str(value) for value in timing.get("merged_from", []) if value]
     merged_from.extend([left_id, right_id])
     timing["merged_from"] = list(dict.fromkeys(merged_from))
+    if reason:
+        timing["structure_change"] = {
+            "kind": "merge",
+            "reason": reason,
+            "before": [_structure_snapshot(left), _structure_snapshot(right)],
+            "after": {
+                "shot_id": left_id,
+                "duration": float(item["duration"]),
+                "version": int(left.get("version") or 1),
+                "merged_from": [left_id, right_id],
+            },
+        }
     item["timing"] = timing
     return item
 
@@ -584,9 +1295,25 @@ class StoryTimingPlan:
     def target_feasible(self) -> bool:
         return abs(self.planned_total_duration_s - self.target_duration_s) <= self.tolerance_s + 1e-6
 
-    def _record_adjustment(self, code: str, message: str, shot_ids: Sequence[str] = ()) -> None:
+    def _record_adjustment(
+        self,
+        code: str,
+        message: str,
+        shot_ids: Sequence[str] = (),
+        *,
+        reason: str = "",
+        before: Sequence[Mapping[str, Any]] = (),
+        after: Sequence[Mapping[str, Any]] = (),
+    ) -> None:
         self.adjustments.append(
-            TimingAdjustment(code=code, message=message, shot_ids=tuple(str(item) for item in shot_ids if item))
+            TimingAdjustment(
+                code=code,
+                message=message,
+                shot_ids=tuple(str(item) for item in shot_ids if item),
+                reason=reason or code,
+                before=tuple(before),
+                after=tuple(after),
+            )
         )
 
     def _normalize_segments(self, shots: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -599,25 +1326,56 @@ class StoryTimingPlan:
             shot_id = str(shot.get("shot_id") or shot.get("id") or f"shot_{index + 1:04d}")
             shot["shot_id"] = shot_id
             duration = float(shot.get("duration") or 0)
-            beats = estimate_action_beats(shot.get("character_action"))
-            complex_motion = action_is_complex(shot.get("character_action"))
+            beats = _inherit_action_states(
+                normalize_action_beats(shot.get("action_beats"), fallback_text=shot.get("character_action")),
+                shot,
+            )
+            complex_motion = any(beat.complex_motion for beat in beats)
             speech_ms = estimate_speech_ms(dialogue_text(shot.get("dialogue")))
-            segment_limit = min(self.provider.max_duration, COMPLEX_ACTION_MAX_SECONDS if complex_motion else self.provider.max_duration)
+            short_motion = complex_motion or self.provider.first_frame_only
+            segment_limit = min(
+                self.provider.max_duration,
+                COMPLEX_ACTION_MAX_SECONDS if short_motion else self.provider.max_duration,
+            )
             parts_for_duration = max(1, math.ceil(max(duration, 0.0) / max(segment_limit, 1e-6)))
             parts_for_speech = max(1, math.ceil(speech_ms / max(segment_limit * 1000 - ACTION_LEAD_RESERVE_MS, 1)))
-            part_count = max(parts_for_duration, parts_for_speech)
+            part_count = max(parts_for_duration, parts_for_speech, len(beats) if beats else 1)
             if part_count > 1:
-                split_parts = split_shot(shot, part_count, existing_ids=existing_ids)
+                split_reasons = []
+                if parts_for_duration > 1:
+                    split_reasons.append("first_frame_duration_limit" if short_motion and not complex_motion else "duration_over_provider_limit")
+                if parts_for_speech > 1:
+                    split_reasons.append("dialogue_capacity")
+                if len(beats) > 1:
+                    split_reasons.append("action_beat_count")
+                if complex_motion:
+                    split_reasons.append("complex_motion")
+                split_reason = "+".join(split_reasons) or "auto_split"
+                split_parts = split_shot(shot, part_count, existing_ids=existing_ids, reason=split_reason)
                 existing_ids.extend(item["shot_id"] for item in split_parts)
                 output.extend(split_parts)
                 self._record_adjustment(
                     "shot_split",
                     f"镜头 {shot_id} 因复杂动作、超长时长或对白容量拆分为 {part_count} 个连续镜头",
                     [item["shot_id"] for item in split_parts],
+                    reason=split_reason,
+                    before=[_structure_snapshot(shot)],
+                    after=[_structure_snapshot(item) for item in split_parts],
                 )
             else:
                 shot["estimated_speech_ms"] = speech_ms
+                shot["action_beats"] = [beat.to_dict() for beat in beats] or [
+                    {"text": "", "phase": "continuation", "complex_motion": False, "entry_state": "", "exit_state": ""}
+                ]
                 shot.setdefault("timing", {})
+                shot["timing"].update(
+                    {
+                        "action_entry_state": str(shot.get("action_entry_state") or ""),
+                        "action_exit_state": str(shot.get("action_exit_state") or ""),
+                        "gaze_direction": str(shot.get("gaze_direction") or ""),
+                        "screen_axis": str(shot.get("screen_axis") or ""),
+                    }
+                )
                 output.append(shot)
             index += 1
 
@@ -634,14 +1392,26 @@ class StoryTimingPlan:
                 next_shot = output[cursor + 1]
                 merged_id = str(current.get("shot_id") or "")
                 next_id = str(next_shot.get("shot_id") or "")
-                current = merge_shots(current, next_shot)
-                self._record_adjustment("shots_merged", f"过短镜头 {merged_id} 与 {next_id} 按同场景剧情合并", [merged_id, next_id])
+                before = [_structure_snapshot(current), _structure_snapshot(next_shot)]
+                current = merge_shots(current, next_shot, reason="short_adjacent_beats")
+                self._record_adjustment(
+                    "shots_merged",
+                    f"过短镜头 {merged_id} 与 {next_id} 按同场景剧情合并",
+                    [merged_id, next_id],
+                    reason="short_adjacent_beats",
+                    before=before,
+                    after=[_structure_snapshot(current)],
+                )
                 cursor += 1
             merged.append(current)
             cursor += 1
 
         for shot in merged:
             duration = float(shot.get("duration") or 0)
+            if self.provider.first_frame_only:
+                timing = dict(shot.get("timing") or {})
+                timing.update({"video_mode": "first_frame_i2v", "short_shot": True})
+                shot["timing"] = timing
             if duration < self.provider.min_duration:
                 old_id = str(shot.get("shot_id") or "")
                 shot["duration"] = self.provider.min_duration
@@ -684,22 +1454,34 @@ class StoryTimingPlan:
                 break
             left = shots[pair_index]
             right = shots[pair_index + 1]
-            merged = merge_shots(left, right)
+            before = [_structure_snapshot(left), _structure_snapshot(right)]
+            merged = merge_shots(left, right, reason="shot_count_budget")
             self._record_adjustment(
                 "shots_merged_for_budget",
                 f"为匹配目标总时长合并镜头 {left.get('shot_id')} 与 {right.get('shot_id')}",
                 [str(left.get("shot_id") or ""), str(right.get("shot_id") or "")],
+                reason="shot_count_budget",
+                before=before,
+                after=[_structure_snapshot(merged)],
             )
             shots[pair_index:pair_index + 2] = [merged]
 
         while len(shots) < desired_count:
             split_index = max(range(len(shots)), key=lambda index: _shot_weight(shots[index]))
             source = shots[split_index]
-            parts = split_shot(source, 2, existing_ids=(str(item.get("shot_id") or "") for item in shots))
+            parts = split_shot(
+                source,
+                2,
+                existing_ids=(str(item.get("shot_id") or "") for item in shots),
+                reason="shot_count_budget",
+            )
             self._record_adjustment(
                 "shot_added_for_budget",
                 f"为匹配目标总时长并保持叙事节拍，将镜头 {source.get('shot_id')} 扩展为连续双镜头",
                 [item["shot_id"] for item in parts],
+                reason="shot_count_budget",
+                before=[_structure_snapshot(source)],
+                after=[_structure_snapshot(item) for item in parts],
             )
             shots[split_index:split_index + 1] = parts
         return shots
@@ -799,7 +1581,7 @@ class StoryTimingPlan:
         self.action_beats = [
             beat
             for shot in normalized
-            for beat in estimate_action_beats(shot.get("character_action"))
+            for beat in normalize_action_beats(shot.get("action_beats"), fallback_text=shot.get("character_action"))
         ]
         if not self.target_feasible:
             self._record_adjustment(
@@ -922,6 +1704,14 @@ class StoryTimingPlan:
             video_path = str(shot.get("video_path") or "")
             actual_video_ms = durations.get(video_path)
             if actual_video_ms is not None:
+                # 执行计划在案的「生成满固定秒数、成片裁剪为故事时长」是预期行为
+                # （例如固定 5 秒 Provider 生成 5 秒后裁成 4.5 秒），不算违规裁剪。
+                execution_plan = load_shot_execution_plan(shot)
+                planned_trim = bool(
+                    execution_plan is not None
+                    and abs(execution_plan.generation_duration_ms - actual_video_ms) <= PROVIDER_TIMELINE_TOLERANCE_MS
+                    and abs(execution_plan.effective_duration_ms - duration_ms) <= PROVIDER_TIMELINE_TOLERANCE_MS
+                )
                 if actual_video_ms + PROVIDER_TIMELINE_TOLERANCE_MS < duration_ms:
                     issues.append(
                         TimingIssue(
@@ -933,7 +1723,7 @@ class StoryTimingPlan:
                             shot_ids=(shot_id,),
                         )
                     )
-                elif actual_video_ms > duration_ms + PROVIDER_TIMELINE_TOLERANCE_MS:
+                elif actual_video_ms > duration_ms + PROVIDER_TIMELINE_TOLERANCE_MS and not planned_trim:
                     issues.append(
                         TimingIssue(
                             code="video_will_be_trimmed",
@@ -1071,7 +1861,9 @@ def ensure_timing_valid(
 
 __all__ = [
     "ActionBeat",
+    "DialogueTiming",
     "ProviderDurationCapability",
+    "ShotExecutionPlan",
     "StoryTimingError",
     "StoryTimingPlan",
     "TimingAdjustment",
@@ -1082,7 +1874,11 @@ __all__ = [
     "dialogue_text",
     "estimate_action_beats",
     "estimate_speech_ms",
+    "load_shot_execution_plan",
+    "normalize_action_beats",
+    "plan_required_capabilities",
     "provider_duration_capability",
+    "resolve_shot_execution_plan",
     "shot_speech_ms",
     "split_shot",
     "usable_speech_ms",

@@ -9,7 +9,7 @@ from urllib.parse import unquote, urlparse
 
 from config import settings
 from db import SessionLocal
-from models import AudioTrack, Character, SceneAsset, Shot, ShotVersion
+from models import AudioTrack, Character, SceneAsset, Shot, ShotVersion, ShotVideoCandidate
 from services.security import atomic_write_bytes, safe_path, validate_identifier
 from services.shot_version_service import iter_snapshot_media_paths
 
@@ -192,6 +192,16 @@ class StorageService:
             # 混音工作台上传的素材受保护：轨道行还在引用就不能被清理误删。
             for (track_source,) in session.query(AudioTrack.source_path).all():
                 self._add_protected_path(protected, project_dir, track_source)
+
+            # 未选用的视频候选也必须保留：失败候选用于重试审计，成功候选用于后续对比。
+            for video_path, tail_frame_path, raw_manifest in session.query(
+                ShotVideoCandidate.video_path,
+                ShotVideoCandidate.tail_frame_path,
+                ShotVideoCandidate.reference_manifest,
+            ).all():
+                self._add_protected_path(protected, project_dir, video_path)
+                self._add_protected_path(protected, project_dir, tail_frame_path)
+                self._add_json_references(protected, project_dir, raw_manifest)
 
             # 版本历史快照引用的媒体同样受保护：它们是「恢复历史版本」的唯一依据。
             for (raw_snapshot,) in session.query(ShotVersion.snapshot).all():

@@ -41,6 +41,11 @@ class Shot(Base):
     scene_group_id = Column(String, default="")
     consistency_context = Column(Text, default="")
     reference_weights = Column(Text, default="{}")
+    # continuity_profile 除一致性档案外，还承载镜头统一执行计划
+    # （execution_plan 键：narrative_duration_ms / provider_generation_duration_s /
+    # trim_start_ms / trim_end_ms / audio_mode / dialogue_timing /
+    # continuity_mode / video_mode / recipe_hash），复用现有 JSON 字段落库，
+    # 不为执行计划单独做数据库迁移；旧数据无该键时由 story_timing 推导。
     continuity_profile = Column(Text, default="{}")
     continuity_reference_path = Column(String, default="")
     pose_reference_path = Column(String, default="")

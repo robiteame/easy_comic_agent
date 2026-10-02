@@ -16,7 +16,7 @@ AI漫剧Agent 是一套"全流程自动化+轻量化人工干预"的漫剧生产
 
 ## 生成 Agent（当前自动模式）
 
-`agent/graph.py` 当前是九阶段生成 Agent，不再是五节点顺序重试：导演规划 → 分镜设计 → 素材准备 → 图像生成 → 质量审核 → 视频生成 → 音频制作 → 剪辑合成 → 成片复审。每个阶段之间由 Critic/Reviewer 和恢复决策路由控制，支持逐镜头 fan-out/fan-in、幂等检查点、版本校验、局部补拍、Prompt 修改、Provider 切换、降分辨率和人工卡点。完整契约、质量档位、恢复策略和追踪 API 见 `docs/GENERATIVE_AGENT.md`。
+`agent/graph.py` 当前是十阶段生成 Agent，旧五节点线性路径只保留兼容入口并委托新图：导演规划 → 分镜设计 → 素材准备 → 图像生成 → 质量审核 → 音频制作 → 视频生成 → 视频检查 → 剪辑合成 → 成片复审。每个阶段都有 process、critic/reviewer、decision、recovery；外部 TTS 严格按“分镜确认 → 音频制作 → 音频检查 → 视频生成 → 视频检查 → 剪辑合成 → 成片复审”执行，native audio 可跳过外部 TTS。支持逐镜头 fan-out/fan-in、幂等检查点、版本校验、局部补拍、Prompt 修改、Provider 切换、降分辨率和显式人工卡点。完整契约、质量档位、恢复策略和追踪 API 见 `docs/GENERATIVE_AGENT.md`。
 
 ## 技术栈
 
@@ -558,3 +558,12 @@ uvicorn main:app --host 0.0.0.0 --port 8011 --reload
     统一显示「结构检查（仅结构，非质量认证）」。质量结论只能来自
     `services/quality_review_service.py`（StructuralCheck 之上真实质量门禁），
     能力未配置时其维度状态为 `unsupported`，绝不计为通过。
+    视频检查固定分三类：`structural_validity`（可播放/轨道/时长 sane）、
+    `technical_quality`（时长-计划/分辨率/比例/黑帧/**空帧**/冻结/音画时长/尾帧/文件过小）、
+    `visual_quality_pending`（首帧与故事板相似度、参考匹配、运动稳定、镜头连续、
+    动作完成——五项**恒为 pending**，无视觉模型时不得伪造成 passed）。
+    显式 `mode=auto` 在视觉能力缺失时由 `QUALITY_VISUAL_PENDING_POLICY` 收口：
+    `continue`（默认）改按结构 + 技术门禁自动继续、成片标 `degraded` 并把
+    `visual_quality_pending` 写进最终报告的未解决风险；`block` 保持 fail-closed 明确终止。
+    两条路径都不写 `needs_human_review`、都不进 `human_gate`/`waiting_human`；
+    结构或技术不合格时一律拦截。manual 与未携带 `mode` 的兼容入口不受该开关影响。

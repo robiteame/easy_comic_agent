@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from services.shot_dialogue import parse_shot_dialogue
+from services.story_timing import ShotExecutionPlan, load_shot_execution_plan
 
 TRANSITION_DURATIONS_MS = {
     "cut": 0,
@@ -328,6 +329,22 @@ def _normal_duration_ms(shot: Mapping[str, Any]) -> int:
     return max(500, int(round(seconds * 1000)))
 
 
+def _execution_window(shot: Mapping[str, Any]) -> tuple[ShotExecutionPlan, int, int, int] | None:
+    """读取镜头统一执行计划的 (计划, 时长, 入点, 出点)；旧数据返回 None。
+
+    后期合成必须消费生成阶段落库的同一份执行计划：固定档 Provider 生成的
+    片段在这里按 trim 区间裁剪为故事时长，时间线不再从 duration 自行推导。
+    """
+
+    plan = load_shot_execution_plan(shot)
+    if plan is None:
+        return None
+    duration_ms = plan.effective_duration_ms
+    if duration_ms <= 0:
+        return None
+    return plan, duration_ms, max(0, plan.trim_start_ms), max(plan.trim_start_ms, plan.trim_end_ms)
+
+
 def _speaker_for_shot(shot: Mapping[str, Any]) -> str:
     speakers = shot.get("characters_in_scene") or []
     if isinstance(speakers, str):
@@ -399,7 +416,8 @@ def build_post_production_plan(
     av_config = av_config or {}
     warnings: list[str] = []
     normalized_shots = [dict(shot) for shot in shots]
-    durations = [_normal_duration_ms(shot) for shot in normalized_shots]
+    windows = [_execution_window(shot) for shot in normalized_shots]
+    durations = [window[1] if window is not None else _normal_duration_ms(shot) for shot, window in zip(normalized_shots, windows)]
     nominal_spans: dict[str, tuple[int, int]] = {}
     cursor = 0
     for shot, duration in zip(normalized_shots, durations):
@@ -455,25 +473,40 @@ def build_post_production_plan(
         )
         if dialogue_lines:
             audio_path = str(shot.get("audio_path") or "")
-            raw_lines = [
-                {
-                    "speaker": line.speaker or speaker,
-                    "text": line.line,
-                    "emotion": line.emotion or str(shot.get("emotion") or "neutral"),
-                    "start_ms": line.start_ms,
-                    "end_ms": line.end_ms,
-                }
-                for line in dialogue_lines
-            ]
-            missing_timing = [item for item in raw_lines if item["start_ms"] is None or item["end_ms"] is None]
-            if missing_timing:
-                total_chars = sum(max(1, len(str(item["text"]))) for item in missing_timing)
-                cursor_rel = 0
-                for item in missing_timing:
-                    share = max(1, int(round(duration * max(1, len(str(item["text"]))) / total_chars)))
-                    item["start_ms"] = cursor_rel
-                    item["end_ms"] = min(duration, cursor_rel + share)
-                    cursor_rel = item["end_ms"]
+            plan_window = windows[index]
+            if plan_window is not None and plan_window[0].dialogue_timing:
+                # 执行计划里的对白时间轴即 TTS 实测结果，直接采用；不再按
+                # 字符比例二次推导（避免时间线与生成阶段各说各话）。
+                raw_lines = [
+                    {
+                        "speaker": item.speaker or speaker,
+                        "text": item.text,
+                        "emotion": str(shot.get("emotion") or "neutral"),
+                        "start_ms": item.start_ms,
+                        "end_ms": item.end_ms,
+                    }
+                    for item in plan_window[0].dialogue_timing
+                ]
+            else:
+                raw_lines = [
+                    {
+                        "speaker": line.speaker or speaker,
+                        "text": line.line,
+                        "emotion": line.emotion or str(shot.get("emotion") or "neutral"),
+                        "start_ms": line.start_ms,
+                        "end_ms": line.end_ms,
+                    }
+                    for line in dialogue_lines
+                ]
+                missing_timing = [item for item in raw_lines if item["start_ms"] is None or item["end_ms"] is None]
+                if missing_timing:
+                    total_chars = sum(max(1, len(str(item["text"]))) for item in missing_timing)
+                    cursor_rel = 0
+                    for item in missing_timing:
+                        share = max(1, int(round(duration * max(1, len(str(item["text"]))) / total_chars)))
+                        item["start_ms"] = cursor_rel
+                        item["end_ms"] = min(duration, cursor_rel + share)
+                        cursor_rel = item["end_ms"]
             for line_index, line in enumerate(raw_lines):
                 rel_start = max(0, min(duration, int(line["start_ms"] or 0)))
                 rel_end = max(rel_start, min(duration, int(line["end_ms"] or rel_start)))
@@ -542,8 +575,8 @@ def build_post_production_plan(
         entry = ShotTimelineEntry(
             shot_id=shot_id,
             sequence=int(shot.get("sequence") or index),
-            source_in_ms=0,
-            source_out_ms=duration,
+            source_in_ms=windows[index][2] if windows[index] is not None else 0,
+            source_out_ms=windows[index][3] if windows[index] is not None else duration,
             timeline_start_ms=timeline_starts[index],
             timeline_end_ms=timeline_ends[index],
             duration_ms=duration,

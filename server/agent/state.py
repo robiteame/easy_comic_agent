@@ -65,9 +65,19 @@ class StyleParams(TypedDict):
     camera_preferences: dict
 
 
-class AgentState(TypedDict, total=False):
+class ExecutionIdentity(TypedDict):
+    """任何运行/阶段/镜头状态都必须携带的稳定身份与输入指纹。"""
+
+    project_id: str
+    shot_version: int
+    run_id: str
+    input_fingerprint: str
+
+
+class AgentState(ExecutionIdentity, TypedDict, total=False):
     # 项目标识
     project_id: str
+    shot_version: int
     run_id: str
 
     # 用户输入
@@ -107,6 +117,7 @@ class AgentState(TypedDict, total=False):
     video_path: str
     output_path: str
     final_feedback: str
+    final_report: dict
 
     # 流程控制
     current_step: str
@@ -117,16 +128,24 @@ class AgentState(TypedDict, total=False):
     storyboard_confirmed: bool
     consistency_report: dict
     affected_shot_ids: list[str]
+    audio_mode: Literal["tts", "native", "auto"]
+    audio_execution_plan: dict
+    external_tts_required: bool
+    human_gate_policy: Literal["disabled", "manual"]
+    final_recovery_target: str
 
     # 生成 Agent 运行时
     mode: Literal["manual", "auto"]
     resume: bool
     run_status: str
+    current_stage: str
+    stage_history: Annotated[list[dict], add]
     quality_profile: str
     quality_threshold: float
     initial_state: dict
     input_fingerprint: str
     version_snapshot: dict[str, int]
+    shot_versions: dict[str, int]
     changed_shot_ids: list[str]
     budget_snapshot: dict
     provider_profiles: dict[str, list[dict]]
@@ -135,19 +154,37 @@ class AgentState(TypedDict, total=False):
     critiques: Annotated[list[dict], add]
     decision_traces: Annotated[list[dict], add]
     shot_artifacts: Annotated[list[dict], add]
+    # 稳定 fan-in 聚合契约；fan-in 节点直接返回这些分组，避免调用方猜测状态。
+    successes: list[dict]
+    failures: list[dict]
+    degraded: list[dict]
+    skipped: list[dict]
+    pending: list[dict]
+    artifacts: list[dict]
     successful_shot_ids: list[str]
     failed_shot_ids: list[str]
     degraded_shot_ids: list[str]
     recovery_attempts: Annotated[dict, _merge_attempts]
+    recovery_history: Annotated[list[dict], add]
     recovery_plan: dict
     recovery_candidates: list[dict]
+    selected_strategy: str
+    degraded_published: bool
+    degraded_reason: str
+    # 视觉质量未验证（pending）：无真实视觉模型时按结构+技术门禁自动继续的显式留痕。
+    visual_quality_pending: bool
+    visual_pending_reason: str
+    visual_pending_stages: Annotated[list[str], add]
+    visual_pending_shot_ids: Annotated[list[str], add]
     pending_recovery_stage: str
     pending_recovery_target: str
     pending_shot_ids: list[str]
+    split_recovery_shot_ids: list[str]
     provider_switch: dict
     prompt_revisions: Annotated[list[dict], add]
     manual_interventions: Annotated[list[dict], add]
     checkpoint_version: int
+    checkpoint_key: str
 
     # 记忆上下文（从 RAG 和记忆系统注入）
     rag_context: list[str]
@@ -155,4 +192,4 @@ class AgentState(TypedDict, total=False):
     generation_preferences: dict
 
 
-__all__ = ["AgentState", "CharacterCard", "Shot", "StyleParams"]
+__all__ = ["AgentState", "CharacterCard", "ExecutionIdentity", "Shot", "StyleParams"]
