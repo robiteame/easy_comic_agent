@@ -117,19 +117,15 @@ jobs:
           fi
           echo "Signing credentials present ($RUNNER_OS)."
 
-      - name: Build installers
-        # Tag pushes publish; workflow_dispatch defaults to a dry-run
-        # (--publish never) so the pipeline can be validated end to end.
-        run: pnpm --dir client exec electron-builder --publish ${{ github.event_name == 'push' && 'always' || inputs.publish }}
+      - name: Export signing credentials when present
+        # Repo secrets that do not exist still reach a step as empty strings,
+        # and electron-builder treats an empty CSC_LINK as "import this
+        # certificate", hard-failing the unsigned macOS build with
+        # ".../client not a file" (empty path resolves to the project dir).
+        # Re-export only the vars that actually have a value so unsigned
+        # builds skip signing entirely.
+        shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Code signing and notarization are driven entirely by these env
-          # vars (electron-builder imports CSC_LINK into a temp keychain and
-          # notarizes via APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID).
-          # With no CSC_LINK the explicit 'false' keeps unsigned dry-runs from
-          # probing the runner keychain; when the secrets exist, signing
-          # happens through CSC_LINK regardless of this flag.
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -137,6 +133,24 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID WIN_CSC_LINK WIN_CSC_KEY_PASSWORD; do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              echo "$name=$value" >> "$GITHUB_ENV"
+            fi
+          done
+
+      - name: Build installers
+        # Tag pushes publish; workflow_dispatch defaults to a dry-run
+        # (--publish never) so the pipeline can be validated end to end.
+        run: pnpm --dir client exec electron-builder --publish ${{ github.event_name == 'push' && 'always' || inputs.publish }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signing and notarization vars come from the export step above and
+          # exist only when the repo secrets are configured. The explicit
+          # 'false' keeps unsigned builds from probing the runner keychain.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Generate SBOM for the bundled runtime
         # Syft inventories the Python runtime, its site-packages and the
@@ -167,7 +181,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" \
+          # electron-builder publishes to v<package.json version> regardless
+          # of the triggering ref, so target that tag explicitly — a dispatch
+          # run on master would otherwise try to upload to a release named
+          # "master".
+          tag="v$(node -p "require('./client/package.json').version")"
+          gh release upload "$tag" \
             "client/release/SHA256SUMS-${{ matrix.os }}.txt" \
             "server-deps-${{ matrix.os }}.sbom.json" \
             "npm-deps-${{ matrix.os }}.sbom.json" \
