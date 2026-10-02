@@ -164,11 +164,14 @@ jobs:
       - name: Generate dependency SBOMs (python lockfile + npm workspace)
         shell: bash
         run: |
+          # cyclonedx-py takes the requirements file as a positional argument
+          # (there is no --requirement-file flag); cyclonedx-npm omits
+          # dependency types via --omit <type>, not --omit-dev.
           uvx --from cyclonedx-bom cyclonedx-py requirements \
-            --requirement-file server/requirements.lock \
+            server/requirements.lock \
             --output-format JSON \
             --output-file server-deps-${{ matrix.os }}.sbom.json
-          pnpm dlx @cyclonedx/cyclonedx-npm --output-file npm-deps-${{ matrix.os }}.sbom.json --omit-dev
+          pnpm dlx @cyclonedx/cyclonedx-npm --output-file npm-deps-${{ matrix.os }}.sbom.json --omit dev
 
       - name: Compute installer checksums
         shell: bash
