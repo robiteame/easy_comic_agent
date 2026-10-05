@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import type React from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { EditOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
 import Button from 'antd/es/button'
 import Input from 'antd/es/input'
@@ -130,11 +131,7 @@ const BudgetSummaryPanel: React.FC<BudgetSummaryPanelProps> = ({ projectId, titl
       message.error('软预算不能高于硬预算')
       return
     }
-    if (
-      form.softSeconds !== null &&
-      form.hardSeconds !== null &&
-      Number(form.softSeconds) > Number(form.hardSeconds)
-    ) {
+    if (form.softSeconds !== null && form.hardSeconds !== null && Number(form.softSeconds) > Number(form.hardSeconds)) {
       message.error('软时长预算不能高于硬时长预算')
       return
     }
@@ -277,8 +274,9 @@ const BudgetSummaryPanel: React.FC<BudgetSummaryPanelProps> = ({ projectId, titl
                 />
               </div>
               <span>
-                已用 + 预留占软预算 {usedPercent}%（{formatMicroAmount(summary.status.committed_cost_micro, summary.currency)}{' '}
-                / {limitCostText(summary.status.soft_cost_micro ?? summary.status.hard_cost_micro, summary.currency)}）
+                已用 + 预留占软预算 {usedPercent}%（
+                {formatMicroAmount(summary.status.committed_cost_micro, summary.currency)} /{' '}
+                {limitCostText(summary.status.soft_cost_micro ?? summary.status.hard_cost_micro, summary.currency)}）
               </span>
             </div>
           )}
@@ -326,8 +324,8 @@ const BudgetSummaryPanel: React.FC<BudgetSummaryPanelProps> = ({ projectId, titl
 
           {!summary.used.cost_known && (
             <p className="budget-unknown-note" role="note">
-              有调用没有匹配到单价，这部分成本显示为「成本未知」而不是 0；请在
-              「系统设置 → 模型价格」补齐单价后重新查看。
+              有调用没有匹配到单价，这部分成本显示为「成本未知」而不是 0；请在 「系统设置 →
+              模型价格」补齐单价后重新查看。
             </p>
           )}
         </>
@@ -385,7 +383,11 @@ const BudgetSummaryPanel: React.FC<BudgetSummaryPanelProps> = ({ projectId, titl
             </label>
             <div className="budget-field budget-field-switch">
               <span>启用预算</span>
-              <Switch size="small" checked={form.enabled} onChange={(checked) => setForm({ ...form, enabled: checked })} />
+              <Switch
+                size="small"
+                checked={form.enabled}
+                onChange={(checked) => setForm({ ...form, enabled: checked })}
+              />
             </div>
           </div>
           <div className="budget-editor-actions">
@@ -393,7 +395,13 @@ const BudgetSummaryPanel: React.FC<BudgetSummaryPanelProps> = ({ projectId, titl
             <Button size="small" onClick={() => setEditing(false)} disabled={saving}>
               取消
             </Button>
-            <Button size="small" type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void handleSave()}>
+            <Button
+              size="small"
+              type="primary"
+              icon={<SaveOutlined />}
+              loading={saving}
+              onClick={() => void handleSave()}
+            >
               保存预算
             </Button>
           </div>

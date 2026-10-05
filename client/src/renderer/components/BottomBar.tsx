@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react'
+import type React from 'react'
+import { useMemo, useState } from 'react'
 import { CaretUpOutlined, UnorderedListOutlined } from '@ant-design/icons'
 import { useShotStore } from '../stores/shotStore'
 import { useTaskStore } from '../stores/taskStore'
@@ -20,9 +21,12 @@ const BottomBar: React.FC = () => {
     return (
       scoped
         .filter((job) => job.is_active)
-        .sort((a, b) => Date.parse(b.updated_at || b.created_at || '') - Date.parse(a.updated_at || a.created_at || ''))[0] ||
-      scoped
-        .sort((a, b) => Date.parse(b.updated_at || b.created_at || '') - Date.parse(a.updated_at || a.created_at || ''))[0] ||
+        .sort(
+          (a, b) => Date.parse(b.updated_at || b.created_at || '') - Date.parse(a.updated_at || a.created_at || ''),
+        )[0] ||
+      scoped.sort(
+        (a, b) => Date.parse(b.updated_at || b.created_at || '') - Date.parse(a.updated_at || a.created_at || ''),
+      )[0] ||
       null
     )
   }, [currentProjectId, jobs])
@@ -51,7 +55,9 @@ const BottomBar: React.FC = () => {
           <span className="bottom-progress">
             <span
               className="bottom-progress-fill"
-              style={{ width: `${isGenerating || activeJob?.is_active ? effectiveProgress : shots.length > 0 ? 100 : 0}%` }}
+              style={{
+                width: `${isGenerating || activeJob?.is_active ? effectiveProgress : shots.length > 0 ? 100 : 0}%`,
+              }}
             />
           </span>
           <CaretUpOutlined className={debugOpen ? 'is-open' : ''} aria-hidden="true" />

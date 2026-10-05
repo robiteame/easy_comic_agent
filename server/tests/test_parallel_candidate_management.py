@@ -12,8 +12,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from agent.checkpoints import CheckpointStore  # noqa: E402
 from agent.contracts import (  # noqa: E402
     DecisionTrace,
@@ -27,6 +25,7 @@ from api.routes import shot as shot_route  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
 from models import Project, Shot, ShotVersion  # noqa: E402
 from services.shot_version_service import create_version, version_detail  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class ParallelFanoutContractTests(unittest.TestCase):
@@ -71,7 +70,12 @@ class ParallelFanoutContractTests(unittest.TestCase):
 
                 async def resume_worker(shot_id: str, version: int) -> dict:
                     calls.append(shot_id)
-                    return {"shot_id": shot_id, "shot_version": version, "status": "succeeded", "path": str(Path(root) / f"{shot_id}.mp4")}
+                    return {
+                        "shot_id": shot_id,
+                        "shot_version": version,
+                        "status": "succeeded",
+                        "path": str(Path(root) / f"{shot_id}.mp4"),
+                    }
 
                 resumed = await run_shot_fanout(
                     project_id="parallel-project",
@@ -89,13 +93,15 @@ class ParallelFanoutContractTests(unittest.TestCase):
         asyncio.run(scenario())
 
     def test_fan_in_always_returns_all_status_groups(self) -> None:
-        result = fan_in_shot_results([
-            {"shot_id": "ok", "status": StageStatus.SUCCEEDED.value},
-            {"shot_id": "bad", "status": StageStatus.FAILED.value},
-            {"shot_id": "warn", "status": StageStatus.DEGRADED.value},
-            {"shot_id": "skip", "status": StageStatus.SKIPPED.value},
-            {"shot_id": "wait", "status": StageStatus.RUNNING.value},
-        ])
+        result = fan_in_shot_results(
+            [
+                {"shot_id": "ok", "status": StageStatus.SUCCEEDED.value},
+                {"shot_id": "bad", "status": StageStatus.FAILED.value},
+                {"shot_id": "warn", "status": StageStatus.DEGRADED.value},
+                {"shot_id": "skip", "status": StageStatus.SKIPPED.value},
+                {"shot_id": "wait", "status": StageStatus.RUNNING.value},
+            ]
+        )
         self.assertTrue({"successes", "failures", "degraded", "skipped", "pending", "artifacts"} <= set(result))
         self.assertEqual([item["shot_id"] for item in result["pending"]], ["wait"])
         self.assertEqual(len(result["artifacts"]), 5)
@@ -137,14 +143,30 @@ class CandidateContractAndHistoryTests(unittest.TestCase):
         }
         shot_route._save_video_candidate(payload)
         saved = shot_route._shot_video_candidates("candidate-shot", shot_version=2)[0]
-        for key in ("candidate_id", "shot_id", "shot_version", "provider", "model", "seed", "recipe_hash", "reference_manifest", "path", "last_frame_path", "score", "metrics", "failure"):
+        for key in (
+            "candidate_id",
+            "shot_id",
+            "shot_version",
+            "provider",
+            "model",
+            "seed",
+            "recipe_hash",
+            "reference_manifest",
+            "path",
+            "last_frame_path",
+            "score",
+            "metrics",
+            "failure",
+        ):
             self.assertIn(key, saved)
         self.assertEqual(saved["seed"], 12345)
         self.assertEqual(saved["failure"]["message"], "broken")
-        selected = select_video_candidate([
-            {**payload, "candidate_id": "invalid", "status": "succeeded", "structural_passed": False, "score": 1.0},
-            {**payload, "candidate_id": "valid", "status": "succeeded", "structural_passed": True, "score": 0.5},
-        ])
+        selected = select_video_candidate(
+            [
+                {**payload, "candidate_id": "invalid", "status": "succeeded", "structural_passed": False, "score": 1.0},
+                {**payload, "candidate_id": "valid", "status": "succeeded", "structural_passed": True, "score": 0.5},
+            ]
+        )
         self.assertEqual(selected.candidate_id, "valid")
         self.assertIn("structural_check_failed", {item["reason"] for item in selected.rejected})
 
@@ -153,7 +175,9 @@ class CandidateContractAndHistoryTests(unittest.TestCase):
         shot = Shot(id="candidate-history-shot", project_id=project.id, version=1)
         self.db.add_all([project, shot])
         self.db.commit()
-        selection = VideoCandidateSelection(candidate_id="best", shot_version=1, score=0.9, reason="structural_pass_highest_score")
+        selection = VideoCandidateSelection(
+            candidate_id="best", shot_version=1, score=0.9, reason="structural_pass_highest_score"
+        )
         trace = DecisionTrace(
             trace_id="trace:candidate-history",
             project_id=project.id,

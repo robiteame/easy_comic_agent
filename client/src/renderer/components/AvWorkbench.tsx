@@ -1,16 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Button from 'antd/es/button'
 import Input from 'antd/es/input'
 import message from 'antd/es/message'
 import Select from 'antd/es/select'
 import Switch from 'antd/es/switch'
-import {
-  AudioOutlined,
-  DeleteOutlined,
-  DownloadOutlined,
-  UndoOutlined,
-  UploadOutlined,
-} from '@ant-design/icons'
+import { AudioOutlined, DeleteOutlined, DownloadOutlined, UndoOutlined, UploadOutlined } from '@ant-design/icons'
 
 import {
   audioTrackApi,
@@ -43,8 +38,8 @@ import {
   validateCueDraft,
 } from './avWorkbenchModel'
 
-const LANE_HEIGHT = 40
-const LABEL_COLUMN_WIDTH = 92
+const _LANE_HEIGHT = 40
+const _LABEL_COLUMN_WIDTH = 92
 const TIMELINE_PADDING_MS = 1500
 
 type CueDraft = {
@@ -98,7 +93,7 @@ const AvWorkbench: React.FC = () => {
   const [cueDirty, setCueDirty] = useState(false)
   const [undoStack, setUndoStack] = useState<UndoSnapshot<UndoAction>[]>([])
   const [warnings, setWarnings] = useState<AvWarning[]>([])
-  const [loading, setLoading] = useState(false)
+  const [_loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [lastAsset, setLastAsset] = useState<{ source_path: string; duration_ms: number; name: string } | null>(null)
   const [newTrackKind, setNewTrackKind] = useState<AudioTrackKind>('music')
@@ -168,7 +163,9 @@ const AvWorkbench: React.FC = () => {
       })
       // 草稿跟随当前选中的字幕轨（无选中时回落到第一条）。
       const preferred =
-        subtitlePayload.tracks.find((track) => track.id === selectedSubtitleTrackId) || subtitlePayload.tracks[0] || null
+        subtitlePayload.tracks.find((track) => track.id === selectedSubtitleTrackId) ||
+        subtitlePayload.tracks[0] ||
+        null
       setCueDrafts(toCueDrafts(preferred))
       setCueDirty(false)
       setUndoStack([])
@@ -319,7 +316,10 @@ const AvWorkbench: React.FC = () => {
         }
       }
       try {
-        const updated = await subtitleApi.replaceCues(selectedSubtitleTrack.id, { project_id: projectId, cues: payload })
+        const updated = await subtitleApi.replaceCues(selectedSubtitleTrack.id, {
+          project_id: projectId,
+          cues: payload,
+        })
         setSubtitleTracks((current) => current.map((track) => (track.id === updated.id ? updated : track)))
         setCueDrafts(toCueDrafts(updated))
         setCueDirty(false)
@@ -339,7 +339,11 @@ const AvWorkbench: React.FC = () => {
     const format = file.name.toLowerCase().endsWith('.vtt') ? 'vtt' : 'srt'
     try {
       const content = await file.text()
-      const updated = await subtitleApi.importSubtitle(selectedSubtitleTrack.id, { project_id: projectId, format, content })
+      const updated = await subtitleApi.importSubtitle(selectedSubtitleTrack.id, {
+        project_id: projectId,
+        format,
+        content,
+      })
       setSubtitleTracks((current) => current.map((track) => (track.id === updated.id ? updated : track)))
       setCueDrafts(toCueDrafts(updated))
       setCueDirty(false)
@@ -371,7 +375,9 @@ const AvWorkbench: React.FC = () => {
       setCueDrafts(toCueDrafts(updated))
       setCueDirty(false)
       const overlapCount = updated.overlaps?.length || 0
-      message.success(`已按镜头对白生成 ${updated.cues.length} 条字幕${overlapCount ? `（${overlapCount} 处时间重叠，请检查）` : ''}`)
+      message.success(
+        `已按镜头对白生成 ${updated.cues.length} 条字幕${overlapCount ? `（${overlapCount} 处时间重叠，请检查）` : ''}`,
+      )
     } catch (error) {
       message.error(describeError(error, '自动生成字幕失败'))
     }
@@ -457,7 +463,9 @@ const AvWorkbench: React.FC = () => {
     for (const key of Object.keys(patch)) {
       ;(previous as Record<string, unknown>)[key] = (selectedTrack as unknown as Record<string, unknown>)[key]
     }
-    setUndoStack((stack) => pushUndo(stack, label, { kind: 'track', label, trackId: selectedTrack.id, params: previous }))
+    setUndoStack((stack) =>
+      pushUndo(stack, label, { kind: 'track', label, trackId: selectedTrack.id, params: previous }),
+    )
     try {
       const updated = await audioTrackApi.updateTrack(selectedTrack.id, { project_id: projectId, ...patch })
       setAudioTracks((current) => current.map((track) => (track.id === updated.id ? updated : track)))
@@ -491,7 +499,8 @@ const AvWorkbench: React.FC = () => {
     }
   }
 
-  const previewUrl = previewStatus?.status === 'completed' && previewStatus.audio_path ? toOutputUrl(previewStatus.audio_path) : null
+  const previewUrl =
+    previewStatus?.status === 'completed' && previewStatus.audio_path ? toOutputUrl(previewStatus.audio_path) : null
 
   const togglePlay = () => {
     const audio = audioElementRef.current
@@ -565,14 +574,41 @@ const AvWorkbench: React.FC = () => {
             placeholder="字幕轨"
             options={subtitleTracks.map((track) => ({ value: track.id, label: track.name }))}
           />
-          <Button size="small" onClick={() => void createSubtitleTrack()}>新建字幕轨</Button>
-          <Button size="small" danger disabled={!selectedSubtitleTrack} onClick={() => void deleteSubtitleTrack()}>删除</Button>
+          <Button size="small" onClick={() => void createSubtitleTrack()}>
+            新建字幕轨
+          </Button>
+          <Button size="small" danger disabled={!selectedSubtitleTrack} onClick={() => void deleteSubtitleTrack()}>
+            删除
+          </Button>
         </div>
         <div className="av-toolbar-group">
-          <Button size="small" icon={<UploadOutlined />} disabled={!selectedSubtitleTrack} onClick={() => document.getElementById('av-subtitle-import')?.click()}>导入 SRT/VTT</Button>
-          <Button size="small" icon={<DownloadOutlined />} disabled={!selectedSubtitleTrack} onClick={() => exportSubtitle('srt')}>导出 SRT</Button>
-          <Button size="small" icon={<DownloadOutlined />} disabled={!selectedSubtitleTrack} onClick={() => exportSubtitle('vtt')}>导出 VTT</Button>
-          <Button size="small" disabled={!selectedSubtitleTrack} onClick={() => void generateFromShots()}>按镜头对白生成</Button>
+          <Button
+            size="small"
+            icon={<UploadOutlined />}
+            disabled={!selectedSubtitleTrack}
+            onClick={() => document.getElementById('av-subtitle-import')?.click()}
+          >
+            导入 SRT/VTT
+          </Button>
+          <Button
+            size="small"
+            icon={<DownloadOutlined />}
+            disabled={!selectedSubtitleTrack}
+            onClick={() => exportSubtitle('srt')}
+          >
+            导出 SRT
+          </Button>
+          <Button
+            size="small"
+            icon={<DownloadOutlined />}
+            disabled={!selectedSubtitleTrack}
+            onClick={() => exportSubtitle('vtt')}
+          >
+            导出 VTT
+          </Button>
+          <Button size="small" disabled={!selectedSubtitleTrack} onClick={() => void generateFromShots()}>
+            按镜头对白生成
+          </Button>
         </div>
         <div className="av-toolbar-group">
           <label className="av-file-button">
@@ -617,14 +653,30 @@ const AvWorkbench: React.FC = () => {
               {lastAsset ? `素材 ${(lastAsset.duration_ms / 1000).toFixed(1)}s` : '未上传素材'}
             </span>
           )}
-          <Button size="small" type="primary" loading={uploading} onClick={() => void addTrack()}>添加轨道</Button>
+          <Button size="small" type="primary" loading={uploading} onClick={() => void addTrack()}>
+            添加轨道
+          </Button>
         </div>
         <div className="av-toolbar-group">
-          <Button size="small" icon={<UndoOutlined />} disabled={!canUndo(undoStack)} onClick={() => void handleUndo()}>撤销</Button>
-          <Button size="small" onClick={() => void refreshServerWarnings()}>重新检查</Button>
-          <Select size="small" style={{ width: 84 }} value={zoom} onChange={setZoom} options={[
-            { value: 0, label: '小' }, { value: 1, label: '中' }, { value: 2, label: '大' }, { value: 3, label: '特大' }, { value: 4, label: '最大' },
-          ]} />
+          <Button size="small" icon={<UndoOutlined />} disabled={!canUndo(undoStack)} onClick={() => void handleUndo()}>
+            撤销
+          </Button>
+          <Button size="small" onClick={() => void refreshServerWarnings()}>
+            重新检查
+          </Button>
+          <Select
+            size="small"
+            style={{ width: 84 }}
+            value={zoom}
+            onChange={setZoom}
+            options={[
+              { value: 0, label: '小' },
+              { value: 1, label: '中' },
+              { value: 2, label: '大' },
+              { value: 3, label: '特大' },
+              { value: 4, label: '最大' },
+            ]}
+          />
         </div>
       </div>
 
@@ -643,10 +695,14 @@ const AvWorkbench: React.FC = () => {
       {(errorWarnings.length > 0 || otherWarnings.length > 0) && (
         <div className="av-warnings" aria-label="工作台告警">
           {errorWarnings.map((item, index) => (
-            <span key={`e${index}`} className="av-warning error">{item.message}</span>
+            <span key={`e${index}`} className="av-warning error">
+              {item.message}
+            </span>
           ))}
           {otherWarnings.slice(0, 6).map((item, index) => (
-            <span key={`w${index}`} className={`av-warning ${item.level}`}>{item.message}</span>
+            <span key={`w${index}`} className={`av-warning ${item.level}`}>
+              {item.message}
+            </span>
           ))}
         </div>
       )}
@@ -654,14 +710,34 @@ const AvWorkbench: React.FC = () => {
       <div className="av-layout">
         <div className="av-timeline-card">
           <div className="av-timeline-head">
-            <span className="av-timecode">{formatTimelineMs(playheadMs)} / {formatTimelineMs(totalDurationMs)}</span>
+            <span className="av-timecode">
+              {formatTimelineMs(playheadMs)} / {formatTimelineMs(totalDurationMs)}
+            </span>
             <div className="av-timeline-actions">
-              <Button size="small" icon={<AudioOutlined />} loading={previewStatus?.status === 'mixing'} onClick={() => void startPreview('full')}>整片预览</Button>
-              <Button size="small" disabled={!newTrackShotId} loading={previewStatus?.status === 'mixing'} onClick={() => void startPreview('shot')}>镜头预览</Button>
-              <Button size="small" onClick={togglePlay}>{isPlaying ? '暂停' : '播放'}</Button>
+              <Button
+                size="small"
+                icon={<AudioOutlined />}
+                loading={previewStatus?.status === 'mixing'}
+                onClick={() => void startPreview('full')}
+              >
+                整片预览
+              </Button>
+              <Button
+                size="small"
+                disabled={!newTrackShotId}
+                loading={previewStatus?.status === 'mixing'}
+                onClick={() => void startPreview('shot')}
+              >
+                镜头预览
+              </Button>
+              <Button size="small" onClick={togglePlay}>
+                {isPlaying ? '暂停' : '播放'}
+              </Button>
             </div>
           </div>
-          {previewStatus?.status === 'error' && <div className="av-preview-error">{previewStatus.message || '混音预览失败'}</div>}
+          {previewStatus?.status === 'error' && (
+            <div className="av-preview-error">{previewStatus.message || '混音预览失败'}</div>
+          )}
           <div className="av-timeline-scroll" ref={timelineAreaRef}>
             <div className="av-timeline-inner" style={{ width: Math.max(timelineWidth, 320) }}>
               <div
@@ -671,7 +747,10 @@ const AvWorkbench: React.FC = () => {
                   setPlayheadFromClientX(event.clientX)
                 }}
               >
-                {Array.from({ length: Math.ceil((totalDurationMs + TIMELINE_PADDING_MS) / 5000) + 1 }, (_, index) => index * 5000).map((ms) => (
+                {Array.from(
+                  { length: Math.ceil((totalDurationMs + TIMELINE_PADDING_MS) / 5000) + 1 },
+                  (_, index) => index * 5000,
+                ).map((ms) => (
                   <span key={ms} className="av-ruler-mark" style={{ left: msToPx(ms, pxPerSecond) }}>
                     {formatTimelineMs(ms)}
                   </span>
@@ -683,7 +762,10 @@ const AvWorkbench: React.FC = () => {
                     <div
                       key={info.id}
                       className={`av-shot-block${info.native_audio ? ' native' : ''}${info.has_tts ? ' tts' : ''}`}
-                      style={{ left: msToPx(info.start_ms, pxPerSecond), width: msToPx(Math.max(200, info.duration_ms - 40), pxPerSecond) }}
+                      style={{
+                        left: msToPx(info.start_ms, pxPerSecond),
+                        width: msToPx(Math.max(200, info.duration_ms - 40), pxPerSecond),
+                      }}
                       title={`镜头 ${info.sequence} · ${formatTimelineMs(info.start_ms)}–${formatTimelineMs(info.end_ms)}${info.dialogue ? `\n对白：${info.dialogue}` : ''}`}
                     >
                       镜头 {info.sequence}
@@ -701,7 +783,10 @@ const AvWorkbench: React.FC = () => {
                         <div
                           key={track.id}
                           className={`av-clip${selected ? ' selected' : ''}${clip.outOfRange ? ' invalid' : ''}${track.muted ? ' muted' : ''}`}
-                          style={{ left: msToPx(clip.start_ms, pxPerSecond), width: Math.max(14, msToPx(clip.duration_ms, pxPerSecond)) }}
+                          style={{
+                            left: msToPx(clip.start_ms, pxPerSecond),
+                            width: Math.max(14, msToPx(clip.duration_ms, pxPerSecond)),
+                          }}
                           onClick={() => setSelectedTrackId(track.id)}
                           title={`${track.name} · ${formatTimelineMs(clip.start_ms)} 起共 ${(clip.duration_ms / 1000).toFixed(1)}s${track.muted ? '（静音）' : ''}`}
                         >
@@ -722,7 +807,10 @@ const AvWorkbench: React.FC = () => {
                     <div
                       key={cue.key}
                       className="av-cue-block"
-                      style={{ left: msToPx(cue.start_ms, pxPerSecond), width: Math.max(12, msToPx(Math.max(200, cue.end_ms - cue.start_ms), pxPerSecond)) }}
+                      style={{
+                        left: msToPx(cue.start_ms, pxPerSecond),
+                        width: Math.max(12, msToPx(Math.max(200, cue.end_ms - cue.start_ms), pxPerSecond)),
+                      }}
                       title={`${formatTimelineMs(cue.start_ms)}–${formatTimelineMs(cue.end_ms)}\n${cue.text}`}
                     >
                       {cue.text.slice(0, 12)}
@@ -731,21 +819,17 @@ const AvWorkbench: React.FC = () => {
                 </div>
                 <div className="av-playhead" style={{ left: msToPx(playheadMs, pxPerSecond) }} />
                 {activeCue && (
-                  <div className="av-playhead-caption" style={{ left: clampMs(msToPx(playheadMs, pxPerSecond), 0, Math.max(0, timelineWidth - 240)) }}>
+                  <div
+                    className="av-playhead-caption"
+                    style={{ left: clampMs(msToPx(playheadMs, pxPerSecond), 0, Math.max(0, timelineWidth - 240)) }}
+                  >
                     {activeCue.text}
                   </div>
                 )}
               </div>
             </div>
           </div>
-          {previewUrl && (
-            <audio
-              ref={audioElementRef}
-              src={previewUrl}
-              onEnded={() => setIsPlaying(false)}
-              hidden
-            />
-          )}
+          {previewUrl && <audio ref={audioElementRef} src={previewUrl} onEnded={() => setIsPlaying(false)} hidden />}
         </div>
 
         <div className="av-inspector">
@@ -755,58 +839,116 @@ const AvWorkbench: React.FC = () => {
               <p className="av-inspector-empty">点击时间线上的轨道块进行调整。</p>
             ) : (
               <div className="av-param-grid">
-                <label>音量 <em>{selectedTrack.volume.toFixed(2)}</em></label>
+                <label>
+                  音量 <em>{selectedTrack.volume.toFixed(2)}</em>
+                </label>
                 <input
-                  type="range" min={0} max={2} step={0.05} defaultValue={selectedTrack.volume}
-                  onMouseUp={(event) => void updateTrack({ volume: Number((event.target as HTMLInputElement).value) }, '调整音量')}
-                  onTouchEnd={(event) => void updateTrack({ volume: Number((event.target as HTMLInputElement).value) }, '调整音量')}
+                  type="range"
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  defaultValue={selectedTrack.volume}
+                  onMouseUp={(event) =>
+                    void updateTrack({ volume: Number((event.target as HTMLInputElement).value) }, '调整音量')
+                  }
+                  onTouchEnd={(event) =>
+                    void updateTrack({ volume: Number((event.target as HTMLInputElement).value) }, '调整音量')
+                  }
                 />
-                <label>声像 <em>{selectedTrack.pan.toFixed(2)}</em></label>
+                <label>
+                  声像 <em>{selectedTrack.pan.toFixed(2)}</em>
+                </label>
                 <input
-                  type="range" min={-1} max={1} step={0.05} defaultValue={selectedTrack.pan}
-                  onMouseUp={(event) => void updateTrack({ pan: Number((event.target as HTMLInputElement).value) }, '调整声像')}
-                  onTouchEnd={(event) => void updateTrack({ pan: Number((event.target as HTMLInputElement).value) }, '调整声像')}
+                  type="range"
+                  min={-1}
+                  max={1}
+                  step={0.05}
+                  defaultValue={selectedTrack.pan}
+                  onMouseUp={(event) =>
+                    void updateTrack({ pan: Number((event.target as HTMLInputElement).value) }, '调整声像')
+                  }
+                  onTouchEnd={(event) =>
+                    void updateTrack({ pan: Number((event.target as HTMLInputElement).value) }, '调整声像')
+                  }
                 />
                 <label>起点 (秒)</label>
                 <Input
                   size="small"
                   defaultValue={secondsField(selectedTrack.start_ms)}
-                  onBlur={(event) => void updateTrack({ start_ms: parseSecondsField(event.target.value, selectedTrack.start_ms) }, '调整起点')}
+                  onBlur={(event) =>
+                    void updateTrack(
+                      { start_ms: parseSecondsField(event.target.value, selectedTrack.start_ms) },
+                      '调整起点',
+                    )
+                  }
                 />
                 <label>淡入 (秒)</label>
                 <Input
                   size="small"
                   defaultValue={secondsField(selectedTrack.fade_in_ms)}
-                  onBlur={(event) => void updateTrack({ fade_in_ms: parseSecondsField(event.target.value, selectedTrack.fade_in_ms) }, '调整淡入')}
+                  onBlur={(event) =>
+                    void updateTrack(
+                      { fade_in_ms: parseSecondsField(event.target.value, selectedTrack.fade_in_ms) },
+                      '调整淡入',
+                    )
+                  }
                 />
                 <label>淡出 (秒)</label>
                 <Input
                   size="small"
                   defaultValue={secondsField(selectedTrack.fade_out_ms)}
-                  onBlur={(event) => void updateTrack({ fade_out_ms: parseSecondsField(event.target.value, selectedTrack.fade_out_ms) }, '调整淡出')}
+                  onBlur={(event) =>
+                    void updateTrack(
+                      { fade_out_ms: parseSecondsField(event.target.value, selectedTrack.fade_out_ms) },
+                      '调整淡出',
+                    )
+                  }
                 />
                 <label>延迟 (秒)</label>
                 <Input
                   size="small"
                   defaultValue={secondsField(selectedTrack.delay_ms)}
-                  onBlur={(event) => void updateTrack({ delay_ms: parseSecondsField(event.target.value, selectedTrack.delay_ms) }, '调整延迟')}
+                  onBlur={(event) =>
+                    void updateTrack(
+                      { delay_ms: parseSecondsField(event.target.value, selectedTrack.delay_ms) },
+                      '调整延迟',
+                    )
+                  }
                 />
                 <label>裁剪起点 (秒)</label>
                 <Input
                   size="small"
                   defaultValue={secondsField(selectedTrack.trim_start_ms)}
-                  onBlur={(event) => void updateTrack({ trim_start_ms: parseSecondsField(event.target.value, selectedTrack.trim_start_ms) }, '调整裁剪')}
+                  onBlur={(event) =>
+                    void updateTrack(
+                      { trim_start_ms: parseSecondsField(event.target.value, selectedTrack.trim_start_ms) },
+                      '调整裁剪',
+                    )
+                  }
                 />
                 <label>裁剪结尾 (秒)</label>
                 <Input
                   size="small"
                   defaultValue={secondsField(selectedTrack.trim_end_ms)}
-                  onBlur={(event) => void updateTrack({ trim_end_ms: parseSecondsField(event.target.value, selectedTrack.trim_end_ms) }, '调整裁剪')}
+                  onBlur={(event) =>
+                    void updateTrack(
+                      { trim_end_ms: parseSecondsField(event.target.value, selectedTrack.trim_end_ms) },
+                      '调整裁剪',
+                    )
+                  }
                 />
                 <label>循环</label>
-                <Switch size="small" checked={selectedTrack.loop} onChange={(checked) => void updateTrack({ loop: checked }, '切换循环')} />
+                <Switch
+                  size="small"
+                  checked={selectedTrack.loop}
+                  onChange={(checked) => void updateTrack({ loop: checked }, '切换循环')}
+                />
                 <label>静音</label>
-                <Switch size="small" checked={selectedTrack.muted} onChange={(checked) => void updateTrack({ muted: checked }, '切换静音')} />
+                <Switch
+                  size="small"
+                  checked={selectedTrack.muted}
+                  onChange={(checked) => void updateTrack({ muted: checked }, '切换静音')}
+                />
                 {selectedTrack.kind !== 'dialogue' && (
                   <>
                     <label>Ducking (dB)</label>
@@ -815,7 +957,10 @@ const AvWorkbench: React.FC = () => {
                       defaultValue={String(selectedTrack.duck_amount_db)}
                       onBlur={(event) => {
                         const parsed = Number(event.target.value)
-                        void updateTrack({ duck_amount_db: Math.max(-48, Math.min(0, Number.isFinite(parsed) ? parsed : 0)) }, '调整 Ducking')
+                        void updateTrack(
+                          { duck_amount_db: Math.max(-48, Math.min(0, Number.isFinite(parsed) ? parsed : 0)) },
+                          '调整 Ducking',
+                        )
                       }}
                     />
                     <label>起控/释控 (ms)</label>
@@ -823,17 +968,34 @@ const AvWorkbench: React.FC = () => {
                       <Input
                         size="small"
                         defaultValue={String(selectedTrack.duck_attack_ms)}
-                        onBlur={(event) => void updateTrack({ duck_attack_ms: parseSecondsField(event.target.value, selectedTrack.duck_attack_ms) }, '调整起控')}
+                        onBlur={(event) =>
+                          void updateTrack(
+                            { duck_attack_ms: parseSecondsField(event.target.value, selectedTrack.duck_attack_ms) },
+                            '调整起控',
+                          )
+                        }
                       />
                       <Input
                         size="small"
                         defaultValue={String(selectedTrack.duck_release_ms)}
-                        onBlur={(event) => void updateTrack({ duck_release_ms: parseSecondsField(event.target.value, selectedTrack.duck_release_ms) }, '调整释控')}
+                        onBlur={(event) =>
+                          void updateTrack(
+                            { duck_release_ms: parseSecondsField(event.target.value, selectedTrack.duck_release_ms) },
+                            '调整释控',
+                          )
+                        }
                       />
                     </div>
                   </>
                 )}
-                <Button size="small" danger icon={<DeleteOutlined />} onClick={() => void deleteTrack(selectedTrack.id)}>删除轨道</Button>
+                <Button
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={() => void deleteTrack(selectedTrack.id)}
+                >
+                  删除轨道
+                </Button>
               </div>
             )}
           </section>
@@ -845,9 +1007,17 @@ const AvWorkbench: React.FC = () => {
             ) : (
               <div className="av-param-grid">
                 <label>启用</label>
-                <Switch size="small" checked={selectedSubtitleTrack.enabled} onChange={(checked) => void updateSubtitleTrack({ enabled: checked })} />
+                <Switch
+                  size="small"
+                  checked={selectedSubtitleTrack.enabled}
+                  onChange={(checked) => void updateSubtitleTrack({ enabled: checked })}
+                />
                 <label>烧录进画面</label>
-                <Switch size="small" checked={selectedSubtitleTrack.burn_in} onChange={(checked) => void updateSubtitleTrack({ burn_in: checked })} />
+                <Switch
+                  size="small"
+                  checked={selectedSubtitleTrack.burn_in}
+                  onChange={(checked) => void updateSubtitleTrack({ burn_in: checked })}
+                />
                 <label>位置</label>
                 <Select
                   size="small"
@@ -865,7 +1035,8 @@ const AvWorkbench: React.FC = () => {
                   defaultValue={String(selectedSubtitleTrack.font_size)}
                   onBlur={(event) => {
                     const parsed = Number(event.target.value)
-                    if (Number.isFinite(parsed)) void updateSubtitleTrack({ font_size: Math.max(8, Math.min(200, Math.round(parsed))) })
+                    if (Number.isFinite(parsed))
+                      void updateSubtitleTrack({ font_size: Math.max(8, Math.min(200, Math.round(parsed))) })
                   }}
                 />
                 <label>描边宽度</label>
@@ -874,7 +1045,8 @@ const AvWorkbench: React.FC = () => {
                   defaultValue={String(selectedSubtitleTrack.outline_width)}
                   onBlur={(event) => {
                     const parsed = Number(event.target.value)
-                    if (Number.isFinite(parsed)) void updateSubtitleTrack({ outline_width: Math.max(0, Math.min(20, Math.round(parsed))) })
+                    if (Number.isFinite(parsed))
+                      void updateSubtitleTrack({ outline_width: Math.max(0, Math.min(20, Math.round(parsed))) })
                   }}
                 />
                 <label>安全区边距</label>
@@ -883,20 +1055,27 @@ const AvWorkbench: React.FC = () => {
                   defaultValue={String(selectedSubtitleTrack.safe_margin)}
                   onBlur={(event) => {
                     const parsed = Number(event.target.value)
-                    if (Number.isFinite(parsed)) void updateSubtitleTrack({ safe_margin: Math.max(0, Math.min(400, Math.round(parsed))) })
+                    if (Number.isFinite(parsed))
+                      void updateSubtitleTrack({ safe_margin: Math.max(0, Math.min(400, Math.round(parsed))) })
                   }}
                 />
                 <label>文字颜色</label>
                 <Input
                   size="small"
                   defaultValue={selectedSubtitleTrack.primary_color}
-                  onBlur={(event) => /^#[0-9A-Fa-f]{6}$/.test(event.target.value.trim()) && void updateSubtitleTrack({ primary_color: event.target.value.trim().toUpperCase() })}
+                  onBlur={(event) =>
+                    /^#[0-9A-Fa-f]{6}$/.test(event.target.value.trim()) &&
+                    void updateSubtitleTrack({ primary_color: event.target.value.trim().toUpperCase() })
+                  }
                 />
                 <label>描边颜色</label>
                 <Input
                   size="small"
                   defaultValue={selectedSubtitleTrack.outline_color}
-                  onBlur={(event) => /^#[0-9A-Fa-f]{6}$/.test(event.target.value.trim()) && void updateSubtitleTrack({ outline_color: event.target.value.trim().toUpperCase() })}
+                  onBlur={(event) =>
+                    /^#[0-9A-Fa-f]{6}$/.test(event.target.value.trim()) &&
+                    void updateSubtitleTrack({ outline_color: event.target.value.trim().toUpperCase() })
+                  }
                 />
               </div>
             )}
@@ -908,8 +1087,17 @@ const AvWorkbench: React.FC = () => {
         <div className="av-cue-editor-head">
           <h4>字幕条目（{cueDrafts.length}）</h4>
           <div>
-            <Button size="small" onClick={addCue}>新增</Button>{' '}
-            <Button size="small" type="primary" disabled={!cueDirty || !selectedSubtitleTrack} onClick={() => void saveCues()}>保存字幕</Button>
+            <Button size="small" onClick={addCue}>
+              新增
+            </Button>{' '}
+            <Button
+              size="small"
+              type="primary"
+              disabled={!cueDirty || !selectedSubtitleTrack}
+              onClick={() => void saveCues()}
+            >
+              保存字幕
+            </Button>
             {cueDirty && <em className="av-dirty-flag">有未保存修改</em>}
           </div>
         </div>
@@ -929,13 +1117,25 @@ const AvWorkbench: React.FC = () => {
                   size="small"
                   aria-label={`第 ${index + 1} 条开始时间`}
                   defaultValue={secondsField(cue.start_ms)}
-                  onBlur={(event) => commitCueField(cue.key, { start_ms: parseSecondsField(event.target.value, cue.start_ms) }, '调整开始时间')}
+                  onBlur={(event) =>
+                    commitCueField(
+                      cue.key,
+                      { start_ms: parseSecondsField(event.target.value, cue.start_ms) },
+                      '调整开始时间',
+                    )
+                  }
                 />
                 <Input
                   size="small"
                   aria-label={`第 ${index + 1} 条结束时间`}
                   defaultValue={secondsField(cue.end_ms)}
-                  onBlur={(event) => commitCueField(cue.key, { end_ms: parseSecondsField(event.target.value, cue.end_ms) }, '调整结束时间')}
+                  onBlur={(event) =>
+                    commitCueField(
+                      cue.key,
+                      { end_ms: parseSecondsField(event.target.value, cue.end_ms) },
+                      '调整结束时间',
+                    )
+                  }
                 />
                 <Input
                   size="small"
@@ -949,7 +1149,14 @@ const AvWorkbench: React.FC = () => {
                   defaultValue={cue.character_name}
                   onChange={(event) => updateCue(cue.key, { character_name: event.target.value })}
                 />
-                <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => removeCue(cue.key)} aria-label={`删除第 ${index + 1} 条`} />
+                <Button
+                  size="small"
+                  type="text"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={() => removeCue(cue.key)}
+                  aria-label={`删除第 ${index + 1} 条`}
+                />
               </div>
             )
           })}

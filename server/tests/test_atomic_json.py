@@ -20,10 +20,8 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
-from config import settings  # noqa: E402
 from services import atomic_json, skill_config_service, style_templates  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _temp_files(directory: Path) -> list[str]:
@@ -137,9 +135,7 @@ class SkillConfigAtomicityTests(unittest.TestCase):
         def save_bindings(index: int) -> None:
             barrier.wait(timeout=10)
             try:
-                skill_config_service.set_skill_bindings(
-                    {"project_bindings": {f"project-{index}": "default"}}
-                )
+                skill_config_service.set_skill_bindings({"project_bindings": {f"project-{index}": "default"}})
             except ValueError:
                 pass
 

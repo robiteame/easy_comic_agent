@@ -1,0 +1,23 @@
+# 服务端工具链配置。刻意不含 [project] 打包段:服务端目前按源码目录运行
+# (见 main.py / tests 的 sys.path 引导),引入打包元数据属于后续独立改造。
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# 起步规则集:pyflakes(F) + pycodestyle(E/W) + isort(I) + bugbear(B) + pyupgrade(UP)。
+# 有意不启用 RUF100(存量 # noqa 较多)与 E501(长中文注释靠 format 兜底,不逐一拆行)。
+select = ["E", "W", "F", "I", "B", "UP"]
+ignore = [
+    "E501", # 行长由 ruff format 负责可换行代码;超长注释/字符串不强制拆行
+    "B008", # FastAPI 惯用法:参数默认值中调用 Query/Depends 等
+    "UP015", # 无谓的 open(mode="r") 显式参数保留,更贴近原风格
+    "UP042", # str+Enum → StrEnum 会改变 str(member)/f-string 的取值行为,存量契约按 .value 序列化,迁移需单独评估
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["api", "agent", "db", "memory", "models", "rag", "services", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试代码允许相对宽松的导入顺序与长断言
+"tests/**" = ["E402"]

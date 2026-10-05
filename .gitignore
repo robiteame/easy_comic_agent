@@ -48,6 +48,8 @@ release/
 # client/scripts/build-python-runtime.mjs (client/release/ output likewise).
 client/build/
 client/release/
+# Electron 主进程/预加载产物由 vite-plugin-electron 构建时生成,不入库。
+client/dist-electron/
 
 # Electron
 *.dmg

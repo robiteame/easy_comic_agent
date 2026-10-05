@@ -1,10 +1,6 @@
 import assert from 'node:assert/strict'
 
-import {
-  optimisticShotFieldPatch,
-  saveFailureRollbackPatch,
-  touchesMediaPaths,
-} from './shotEditGuard.ts'
+import { optimisticShotFieldPatch, saveFailureRollbackPatch, touchesMediaPaths } from './shotEditGuard.ts'
 import { drainPendingSaves, type PendingSaveEntry } from './shotSaveQueue.ts'
 
 function makeShot() {

@@ -20,7 +20,12 @@ import Select from 'antd/es/select'
 import { assetApi, renderApi, shotApi, toOutputUrl, type RenderCapabilities } from '../services/api'
 import { formatDialogueForEditor, parseDialogueFromEditor } from '../services/dialogueTimeline'
 import { optimisticShotFieldPatch, saveFailureRollbackPatch, type MediaStaleBackup } from '../services/shotEditGuard'
-import { notifyBudgetBlocked, notifyBudgetWarning, notifyProviderBlocked, useTaskEstimateGate } from './TaskEstimateModal'
+import {
+  notifyBudgetBlocked,
+  notifyBudgetWarning,
+  notifyProviderBlocked,
+  useTaskEstimateGate,
+} from './TaskEstimateModal'
 import {
   drainPendingSaves,
   hasPendingChanges,
@@ -77,7 +82,8 @@ type ShotSaveEntry = PendingSaveEntry<Record<string, any>> & {
 const shotSaveKey = (projectId: string, shotId: string) => `${projectId}:${shotId}`
 
 const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapsed }) => {
-  const { updateShot, logs, isGenerating, currentStep, shots, videoPath, setGenerating, setProgress, appendLog } = useShotStore()
+  const { updateShot, logs, isGenerating, currentStep, shots, videoPath, setGenerating, setProgress, appendLog } =
+    useShotStore()
   const { projectId, runMode, setProject } = useProjectStore()
   const [assetBoard, setAssetBoard] = useState<{ characters: any[]; scenes: any[] }>({ characters: [], scenes: [] })
   const [shotExpanded, setShotExpanded] = useState(true)
@@ -143,7 +149,8 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
       setAssetBoard({ characters: [], scenes: [] })
       return
     }
-    assetApi.board(projectId)
+    assetApi
+      .board(projectId)
       .then((board) => {
         if (requestId !== assetRequestRef.current || useProjectStore.getState().projectId !== projectId) return
         setAssetBoard({ characters: board.characters || [], scenes: board.scenes || [] })
@@ -153,7 +160,8 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
 
   useEffect(() => {
     let active = true
-    renderApi.capabilities()
+    renderApi
+      .capabilities()
       .then((capabilities) => {
         if (active) setRenderCapabilities(capabilities)
       })
@@ -255,7 +263,11 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
         // persisted but asset validation failed, retry only the asset portion.
         // The queue restores this batch after the callback returns false.
         // Keep only the asset fields if ordinary fields were already saved.
-        if (shotSaved) Object.keys(shotChanges).forEach((field) => delete changes[field])
+        if (shotSaved) {
+          Object.keys(shotChanges).forEach((field) => {
+            delete changes[field]
+          })
+        }
         if (canUpdateSaveState(shotId, entry.projectId)) {
           setShotSaveState('error')
           message.error('镜头更新失败：' + (err?.message || '未知错误'))
@@ -309,9 +321,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
     if (existing) return existing
 
     const operation = (async () => {
-      const entries = [...shotSaveEntriesRef.current.values()].filter(
-        (entry) => entry.projectId === entryProjectId,
-      )
+      const entries = [...shotSaveEntriesRef.current.values()].filter((entry) => entry.projectId === entryProjectId)
       const results = await Promise.all(entries.map((entry) => flushAndRetireShotSave(entry)))
       const saved = results.every(Boolean)
       if (!saved && mountedRef.current && useProjectStore.getState().projectId === entryProjectId) {
@@ -327,9 +337,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
     return operation
   }
 
-  useEffect(() => registerProjectNavigationGuard((fromProjectId) =>
-    flushProjectBeforeNavigation(fromProjectId),
-  ), [])
+  useEffect(() => registerProjectNavigationGuard((fromProjectId) => flushProjectBeforeNavigation(fromProjectId)), [])
 
   const flushAllShotSaves = async (): Promise<boolean> => {
     const entries = [...shotSaveEntriesRef.current.values()]
@@ -454,22 +462,15 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
 
   useEffect(() => {
     const nextDraft = selectedShot ? draftFromShot(selectedShot) : {}
-    const entry = selectedShot && projectId
-      ? shotSaveEntriesRef.current.get(shotSaveKey(projectId, selectedShot.id))
-      : undefined
+    const entry =
+      selectedShot && projectId ? shotSaveEntriesRef.current.get(shotSaveKey(projectId, selectedShot.id)) : undefined
     const hasPendingSave = Boolean(entry && (entry.inFlight || hasPendingChanges(entry)))
 
     shotDraftRef.current = nextDraft
     setShotDraft(nextDraft)
     setShotDirty(hasPendingSave)
     setShotSaveState(
-      entry?.inFlight
-        ? 'saving'
-        : entry && hasPendingChanges(entry)
-          ? entry.failed
-            ? 'error'
-            : 'dirty'
-          : 'idle',
+      entry?.inFlight ? 'saving' : entry && hasPendingChanges(entry) ? (entry.failed ? 'error' : 'dirty') : 'idle',
     )
 
     const shotId = selectedShot?.id
@@ -481,9 +482,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
 
   useEffect(() => {
     if (!selectedShot || shotDirty) return
-    const entry = projectId
-      ? shotSaveEntriesRef.current.get(shotSaveKey(projectId, selectedShot.id))
-      : undefined
+    const entry = projectId ? shotSaveEntriesRef.current.get(shotSaveKey(projectId, selectedShot.id)) : undefined
     if (entry?.inFlight || (entry && hasPendingChanges(entry))) return
     const nextDraft = draftFromShot(selectedShot)
     shotDraftRef.current = nextDraft
@@ -505,7 +504,10 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
 
   const buildCurrentShotPrompt = () => {
     if (!selectedShot) return ''
-    const characters = selectedCharacters.map((item) => item.name).filter(Boolean).join('、')
+    const characters = selectedCharacters
+      .map((item) => item.name)
+      .filter(Boolean)
+      .join('、')
     const sceneName = selectedScene?.name || ''
     const parts = [
       `镜头 ${selectedShot.sequence || 1}`,
@@ -522,10 +524,16 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
         item.wardrobe_lock || item.default_outfit ? `服装锁定：${item.wardrobe_lock || item.default_outfit}` : '',
       ]),
       `场景描述：${(shotDraft.scene_description ?? selectedShot.scene_description) || '未填写'}`,
-      (shotDraft.character_action ?? selectedShot.character_action) ? `人物动作：${shotDraft.character_action ?? selectedShot.character_action}` : '',
-      (shotDraft.dialogue ?? selectedShot.dialogue) ? `对白：${formatDialogueForEditor(shotDraft.dialogue ?? selectedShot.dialogue)}` : '',
+      (shotDraft.character_action ?? selectedShot.character_action)
+        ? `人物动作：${shotDraft.character_action ?? selectedShot.character_action}`
+        : '',
+      (shotDraft.dialogue ?? selectedShot.dialogue)
+        ? `对白：${formatDialogueForEditor(shotDraft.dialogue ?? selectedShot.dialogue)}`
+        : '',
       selectedShot.consistency_context ? `一致性约束：${selectedShot.consistency_context}` : '',
-      (shotDraft.visual_notes ?? selectedShot.visual_notes) ? `用户补充：${shotDraft.visual_notes ?? selectedShot.visual_notes}` : '',
+      (shotDraft.visual_notes ?? selectedShot.visual_notes)
+        ? `用户补充：${shotDraft.visual_notes ?? selectedShot.visual_notes}`
+        : '',
     ]
     return parts.filter(Boolean).join('\n')
   }
@@ -543,7 +551,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
       const prompt = [
         result.prompt || fallback,
         result.negative_prompt ? `Negative prompt:\n${result.negative_prompt}` : '',
-      ].filter(Boolean).join('\n\n')
+      ]
+        .filter(Boolean)
+        .join('\n\n')
       queueShotChange(entryProjectId, shotId, 'visual_notes', prompt)
       return prompt
     } catch {
@@ -576,13 +586,15 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
 
     if (shouldOnlyFillPrompt) {
       const prompt = await fillGenerationPrompt()
-      if (!prompt || requestId !== regenerateRequestRef.current || !isCurrentShotContext(entryProjectId, shot.id)) return
+      if (!prompt || requestId !== regenerateRequestRef.current || !isCurrentShotContext(entryProjectId, shot.id))
+        return
       message.info('已回填完整生成 Prompt，可编辑后再次点击重新生成')
       return
     }
 
-    const fullPrompt = String(draft.visual_notes || '').trim() || await fillGenerationPrompt()
-    if (!fullPrompt || requestId !== regenerateRequestRef.current || !isCurrentShotContext(entryProjectId, shot.id)) return
+    const fullPrompt = String(draft.visual_notes || '').trim() || (await fillGenerationPrompt())
+    if (!fullPrompt || requestId !== regenerateRequestRef.current || !isCurrentShotContext(entryProjectId, shot.id))
+      return
 
     // 单镜头重生成同样是付费任务：先给出成本 / 耗时估算，用户确认后再提交；
     // 硬预算不足时弹窗会禁用确认按钮（后端抢占时还会再拦一次）。
@@ -592,7 +604,11 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
       shot_id: shot.id,
       entryLabel: '重新生成镜头 ' + shot.sequence + ' 故事板',
     })
-    if (!confirmedByEstimate || requestId !== regenerateRequestRef.current || !isCurrentShotContext(entryProjectId, shot.id)) {
+    if (
+      !confirmedByEstimate ||
+      requestId !== regenerateRequestRef.current ||
+      !isCurrentShotContext(entryProjectId, shot.id)
+    ) {
       return
     }
 
@@ -634,8 +650,12 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
       })
       setShotDirty(false)
       setShotSaveState('idle')
-      appendLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] Shot ${shot.sequence} regeneration submitted`)
-      message.success(candidates > 1 ? `已开始生成 ${candidates} 个故事板候选，完成后在版本历史中挑选` : '当前镜头重生成已启动')
+      appendLog(
+        `[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] Shot ${shot.sequence} regeneration submitted`,
+      )
+      message.success(
+        candidates > 1 ? `已开始生成 ${candidates} 个故事板候选，完成后在版本历史中挑选` : '当前镜头重生成已启动',
+      )
     } catch (err: any) {
       if (requestId !== regenerateRequestRef.current || !isCurrentShotContext(entryProjectId, shot.id)) return
       // 硬预算拦截（HTTP 409 / budget_exceeded）单独提示，不混进通用错误文案。
@@ -663,8 +683,14 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
     { label: '时段', value: selectedScene?.time_of_day || '自动锁定' },
     { label: '色温', value: selectedSceneProfile.color_temperature || '生成时固定' },
     { label: '光源', value: selectedSceneProfile.light_source_direction || '生成时固定' },
-    { label: '环境权重', value: typeof referenceWeights.environment === 'number' ? referenceWeights.environment.toFixed(2) : '0.40-0.50' },
-    { label: '动作权重', value: typeof referenceWeights.action === 'number' ? referenceWeights.action.toFixed(2) : '0.25-0.35' },
+    {
+      label: '环境权重',
+      value: typeof referenceWeights.environment === 'number' ? referenceWeights.environment.toFixed(2) : '0.40-0.50',
+    },
+    {
+      label: '动作权重',
+      value: typeof referenceWeights.action === 'number' ? referenceWeights.action.toFixed(2) : '0.25-0.35',
+    },
     { label: '续帧', value: selectedShot?.continuity_reference_path ? '上一镜头末帧' : '场景基准' },
     { label: '姿态控制', value: continuityProfile.openpose_lock || 'unsupported（未接入）' },
   ]
@@ -688,7 +714,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
         <div className="right-sidebar-content-wrap">
           <div className="right-sidebar-content">
             <div className="right-sidebar-status">
-              <span className="right-sidebar-status-label"><FieldTimeOutlined /> 当前步骤</span>
+              <span className="right-sidebar-status-label">
+                <FieldTimeOutlined /> 当前步骤
+              </span>
               <strong>{currentStep ? stepLabels[currentStep] || '处理中' : videoPath ? '成片完成' : '待命'}</strong>
             </div>
 
@@ -700,7 +728,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                 aria-controls="right-panel-shot"
                 onClick={() => setShotExpanded((prev) => !prev)}
               >
-                <span className="side-panel-title"><VideoCameraOutlined /> 镜头属性</span>
+                <span className="side-panel-title">
+                  <VideoCameraOutlined /> 镜头属性
+                </span>
                 <DownOutlined className={`aux-arrow${shotExpanded ? ' expanded' : ''}`} />
               </button>
               <div id="right-panel-shot" className={`side-panel-body${shotExpanded ? ' expanded' : ''}`}>
@@ -708,14 +738,18 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
 
                 {selectedShot && (
                   <>
-                    {selectedShot.confirmed && <div className="locked-shot-note">该镜头已审核锁定，禁止修改参数或重生成。</div>}
+                    {selectedShot.confirmed && (
+                      <div className="locked-shot-note">该镜头已审核锁定，禁止修改参数或重生成。</div>
+                    )}
                     {selectedShot.media_stale && (
                       <div className="media-stale-note" role="status">
                         参数已修改，素材待重新生成：当前预览仍是旧素材，新素材生成成功后自动替换；可在版本历史中回滚。
                       </div>
                     )}
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-visual-notes">镜头 Prompt</label>
+                      <label className="form-label" htmlFor="shot-visual-notes">
+                        镜头 Prompt
+                      </label>
                       <TextArea
                         id="shot-visual-notes"
                         aria-label="镜头 Prompt"
@@ -728,7 +762,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                     </div>
 
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-type">镜头类型</label>
+                      <label className="form-label" htmlFor="shot-type">
+                        镜头类型
+                      </label>
                       <Input
                         id="shot-type"
                         aria-label="镜头类型"
@@ -741,7 +777,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                     </div>
 
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-emotion">情绪</label>
+                      <label className="form-label" htmlFor="shot-emotion">
+                        情绪
+                      </label>
                       <Input
                         id="shot-emotion"
                         aria-label="情绪"
@@ -754,7 +792,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                     </div>
 
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-camera-angle">机位角度</label>
+                      <label className="form-label" htmlFor="shot-camera-angle">
+                        机位角度
+                      </label>
                       <Input
                         id="shot-camera-angle"
                         aria-label="机位角度"
@@ -767,7 +807,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                     </div>
 
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-camera-movement">运镜方式</label>
+                      <label className="form-label" htmlFor="shot-camera-movement">
+                        运镜方式
+                      </label>
                       <Select
                         id="shot-camera-movement"
                         aria-label="运镜方式"
@@ -787,7 +829,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                           { value: '环绕', label: '环绕运镜' },
                           { value: '缓慢推进', label: '缓慢推进' },
                         ].map((option) => {
-                          const capability = renderCapabilities?.camera_movements.find((item) => item.value === option.value)
+                          const capability = renderCapabilities?.camera_movements.find(
+                            (item) => item.value === option.value,
+                          )
                           const supported = capability?.supported ?? true
                           return {
                             ...option,
@@ -799,7 +843,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                     </div>
 
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-transition">转场方式</label>
+                      <label className="form-label" htmlFor="shot-transition">
+                        转场方式
+                      </label>
                       <Select
                         id="shot-transition"
                         aria-label="转场方式"
@@ -828,7 +874,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                     </div>
 
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-duration">时长（秒）</label>
+                      <label className="form-label" htmlFor="shot-duration">
+                        时长（秒）
+                      </label>
                       <InputNumber
                         id="shot-duration"
                         aria-label="时长（秒）"
@@ -847,7 +895,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                     </div>
 
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-character-assets">绑定角色资产</label>
+                      <label className="form-label" htmlFor="shot-character-assets">
+                        绑定角色资产
+                      </label>
                       <Select
                         id="shot-character-assets"
                         aria-label="绑定角色资产"
@@ -864,19 +914,32 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                     {selectedCharacters.length > 0 && (
                       <div className="bound-asset-list">
                         {selectedCharacters.map((item) => {
-                          const refUrl = toOutputUrl(Array.isArray(item.reference_images) ? item.reference_images[0] : '')
+                          const refUrl = toOutputUrl(
+                            Array.isArray(item.reference_images) ? item.reference_images[0] : '',
+                          )
                           return (
                             <div className="bound-asset-card" key={item.id}>
                               <div className="bound-asset-thumb">
-                                {refUrl ? <img src={refUrl} alt={`${item.name} 三视图`} loading="lazy" decoding="async" /> : <span>三视图待生成</span>}
+                                {refUrl ? (
+                                  <img src={refUrl} alt={`${item.name} 三视图`} loading="lazy" decoding="async" />
+                                ) : (
+                                  <span>三视图待生成</span>
+                                )}
                               </div>
                               <div className="bound-asset-copy">
                                 <strong>{item.name}</strong>
                                 <span>{item.personality || '性格待补充'}</span>
                                 <em>音色：{item.voice_id || 'Mimo 默认音色'}</em>
-                                <em>{item.appearance?.default_outfit || item.appearance?.description || item.visual_prompt || '人设待补充'}</em>
+                                <em>
+                                  {item.appearance?.default_outfit ||
+                                    item.appearance?.description ||
+                                    item.visual_prompt ||
+                                    '人设待补充'}
+                                </em>
                                 {item.asset_status === 'stale' && (
-                                  <em className="media-stale-note">参考资产已过期（风格已切换）：生成时不再作为参考图，请先重建资产。</em>
+                                  <em className="media-stale-note">
+                                    参考资产已过期（风格已切换）：生成时不再作为参考图，请先重建资产。
+                                  </em>
                                 )}
                               </div>
                             </div>
@@ -886,7 +949,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                     )}
 
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-scene-asset">绑定场景资产</label>
+                      <label className="form-label" htmlFor="shot-scene-asset">
+                        绑定场景资产
+                      </label>
                       <Select
                         id="shot-scene-asset"
                         aria-label="绑定场景资产"
@@ -907,14 +972,18 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                           <span>{selectedScene.description || '场景描述待补充'}</span>
                           <em>{selectedScene.visual_prompt || '场景视觉提示词待补充'}</em>
                           {selectedScene.asset_status === 'stale' && (
-                            <em className="media-stale-note">参考资产已过期（风格已切换）：生成时不再作为参考图，请先重建资产。</em>
+                            <em className="media-stale-note">
+                              参考资产已过期（风格已切换）：生成时不再作为参考图，请先重建资产。
+                            </em>
                           )}
                         </div>
                       </div>
                     )}
 
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-scene-description">场景描述</label>
+                      <label className="form-label" htmlFor="shot-scene-description">
+                        场景描述
+                      </label>
                       <TextArea
                         id="shot-scene-description"
                         aria-label="场景描述"
@@ -926,7 +995,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                     </div>
 
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-character-action">人物动作</label>
+                      <label className="form-label" htmlFor="shot-character-action">
+                        人物动作
+                      </label>
                       <TextArea
                         id="shot-character-action"
                         aria-label="人物动作"
@@ -938,7 +1009,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                     </div>
 
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-dialogue">对白</label>
+                      <label className="form-label" htmlFor="shot-dialogue">
+                        对白
+                      </label>
                       <TextArea
                         id="shot-dialogue"
                         aria-label="对白"
@@ -951,7 +1024,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                     </div>
 
                     <div className="form-block">
-                      <label className="form-label" htmlFor="shot-audio-mode">音频方式（镜头级覆盖）</label>
+                      <label className="form-label" htmlFor="shot-audio-mode">
+                        音频方式（镜头级覆盖）
+                      </label>
                       <Select
                         id="shot-audio-mode"
                         aria-label="音频方式（镜头级覆盖）"
@@ -973,18 +1048,16 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                               ? '有未保存修改'
                               : '已保存'}
                       </span>
-                      <Button
-                        size="small"
-                        icon={<HistoryOutlined />}
-                        onClick={() => setVersionHistoryOpen(true)}
-                      >
+                      <Button size="small" icon={<HistoryOutlined />} onClick={() => setVersionHistoryOpen(true)}>
                         版本历史
                       </Button>
                       <Button
                         size="small"
                         loading={shotSaveState === 'saving'}
                         disabled={!shotDirty || shotSaveState === 'saving'}
-                        onClick={() => projectId && selectedShot && void flushShotDraftRef.current(projectId, selectedShot.id)}
+                        onClick={() =>
+                          projectId && selectedShot && void flushShotDraftRef.current(projectId, selectedShot.id)
+                        }
                       >
                         保存修改
                       </Button>
@@ -1001,7 +1074,8 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                       disabled={selectedShot.confirmed}
                       onClick={() => void regenerateCurrentShot()}
                     >
-                      {selectedShot.status === 'needs_review' && !String(shotDraft.visual_notes || '').includes('NON-NEGOTIABLE AGENT CONSISTENCY SOP')
+                      {selectedShot.status === 'needs_review' &&
+                      !String(shotDraft.visual_notes || '').includes('NON-NEGOTIABLE AGENT CONSISTENCY SOP')
                         ? '回填全量 Prompt'
                         : '按 Prompt 重新生成'}
                     </Button>
@@ -1027,7 +1101,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                 aria-controls="right-panel-consistency"
                 onClick={() => setConsistencyExpanded((prev) => !prev)}
               >
-                <span className="side-panel-title"><SafetyCertificateOutlined /> 一致性规划</span>
+                <span className="side-panel-title">
+                  <SafetyCertificateOutlined /> 一致性规划
+                </span>
                 <DownOutlined className={`aux-arrow${consistencyExpanded ? ' expanded' : ''}`} />
               </button>
               <div id="right-panel-consistency" className={`side-panel-body${consistencyExpanded ? ' expanded' : ''}`}>
@@ -1036,7 +1112,11 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                   <div className="consistency-preview">
                     <div className="consistency-baseline">
                       <div className="consistency-baseline-thumb">
-                        {sceneBaselineUrl ? <img src={sceneBaselineUrl} alt="场景基准图" loading="lazy" decoding="async" /> : <span>基准图待生成</span>}
+                        {sceneBaselineUrl ? (
+                          <img src={sceneBaselineUrl} alt="场景基准图" loading="lazy" decoding="async" />
+                        ) : (
+                          <span>基准图待生成</span>
+                        )}
                       </div>
                       <div className="consistency-baseline-copy">
                         <strong>{selectedScene?.name || '未绑定场景'}</strong>
@@ -1090,7 +1170,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                 aria-controls="right-panel-runtime"
                 onClick={() => setRuntimeExpanded((prev) => !prev)}
               >
-                <span className="side-panel-title"><SlidersOutlined /> 运行方式</span>
+                <span className="side-panel-title">
+                  <SlidersOutlined /> 运行方式
+                </span>
                 <DownOutlined className={`aux-arrow${runtimeExpanded ? ' expanded' : ''}`} />
               </button>
               <div id="right-panel-runtime" className={`side-panel-body${runtimeExpanded ? ' expanded' : ''}`}>
@@ -1126,11 +1208,19 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                 aria-controls="right-panel-flow"
                 onClick={() => setFlowExpanded((prev) => !prev)}
               >
-                <span className="side-panel-title"><ApartmentOutlined /> 执行流程</span>
+                <span className="side-panel-title">
+                  <ApartmentOutlined /> 执行流程
+                </span>
                 <DownOutlined className={`aux-arrow${flowExpanded ? ' expanded' : ''}`} />
               </button>
               <div id="right-panel-flow" className={`side-panel-body${flowExpanded ? ' expanded' : ''}`}>
-                <React.Suspense fallback={<span className="lazy-panel-status" role="status">正在加载流程...</span>}>
+                <React.Suspense
+                  fallback={
+                    <span className="lazy-panel-status" role="status">
+                      正在加载流程...
+                    </span>
+                  }
+                >
                   <FlowGraph compact />
                 </React.Suspense>
               </div>
@@ -1144,7 +1234,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                 aria-controls="right-panel-logs"
                 onClick={() => setLogsExpanded((prev) => !prev)}
               >
-                <span className="side-panel-title"><CodeOutlined /> 运行日志</span>
+                <span className="side-panel-title">
+                  <CodeOutlined /> 运行日志
+                </span>
                 <DownOutlined className={`aux-arrow${logsExpanded ? ' expanded' : ''}`} />
               </button>
               <div id="right-panel-logs" className={`side-panel-body${logsExpanded ? ' expanded' : ''}`}>

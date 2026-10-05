@@ -2,7 +2,6 @@ import base64
 import logging
 import mimetypes
 from io import BytesIO
-from pathlib import Path
 
 from PIL import Image
 
@@ -19,8 +18,16 @@ class ReferenceAssetService:
     # 逐级降采样+降质量，直到编码结果压进预算；档位从高到低尝试，保证在
     # 预算允许时尽量保留脸部、服装与材质细节，不会无条件落到最低分辨率。
     _BUDGET_LADDER: tuple[tuple[int, int], ...] = (
-        (1536, 92), (1440, 88), (1280, 84), (1024, 82), (1024, 72),
-        (768, 74), (768, 62), (512, 68), (512, 55), (384, 50),
+        (1536, 92),
+        (1440, 88),
+        (1280, 84),
+        (1024, 82),
+        (1024, 72),
+        (768, 74),
+        (768, 62),
+        (512, 68),
+        (512, 55),
+        (384, 50),
     )
 
     def __init__(self):
@@ -44,13 +51,14 @@ class ReferenceAssetService:
                 return value
             payload = value.partition(",")[2]
             if len(payload) * 3 // 4 <= max_bytes:
-                self.last_transform_metadata = {"original_bytes": len(payload) * 3 // 4, "sent_bytes": len(payload) * 3 // 4}
+                self.last_transform_metadata = {
+                    "original_bytes": len(payload) * 3 // 4,
+                    "sent_bytes": len(payload) * 3 // 4,
+                }
                 return value
             # 压不进预算（含无法解码的 data URL）视同缺失，让上层给出
             # 「参考图不可用」的明确报错，而不是把超限请求发出去吃连接重置。
-            return self._encode_jpeg_within_budget(
-                self._decode_data_url(value) or b"", max_bytes
-            )
+            return self._encode_jpeg_within_budget(self._decode_data_url(value) or b"", max_bytes)
         path = existing_file(
             value,
             minimum_size=1,
@@ -59,7 +67,12 @@ class ReferenceAssetService:
         if path is None:
             return ""
         raw = path.read_bytes()
-        self.last_transform_metadata = {"original_bytes": len(raw), "original_size": None, "sent_bytes": len(raw), "sent_size": None}
+        self.last_transform_metadata = {
+            "original_bytes": len(raw),
+            "original_size": None,
+            "sent_bytes": len(raw),
+            "sent_size": None,
+        }
         # These references must be embedded in an API payload, so keep the
         # unavoidable in-memory base64 conversion tightly bounded.
         if len(raw) > settings.MAX_INLINE_REFERENCE_BYTES:

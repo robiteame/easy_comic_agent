@@ -43,14 +43,24 @@ async def request_with_retry(
             last_error = exc
             logger.warning(
                 "[%s] %s %s 传输错误（第 %d/%d 次尝试）: %r",
-                name, method, url, index + 1, attempts, exc,
+                name,
+                method,
+                url,
+                index + 1,
+                attempts,
+                exc,
             )
             continue
         if response.status_code in TRANSIENT_STATUS_CODES and index < attempts - 1:
             await response.aclose()
             logger.warning(
                 "[%s] %s %s 网关瞬态状态 %d（第 %d/%d 次尝试）",
-                name, method, url, response.status_code, index + 1, attempts,
+                name,
+                method,
+                url,
+                response.status_code,
+                index + 1,
+                attempts,
             )
             continue
         return response

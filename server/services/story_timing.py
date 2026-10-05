@@ -13,8 +13,9 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 from config import settings
 from services.consistency_service import normalize_continuity_mode
@@ -123,11 +124,7 @@ class ProviderDurationCapability:
 
     def contains(self, duration_s: float) -> bool:
         value = float(duration_s)
-        return (
-            math.isfinite(value)
-            and value + 1e-6 >= self.min_duration
-            and value - 1e-6 <= self.max_duration
-        )
+        return math.isfinite(value) and value + 1e-6 >= self.min_duration and value - 1e-6 <= self.max_duration
 
     def is_aligned(self, duration_s: float) -> bool:
         value = float(duration_s)
@@ -167,8 +164,7 @@ class ProviderDurationCapability:
                     TimingIssue(
                         code="provider_duration_step_mismatch",
                         message=(
-                            f"{label} 时长 {value:g} 秒不符合当前视频 Provider 的 "
-                            f"{self.duration_step:g} 秒生成步长"
+                            f"{label} 时长 {value:g} 秒不符合当前视频 Provider 的 {self.duration_step:g} 秒生成步长"
                         ),
                         shot_ids=(shot_id,) if shot_id else (),
                     )
@@ -348,7 +344,9 @@ def dialogue_items(value: Any) -> list[dict[str, Any]]:
         else:
             line = str(item).strip()
             if line:
-                output.append({"speaker": "", "line": line, "emotion": "", "action": "", "start_ms": None, "end_ms": None})
+                output.append(
+                    {"speaker": "", "line": line, "emotion": "", "action": "", "start_ms": None, "end_ms": None}
+                )
     return output
 
 
@@ -544,7 +542,7 @@ class DialogueTiming:
         }
 
     @classmethod
-    def from_mapping(cls, item: Any) -> "DialogueTiming | None":
+    def from_mapping(cls, item: Any) -> DialogueTiming | None:
         if not isinstance(item, Mapping):
             return None
         text = str(item.get("text") or item.get("line") or item.get("dialogue") or "").strip()
@@ -577,7 +575,7 @@ class ShotExecutionPlan:
     trim_end_ms: int = 0
     audio_mode: str = "tts"
     # tts_measured（本轮 TTS 实测）| stored（库内既有时间戳）| native_prompt
-    #（编入视频 Prompt 的时间）| none（无对白时间轴）
+    # （编入视频 Prompt 的时间）| none（无对白时间轴）
     dialogue_timing_source: str = "none"
     dialogue_timing: tuple[DialogueTiming, ...] = ()
     continuity_mode: str = "independent"
@@ -637,7 +635,7 @@ class ShotExecutionPlan:
         }
 
     @classmethod
-    def from_mapping(cls, payload: Any) -> "ShotExecutionPlan | None":
+    def from_mapping(cls, payload: Any) -> ShotExecutionPlan | None:
         """解析持久化计划；无法识别/非法时返回 None（调用方走旧字段推导）。"""
 
         if not isinstance(payload, Mapping):
@@ -712,7 +710,7 @@ class ShotExecutionPlan:
         candidate_count: int = 0,
         required_capabilities: Sequence[str] | None = None,
         recovery_budget: int = -1,
-    ) -> "ShotExecutionPlan":
+    ) -> ShotExecutionPlan:
         """从镜头字段（或旧数据）推导执行计划。
 
         ``dialogue_timing`` 传入本轮 TTS 实测时间轴时（``tts_measured``），实测
@@ -758,14 +756,18 @@ class ShotExecutionPlan:
 
         mode = str(audio_mode or "").strip().lower()
         if not mode:
-            mode = str(
-                shot.get("audio_mode")
-                or timing.get("audio_mode")
-                or timing.get("audio_source")
-                or profile.get("audio_mode")
-                or profile.get("audio_source")
-                or ""
-            ).strip().lower()
+            mode = (
+                str(
+                    shot.get("audio_mode")
+                    or timing.get("audio_mode")
+                    or timing.get("audio_source")
+                    or profile.get("audio_mode")
+                    or profile.get("audio_source")
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
         if mode not in EXECUTION_PLAN_AUDIO_MODES:
             mode = "tts"
 
@@ -778,7 +780,9 @@ class ShotExecutionPlan:
 
         video_mode = str(shot.get("video_mode") or profile.get("reference_mode") or "").strip().lower()
         if not video_mode:
-            video_mode = "first_frame_reference" if (shot.get("storyboard_path") or shot.get("image_path")) else "text_only"
+            video_mode = (
+                "first_frame_reference" if (shot.get("storyboard_path") or shot.get("image_path")) else "text_only"
+            )
 
         warnings: list[str] = []
         needed_ms = narrative_ms
@@ -836,7 +840,9 @@ class ShotExecutionPlan:
             planned_candidates = 1
         try:
             planned_recovery = int(
-                recovery_budget if recovery_budget >= 0 else (shot.get("recovery_budget") if shot.get("recovery_budget") is not None else 0)
+                recovery_budget
+                if recovery_budget >= 0
+                else (shot.get("recovery_budget") if shot.get("recovery_budget") is not None else 0)
             )
         except (TypeError, ValueError):
             planned_recovery = 0
@@ -934,7 +940,13 @@ def resolve_shot_execution_plan(
     计划，旧数据（无计划）从旧字段推导。
     """
 
-    if dialogue_timing is None and not audio_mode and not candidate_count and required_capabilities is None and recovery_budget < 0:
+    if (
+        dialogue_timing is None
+        and not audio_mode
+        and not candidate_count
+        and required_capabilities is None
+        and recovery_budget < 0
+    ):
         persisted = load_shot_execution_plan(shot)
         if persisted is not None:
             return persisted
@@ -980,7 +992,7 @@ def _split_text(text: str, parts: int) -> list[str]:
     # Character-level partitioning preserves all dialogue/action content when the
     # model returned one long run-on sentence. It is preferable to dropping text.
     size = max(1, math.ceil(len(value) / parts))
-    chunks = [value[index * size:(index + 1) * size] for index in range(parts)]
+    chunks = [value[index * size : (index + 1) * size] for index in range(parts)]
     while len(chunks) < parts:
         chunks.append("")
     return chunks
@@ -1101,11 +1113,15 @@ def split_shot(
     if beats:
         if len(beats) == 1:
             text = beats[0].text
-            beats = [
-                ActionBeat(f"准备：进入「{text}」起始状态", True, "preparation"),
-                ActionBeat(f"动作：{text}", True, "action"),
-                ActionBeat(f"反应：完成「{text}」并进入退出状态", True, "reaction"),
-            ] if beats[0].complex_motion else beats
+            beats = (
+                [
+                    ActionBeat(f"准备：进入「{text}」起始状态", True, "preparation"),
+                    ActionBeat(f"动作：{text}", True, "action"),
+                    ActionBeat(f"反应：完成「{text}」并进入退出状态", True, "reaction"),
+                ]
+                if beats[0].complex_motion
+                else beats
+            )
         count = max(requested_count, len(beats), 3 if any(item.complex_motion for item in beats) else 1)
     else:
         count = requested_count
@@ -1153,7 +1169,9 @@ def split_shot(
             part_shot_id=shot_id,
         )
         item["continuity_mode"] = "continuous_action"
-        item["continuity_mode_source"] = "complex_action_split" if any(b.complex_motion for b in beats) else "action_beat_split"
+        item["continuity_mode_source"] = (
+            "complex_action_split" if any(b.complex_motion for b in beats) else "action_beat_split"
+        )
         output.append(item)
     return output
 
@@ -1180,7 +1198,9 @@ def _mergeable(left: Mapping[str, Any], right: Mapping[str, Any], capability: Pr
         return False
     combined_dialogue = dialogue_text([*dialogue_items(left.get("dialogue")), *dialogue_items(right.get("dialogue"))])
     combined_duration = float(left.get("duration") or 0) + float(right.get("duration") or 0)
-    if estimate_speech_ms(combined_dialogue) > usable_speech_ms({"character_action": combined_action}, combined_duration):
+    if estimate_speech_ms(combined_dialogue) > usable_speech_ms(
+        {"character_action": combined_action}, combined_duration
+    ):
         return False
     return combined_duration <= capability.max_duration + 1e-6
 
@@ -1224,7 +1244,11 @@ def merge_shots(left: Mapping[str, Any], right: Mapping[str, Any], *, reason: st
     left_id = str(left.get("shot_id") or left.get("id") or "")
     item["shot_id"] = left_id
     item["scene_description"] = "；".join(
-        dict.fromkeys(part for part in (str(left.get("scene_description") or ""), str(right.get("scene_description") or "")) if part)
+        dict.fromkeys(
+            part
+            for part in (str(left.get("scene_description") or ""), str(right.get("scene_description") or ""))
+            if part
+        )
     )
     left_action = str(left.get("character_action") or "").strip()
     right_action = str(right.get("character_action") or "").strip()
@@ -1282,7 +1306,7 @@ class StoryTimingPlan:
         target_duration_s: float,
         shots: Sequence[Mapping[str, Any]],
         provider: ProviderDurationCapability,
-    ) -> "StoryTimingPlan":
+    ) -> StoryTimingPlan:
         plan = cls(target_duration_s=float(target_duration_s), provider=provider)
         plan.rebalance(shots)
         return plan
@@ -1343,7 +1367,11 @@ class StoryTimingPlan:
             if part_count > 1:
                 split_reasons = []
                 if parts_for_duration > 1:
-                    split_reasons.append("first_frame_duration_limit" if short_motion and not complex_motion else "duration_over_provider_limit")
+                    split_reasons.append(
+                        "first_frame_duration_limit"
+                        if short_motion and not complex_motion
+                        else "duration_over_provider_limit"
+                    )
                 if parts_for_speech > 1:
                     split_reasons.append("dialogue_capacity")
                 if len(beats) > 1:
@@ -1424,9 +1452,7 @@ class StoryTimingPlan:
 
     def _adjust_count(self, shots: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not shots:
-            raise StoryTimingError(
-                [TimingIssue(code="empty_storyboard", message="没有可用于时长规划的镜头")]
-            )
+            raise StoryTimingError([TimingIssue(code="empty_storyboard", message="没有可用于时长规划的镜头")])
         target = self.target_duration_s
         if self.provider.is_fixed:
             desired_count = max(1, int(round(target / float(self.provider.fixed_duration or 1))))
@@ -1464,7 +1490,7 @@ class StoryTimingPlan:
                 before=before,
                 after=[_structure_snapshot(merged)],
             )
-            shots[pair_index:pair_index + 2] = [merged]
+            shots[pair_index : pair_index + 2] = [merged]
 
         while len(shots) < desired_count:
             split_index = max(range(len(shots)), key=lambda index: _shot_weight(shots[index]))
@@ -1483,7 +1509,7 @@ class StoryTimingPlan:
                 before=[_structure_snapshot(source)],
                 after=[_structure_snapshot(item) for item in parts],
             )
-            shots[split_index:split_index + 1] = parts
+            shots[split_index : split_index + 1] = parts
         return shots
 
     def _allocate_durations(self, shots: list[dict[str, Any]]) -> None:
@@ -1530,7 +1556,9 @@ class StoryTimingPlan:
 
         # Transfer available units to dialogue-heavy shots so speech is never cropped.
         for index, shot in enumerate(shots):
-            required_ms = shot_speech_ms(shot) + (ACTION_LEAD_RESERVE_MS if str(shot.get("character_action") or "").strip() else 0)
+            required_ms = shot_speech_ms(shot) + (
+                ACTION_LEAD_RESERVE_MS if str(shot.get("character_action") or "").strip() else 0
+            )
             required_units = min(max_units, math.ceil(required_ms / (step * 1000)))
             deficit = required_units - units[index]
             donor_cursor = 0
@@ -1539,7 +1567,9 @@ class StoryTimingPlan:
                     donor_cursor += 1
                     continue
                 donor = shots[donor_cursor]
-                donor_required_ms = shot_speech_ms(donor) + (ACTION_LEAD_RESERVE_MS if str(donor.get("character_action") or "").strip() else 0)
+                donor_required_ms = shot_speech_ms(donor) + (
+                    ACTION_LEAD_RESERVE_MS if str(donor.get("character_action") or "").strip() else 0
+                )
                 donor_required_units = math.ceil(donor_required_ms / (step * 1000))
                 spare = units[donor_cursor] - max(min_units, donor_required_units)
                 transfer = min(deficit, max(0, spare))
@@ -1641,10 +1671,7 @@ class StoryTimingPlan:
                 issues.append(
                     TimingIssue(
                         code="dialogue_exceeds_shot_duration",
-                        message=(
-                            f"镜头 {shot_id} 对白预计 {speech_ms} 毫秒，超过镜头可用时长 "
-                            f"{available_ms} 毫秒"
-                        ),
+                        message=(f"镜头 {shot_id} 对白预计 {speech_ms} 毫秒，超过镜头可用时长 {available_ms} 毫秒"),
                         shot_ids=(shot_id,),
                     )
                 )
@@ -1738,13 +1765,17 @@ class StoryTimingPlan:
             dialogue = str(shot.get("dialogue") or "").strip()
             timing = shot.get("timing") if isinstance(shot.get("timing"), dict) else {}
             profile = shot.get("continuity_profile") if isinstance(shot.get("continuity_profile"), dict) else {}
-            audio_source = str(
-                timing.get("audio_source")
-                or timing.get("audio_mode")
-                or profile.get("audio_source")
-                or profile.get("audio_mode")
-                or ""
-            ).strip().lower()
+            audio_source = (
+                str(
+                    timing.get("audio_source")
+                    or timing.get("audio_mode")
+                    or profile.get("audio_source")
+                    or profile.get("audio_mode")
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
             if dialogue and audio_source != "native":
                 audio_path = str(shot.get("audio_path") or "")
                 if not audio_path:
@@ -1816,10 +1847,7 @@ class StoryTimingPlan:
                 issues.append(
                     TimingIssue(
                         code="audio_track_exceeds_timeline",
-                        message=(
-                            f"音频轨道 {track_id} 结束于 {effective_end} 毫秒，超出成片总时长 "
-                            f"{total_ms} 毫秒"
-                        ),
+                        message=(f"音频轨道 {track_id} 结束于 {effective_end} 毫秒，超出成片总时长 {total_ms} 毫秒"),
                         track_ids=(track_id,),
                     )
                 )

@@ -18,12 +18,11 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from api.routes import script as script_route  # noqa: E402
 from api.routes.shot import _characters, _scenes  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
 from models import Character, Project, SceneAsset  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _fingerprint(style: str) -> str:
@@ -41,9 +40,7 @@ class AssetStyleInvalidationTests(unittest.TestCase):
         init_db()
         self.db = SessionLocal()
         for model in (Character, SceneAsset, Project):
-            rows = self.db.query(model).filter(
-                model.id.like("style_inval%") if hasattr(model, "id") else True
-            )
+            rows = self.db.query(model).filter(model.id.like("style_inval%") if hasattr(model, "id") else True)
             for row in rows:
                 if hasattr(row, "project_id") and str(row.project_id).startswith("style_inval"):
                     self.db.delete(row)

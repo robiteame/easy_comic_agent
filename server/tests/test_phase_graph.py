@@ -14,14 +14,13 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
-from db import SessionLocal, init_db  # noqa: E402
-from models import Project, Shot, ShotVersion  # noqa: E402
 from agent import graph, shot_work  # noqa: E402
 from agent import nodes as agent_nodes  # noqa: E402
 from agent.checkpoints import CheckpointStore  # noqa: E402
 from agent.contracts import RecoveryStrategy, StageName, StageStatus  # noqa: E402
+from db import SessionLocal, init_db  # noqa: E402
+from models import Project, Shot, ShotVersion  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class PhaseGraphStructureTests(unittest.TestCase):
@@ -59,17 +58,35 @@ class PhaseGraphStructureTests(unittest.TestCase):
         self.assertIn(("edit_decision", "final_review", "next"), edges)
 
     def test_final_feedback_routes_by_issue_code_and_shot(self) -> None:
-        state = {"critiques": [{"stage": "final_review", "passed": False, "issues": [
-            {"severity": "error", "code": "video_frozen", "shot_id": "s2", "details": {"source_stage": "video_generation"}},
-            {"severity": "info", "code": "visual_quality_pending"},
-        ]}]}
+        state = {
+            "critiques": [
+                {
+                    "stage": "final_review",
+                    "passed": False,
+                    "issues": [
+                        {
+                            "severity": "error",
+                            "code": "video_frozen",
+                            "shot_id": "s2",
+                            "details": {"source_stage": "video_generation"},
+                        },
+                        {"severity": "info", "code": "visual_quality_pending"},
+                    ],
+                }
+            ]
+        }
         self.assertEqual(graph._final_feedback_target(state), "video_generation")
         self.assertEqual(graph._final_feedback_shot_ids(state, "video_generation"), ["s2"])
         self.assertEqual(graph._final_feedback_shot_ids(state, "image_generation"), [])
 
     def test_native_audio_plan_can_skip_external_tts_dependency(self) -> None:
         shots = [
-            {"shot_id": "native-1", "dialogue": "你好", "shot_type": "close-up", "continuity_profile": {"audio_mode": "native"}},
+            {
+                "shot_id": "native-1",
+                "dialogue": "你好",
+                "shot_type": "close-up",
+                "continuity_profile": {"audio_mode": "native"},
+            },
         ]
         with (
             patch.object(graph, "_db_shots", return_value=shots),
@@ -87,7 +104,12 @@ class PhaseGraphStructureTests(unittest.TestCase):
                 patch.object(
                     shot_work,
                     "_shot_audio_context",
-                    return_value={"dialogue": "你好", "shot_type": "close-up", "audio_mode": "native", "continuity_profile": {}},
+                    return_value={
+                        "dialogue": "你好",
+                        "shot_type": "close-up",
+                        "audio_mode": "native",
+                        "continuity_profile": {},
+                    },
                 ),
                 patch.object(shot_work, "_resolved_audio_mode", return_value="native"),
                 patch("api.routes.shot._run_single_shot_audio", new_callable=AsyncMock) as tts,
@@ -110,7 +132,15 @@ class PhaseGraphStructureTests(unittest.TestCase):
         for explicit, expected in targets.items():
             state = {"mode": "auto", "final_recovery_target": explicit, "pending_recovery_target": expected}
             self.assertEqual(graph._final_feedback_target(state), expected)
-            self.assertEqual(graph._route_final_recovery(state), {"image_generation": "image", "audio_production": "audio", "video_generation": "video", "edit_composition": "compose"}[expected])
+            self.assertEqual(
+                graph._route_final_recovery(state),
+                {
+                    "image_generation": "image",
+                    "audio_production": "audio",
+                    "video_generation": "video",
+                    "edit_composition": "compose",
+                }[expected],
+            )
 
 
 class AutomaticRoutingTests(unittest.TestCase):
@@ -134,24 +164,56 @@ class AutomaticRoutingTests(unittest.TestCase):
             "recovery_attempts": {"image_generation": 99},
         }
         self.assertEqual(graph._route_decision(base, StageName.IMAGE_GENERATION, "next", "recover"), "failed")
-        self.assertEqual(graph._route_decision({**base, "human_gate_policy": "manual"}, StageName.IMAGE_GENERATION, "next", "recover"), "human")
+        self.assertEqual(
+            graph._route_decision(
+                {**base, "human_gate_policy": "manual"}, StageName.IMAGE_GENERATION, "next", "recover"
+            ),
+            "human",
+        )
 
 
 class RecoveryAndResumeTests(unittest.TestCase):
     def test_generation_revisions_only_reach_matching_shot_and_stage(self) -> None:
-        state = {"prompt_revisions": [
-            {"shot_id": "a", "patches": [
-                {"field": "visual_prompt", "op": "replace", "value": {"rule": "close-up"}, "shot_id": "a", "target_stage": "image_generation"},
-                {"field": "seed", "op": "set", "value": 27, "shot_id": "a", "target_stage": "image_generation"},
-                {"field": "visual_prompt", "op": "replace", "value": "other", "shot_id": "b", "target_stage": "image_generation"},
-                {"field": "visual_prompt", "op": "replace", "value": "video", "shot_id": "a", "target_stage": "video_generation"},
-            ]},
-        ]}
+        state = {
+            "prompt_revisions": [
+                {
+                    "shot_id": "a",
+                    "patches": [
+                        {
+                            "field": "visual_prompt",
+                            "op": "replace",
+                            "value": {"rule": "close-up"},
+                            "shot_id": "a",
+                            "target_stage": "image_generation",
+                        },
+                        {"field": "seed", "op": "set", "value": 27, "shot_id": "a", "target_stage": "image_generation"},
+                        {
+                            "field": "visual_prompt",
+                            "op": "replace",
+                            "value": "other",
+                            "shot_id": "b",
+                            "target_stage": "image_generation",
+                        },
+                        {
+                            "field": "visual_prompt",
+                            "op": "replace",
+                            "value": "video",
+                            "shot_id": "a",
+                            "target_stage": "video_generation",
+                        },
+                    ],
+                },
+            ]
+        }
         image = graph._shot_revisions(state, StageName.IMAGE_GENERATION, "a")
         self.assertEqual([patch["value"] for patch in image[0]["patches"]], [{"rule": "close-up"}])
         self.assertEqual(graph._seed_override(state, StageName.IMAGE_GENERATION, "a"), 27)
-        self.assertEqual(graph._shot_revisions(state, StageName.IMAGE_GENERATION, "b")[0]["patches"][0]["value"], "other")
-        self.assertEqual(graph._shot_revisions(state, StageName.VIDEO_GENERATION, "a")[0]["patches"][0]["value"], "video")
+        self.assertEqual(
+            graph._shot_revisions(state, StageName.IMAGE_GENERATION, "b")[0]["patches"][0]["value"], "other"
+        )
+        self.assertEqual(
+            graph._shot_revisions(state, StageName.VIDEO_GENERATION, "a")[0]["patches"][0]["value"], "video"
+        )
         self.assertEqual(graph._shot_revisions(state, StageName.VIDEO_GENERATION, "b"), [])
 
     def test_image_fanout_passes_scoped_patches_and_seed_to_only_failed_shot(self) -> None:
@@ -170,11 +232,30 @@ class RecoveryAndResumeTests(unittest.TestCase):
                 return {"shot_id": shot_id, "shot_version": version, "status": "succeeded", "path": str(image)}
 
             state = {
-                "project_id": "scoped-image", "run_id": "auto", "mode": "auto",
-                "prompt_revisions": [{"shot_id": "bad", "patches": [
-                    {"field": "visual_prompt", "op": "replace", "value": "close-up", "shot_id": "bad", "target_stage": "image_generation"},
-                    {"field": "seed", "op": "set", "value": {"seed": 321}, "shot_id": "bad", "target_stage": "image_generation"},
-                ]}],
+                "project_id": "scoped-image",
+                "run_id": "auto",
+                "mode": "auto",
+                "prompt_revisions": [
+                    {
+                        "shot_id": "bad",
+                        "patches": [
+                            {
+                                "field": "visual_prompt",
+                                "op": "replace",
+                                "value": "close-up",
+                                "shot_id": "bad",
+                                "target_stage": "image_generation",
+                            },
+                            {
+                                "field": "seed",
+                                "op": "set",
+                                "value": {"seed": 321},
+                                "shot_id": "bad",
+                                "target_stage": "image_generation",
+                            },
+                        ],
+                    }
+                ],
             }
             with (
                 patch.object(graph.CheckpointStore, "get", return_value=store),
@@ -190,7 +271,11 @@ class RecoveryAndResumeTests(unittest.TestCase):
         self.assertEqual(calls["good"]["recovery_revisions"], [])
 
     def test_recovery_seed_handles_prior_scalar_patch(self) -> None:
-        state = {"project_id": "p", "run_id": "r", "prompt_revisions": [{"shot_id": "a", "patches": [{"field": "seed", "value": 123}]}]}
+        state = {
+            "project_id": "p",
+            "run_id": "r",
+            "prompt_revisions": [{"shot_id": "a", "patches": [{"field": "seed", "value": 123}]}],
+        }
         seed = graph._recovery_seed(state, StageName.IMAGE_GENERATION, "a", [])
         self.assertNotEqual(seed, 123)
         self.assertEqual(seed, graph._recovery_seed(state, StageName.IMAGE_GENERATION, "a", []))
@@ -198,35 +283,63 @@ class RecoveryAndResumeTests(unittest.TestCase):
     def test_video_resolution_recovery_uses_supported_provider_tier(self) -> None:
         selected = types.SimpleNamespace(
             strategy=RecoveryStrategy.LOWER_RESOLUTION,
-            shot_ids=["s1"], prompt_changes={}, provider="",
+            shot_ids=["s1"],
+            prompt_changes={},
+            provider="",
         )
         trace = types.SimpleNamespace(
-            selected=selected, candidates=[], trace_id="resolution-trace",
-            budget_snapshot={}, input_fingerprint="fp", reason="lower resolution", shot_id="",
+            selected=selected,
+            candidates=[],
+            trace_id="resolution-trace",
+            budget_snapshot={},
+            input_fingerprint="fp",
+            reason="lower resolution",
+            shot_id="",
             model_dump=lambda mode: {"selected": {"strategy": "lower_resolution"}},
         )
         store = types.SimpleNamespace(add_decision=lambda *_: None, add_event=lambda *_, **__: None)
-        state = {"mode": "auto", "project_id": "p", "run_id": "r", "quality_profile": "standard", "shot_artifacts": [], "failed_shot_ids": ["s1"]}
-        with patch.object(graph, "choose_recovery", return_value=trace), patch.object(graph.CheckpointStore, "get", return_value=store):
+        state = {
+            "mode": "auto",
+            "project_id": "p",
+            "run_id": "r",
+            "quality_profile": "standard",
+            "shot_artifacts": [],
+            "failed_shot_ids": ["s1"],
+        }
+        with (
+            patch.object(graph, "choose_recovery", return_value=trace),
+            patch.object(graph.CheckpointStore, "get", return_value=store),
+        ):
             update = graph._recovery_node(state, StageName.VIDEO_GENERATION, default_target="video_generation")
         self.assertEqual(update["provider_switch"]["video_generation:resolution"], "480p")
         self.assertEqual(update["pending_shot_ids"], ["s1"])
 
     def test_video_split_persists_failed_shot_and_routes_back_through_image(self) -> None:
         selected = types.SimpleNamespace(
-            strategy=RecoveryStrategy.SPLIT_SHOT, shot_ids=["bad"], prompt_changes={}, provider="",
+            strategy=RecoveryStrategy.SPLIT_SHOT,
+            shot_ids=["bad"],
+            prompt_changes={},
+            provider="",
         )
         trace = types.SimpleNamespace(
-            selected=selected, candidates=[], trace_id="split-trace", budget_snapshot={},
-            input_fingerprint="fp", reason="complex motion", shot_id="",
+            selected=selected,
+            candidates=[],
+            trace_id="split-trace",
+            budget_snapshot={},
+            input_fingerprint="fp",
+            reason="complex motion",
+            shot_id="",
             model_dump=lambda mode: {"selected": {"strategy": "split_shot"}},
         )
         store = types.SimpleNamespace(
-            add_decision=lambda *_: None, add_event=lambda *_, **__: None,
+            add_decision=lambda *_: None,
+            add_event=lambda *_, **__: None,
             detect_changes=lambda: {"changed_shot_ids": ["bad", "bad_part_02"]},
         )
         state = {
-            "mode": "auto", "project_id": "p", "run_id": "r",
+            "mode": "auto",
+            "project_id": "p",
+            "run_id": "r",
             "shot_artifacts": [
                 {"shot_id": "good", "stage": "video_generation", "status": "succeeded"},
                 {"shot_id": "bad", "stage": "video_generation", "status": "failed"},
@@ -251,11 +364,19 @@ class RecoveryAndResumeTests(unittest.TestCase):
 
     def test_failed_split_is_explicit_failure_not_fake_storyboard_retry(self) -> None:
         selected = types.SimpleNamespace(
-            strategy=RecoveryStrategy.SPLIT_SHOT, shot_ids=["bad"], prompt_changes={}, provider="",
+            strategy=RecoveryStrategy.SPLIT_SHOT,
+            shot_ids=["bad"],
+            prompt_changes={},
+            provider="",
         )
         trace = types.SimpleNamespace(
-            selected=selected, candidates=[], trace_id="unsafe-split", budget_snapshot={},
-            input_fingerprint="fp", reason="complex motion", shot_id="",
+            selected=selected,
+            candidates=[],
+            trace_id="unsafe-split",
+            budget_snapshot={},
+            input_fingerprint="fp",
+            reason="complex motion",
+            shot_id="",
             model_dump=lambda mode: {"selected": {"strategy": "split_shot"}},
         )
         store = types.SimpleNamespace(add_decision=lambda *_: None, add_event=lambda *_, **__: None)
@@ -277,19 +398,46 @@ class RecoveryAndResumeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             db = SessionLocal()
             try:
-                db.query(ShotVersion).filter(ShotVersion.shot_id.like(f"{project_id}%")).delete(synchronize_session=False)
+                db.query(ShotVersion).filter(ShotVersion.shot_id.like(f"{project_id}%")).delete(
+                    synchronize_session=False
+                )
                 db.query(Shot).filter(Shot.project_id == project_id).delete(synchronize_session=False)
                 db.query(Project).filter(Project.id == project_id).delete(synchronize_session=False)
                 project = Project(id=project_id, title="split")
-                bad = Shot(id=f"{project_id}-bad", project_id=project_id, sequence=1, version=2, duration=6.0, character_action="走到窗边然后回头", storyboard_path="old-storyboard.png", video_path="old-video.mp4")
-                good = Shot(id=f"{project_id}-good", project_id=project_id, sequence=2, version=1, storyboard_path="good-storyboard.png", video_path="good-video.mp4")
+                bad = Shot(
+                    id=f"{project_id}-bad",
+                    project_id=project_id,
+                    sequence=1,
+                    version=2,
+                    duration=6.0,
+                    character_action="走到窗边然后回头",
+                    storyboard_path="old-storyboard.png",
+                    video_path="old-video.mp4",
+                )
+                good = Shot(
+                    id=f"{project_id}-good",
+                    project_id=project_id,
+                    sequence=2,
+                    version=1,
+                    storyboard_path="good-storyboard.png",
+                    video_path="good-video.mp4",
+                )
                 db.add_all([project, bad, good])
                 db.commit()
                 store = CheckpointStore(project_id, "split-run", root=Path(root))
                 store.detect_changes()
                 for shot_id, version in ((bad.id, 2), (good.id, 1)):
-                    store.save_shot_artifact(shot_id, "video_generation", shot_version=version, status="succeeded", path="old.mp4", input_fingerprint="input")
-                result = graph._persist_recovery_splits(project_id, [bad.id], trace_id="integration-split", reason="complex motion")
+                    store.save_shot_artifact(
+                        shot_id,
+                        "video_generation",
+                        shot_version=version,
+                        status="succeeded",
+                        path="old.mp4",
+                        input_fingerprint="input",
+                    )
+                result = graph._persist_recovery_splits(
+                    project_id, [bad.id], trace_id="integration-split", reason="complex motion"
+                )
                 changes = store.detect_changes()
                 self.assertEqual(set(changes["changed_shot_ids"]), set(result[0]["shot_ids"]))
                 self.assertEqual(store.shot_artifact(bad.id, "video_generation")["status"], "invalidated")
@@ -301,7 +449,9 @@ class RecoveryAndResumeTests(unittest.TestCase):
                 self.assertEqual(rows[0].video_path, "")
                 self.assertEqual(rows[-1].video_path, "good-video.mp4")
             finally:
-                db.query(ShotVersion).filter(ShotVersion.shot_id.like(f"{project_id}%")).delete(synchronize_session=False)
+                db.query(ShotVersion).filter(ShotVersion.shot_id.like(f"{project_id}%")).delete(
+                    synchronize_session=False
+                )
                 db.query(Shot).filter(Shot.project_id == project_id).delete(synchronize_session=False)
                 db.query(Project).filter(Project.id == project_id).delete(synchronize_session=False)
                 db.commit()

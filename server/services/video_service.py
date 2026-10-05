@@ -11,37 +11,37 @@ import asyncio
 import logging
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import replace
-from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from config import settings
 from services import usage_service
-from services.job_debug import record_api_request, record_api_result
+from services.consistency_metrics import combine_report, payload_metrics
 from services.consistency_service import ConsistencyService, normalize_continuity_mode
+from services.job_debug import record_api_request, record_api_result
+from services.post_production_plan import CAMERA_MOVEMENT_PROMPTS
+from services.prompt_budget import assemble_prompt, ensure_critical_fields
 from services.providers.base import Dialogue, ReferenceAsset, VideoRequest
-from services.providers.endpoint import get_endpoint, video_protocol_defaults, video_protocol_defaults
-from services.providers.registry import get_adapter
 from services.providers.capability_matrix import (
-    CapabilityDowngradeRequiredError,
     VIDEO_MODE_FIRST_FRAME_I2V,
     VIDEO_MODE_FIRST_LAST_FRAME,
     VIDEO_MODE_MULTI_REFERENCE_R2V,
+    CapabilityDowngradeRequiredError,
     capability_report,
     payload_control_types,
     reference_send_priority,
     select_video_mode,
     supports_first_last_frame,
 )
+from services.providers.endpoint import get_endpoint, video_protocol_defaults
+from services.providers.registry import get_adapter
 from services.providers.usage import (
     CAPABILITY_VIDEO,
     ERROR_CODE_PROVIDER_CALL_FAILED,
     adapter_usage_for_request,
 )
-from services.post_production_plan import CAMERA_MOVEMENT_PROMPTS
-from services.prompt_budget import assemble_prompt, ensure_critical_fields
 from services.reference_asset_service import ReferenceAssetService
-from services.consistency_metrics import combine_report, payload_metrics
 from services.security import safe_path, validate_identifier
 from services.story_timing import (
     StoryTimingError,
@@ -127,8 +127,7 @@ class VideoService:
         effective_caps = effective_video_capabilities(adapter_cls, endpoint.model)
         supports_end_frame = supports_first_last_frame(effective_caps)
         request_reference_assets = [
-            item for item in request_reference_assets
-            if item.type != "end_frame" or supports_end_frame
+            item for item in request_reference_assets if item.type != "end_frame" or supports_end_frame
         ]
         if any(item.type == "end_frame" for item in request_reference_assets) and not reference_image:
             raise RuntimeError("首尾帧视频请求缺少已审核分镜首帧，已阻止只发送 end_frame")
@@ -167,7 +166,9 @@ class VideoService:
         report = capability_report("video", endpoint.protocol, model=endpoint.model, adapter_cls=adapter_cls)
         sent_items: list[dict] = []
         if reference_image:
-            sent_items.append({"type": "approved_storyboard_first_frame", "role": "first_frame", "parameter": "content[].role"})
+            sent_items.append(
+                {"type": "approved_storyboard_first_frame", "role": "first_frame", "parameter": "content[].role"}
+            )
         if getattr(effective_caps, "multiple_reference_images", False):
             sent_items.extend(
                 {
@@ -201,7 +202,9 @@ class VideoService:
             has_depth_control=has_depth_control,
         )
         validated_count = len(request_reference_assets)
-        if reference_image and not any(item.type == "approved_storyboard_first_frame" for item in request_reference_assets):
+        if reference_image and not any(
+            item.type == "approved_storyboard_first_frame" for item in request_reference_assets
+        ):
             validated_count += 1
         if has_end_frame:
             payload_video_mode = VIDEO_MODE_FIRST_LAST_FRAME
@@ -215,8 +218,12 @@ class VideoService:
             "seed": request.seed,
             "provider_source": provider_source,
             "generation_duration_s": generation_duration,
-            "estimated_speech_ms": estimate_speech_ms("\n".join(str(item.text or "") for item in (request.dialogues or []))),
-            "reference_mode": "multi_reference" if len(sent_items) > 1 else ("first_frame_reference" if reference_image else "text_only"),
+            "estimated_speech_ms": estimate_speech_ms(
+                "\n".join(str(item.text or "") for item in (request.dialogues or []))
+            ),
+            "reference_mode": "multi_reference"
+            if len(sent_items) > 1
+            else ("first_frame_reference" if reference_image else "text_only"),
             "video_mode": payload_video_mode,
             "references_validated": validated_count,
             "references_sent": [item["type"] for item in sent_items],
@@ -318,7 +325,9 @@ class VideoService:
             "video_path": result.video_path,
             "frame_path": result.frame_path,
             "task_id": result.task_id,
-            "reference_payload_mode": result.payload_mode or content_payload_mode or generation_metadata.get("reference_mode", "text_only"),
+            "reference_payload_mode": result.payload_mode
+            or content_payload_mode
+            or generation_metadata.get("reference_mode", "text_only"),
             "native_audio": bool(result.native_audio),
             "generation_report": dict(generation_metadata),
         }
@@ -343,8 +352,7 @@ class VideoService:
         reference_assets, invalid_candidates = self._video_reference_assets(shot, capabilities)
         required_capabilities = self._shot_required_capabilities(shot, reference_assets)
         multi_required = any(
-            item.type not in {"approved_storyboard_first_frame", "end_frame"}
-            for item in reference_assets
+            item.type not in {"approved_storyboard_first_frame", "end_frame"} for item in reference_assets
         )
         if multi_required and not getattr(capabilities, "multiple_reference_images", False):
             warning = (
@@ -392,11 +400,15 @@ class VideoService:
         continuity_item["not_sent_reason"] = continuity_drop_reason
         reference_manifest.append(continuity_item)
         requires_first_frame = bool(getattr(capabilities, "reference_image", True))
-        if requires_first_frame and not any(item.get("type") == "approved_storyboard_first_frame" and item.get("loaded") for item in reference_manifest):
+        if requires_first_frame and not any(
+            item.get("type") == "approved_storyboard_first_frame" and item.get("loaded") for item in reference_manifest
+        ):
             raise RuntimeError("视频生成缺少 approved_storyboard_first_frame（已审核分镜首帧参考图），已阻止纯文本生成")
         shot["seedance_reference_manifest"] = reference_manifest
 
-        duration_capability = provider_duration_capability(endpoint.protocol, capabilities=capabilities, model=endpoint.model)
+        duration_capability = provider_duration_capability(
+            endpoint.protocol, capabilities=capabilities, model=endpoint.model
+        )
         # 统一执行计划是有效时长的唯一来源：上游（TTS 实测后）已落计划时直接
         # 复用（保留 tts_measured 标记）；旧调用方没有计划则按当前 Provider
         # 能力推导。候选数/恢复预算来自调用方（质量档位），本函数按可加载素材
@@ -428,9 +440,14 @@ class VideoService:
         requested_duration = execution_plan.narrative_duration_ms / 1000.0
         # 固定档 Provider 可把 4.5s 叙事时间线用 5s 生成后剪辑；只有明显超出
         # 固定档/上限的镜头才要求先拆分，避免一刀切拒绝合法短镜头。
-        if requested_duration <= 0 or requested_duration > float(duration_capability.max_duration or 0) + duration_capability.tolerance_s:
+        if (
+            requested_duration <= 0
+            or requested_duration > float(duration_capability.max_duration or 0) + duration_capability.tolerance_s
+        ):
             try:
-                duration_capability.validate(requested_duration, shot_id=str(shot.get("shot_id") or shot.get("id") or ""))
+                duration_capability.validate(
+                    requested_duration, shot_id=str(shot.get("shot_id") or shot.get("id") or "")
+                )
             except StoryTimingError as exc:
                 raise RuntimeError(f"{exc}；请拆分镜头到 Provider 允许的时长后逐镜生成") from exc
         generation_duration = float(execution_plan.provider_generation_duration_s)
@@ -454,11 +471,17 @@ class VideoService:
             seed=int(shot.get("seed")) if shot.get("seed") is not None else None,
         )
         report = dict(result.get("generation_report") or self.last_generation_metadata or {})
-        shot["reference_mode"] = str(getattr(capabilities, "reference_mode", "") or report.get("reference_mode") or ("multi_reference" if multi_required else "first_frame_only"))
+        shot["reference_mode"] = str(
+            getattr(capabilities, "reference_mode", "")
+            or report.get("reference_mode")
+            or ("multi_reference" if multi_required else "first_frame_only")
+        )
         shot["references_validated"] = len(reference_assets)
         # 回退值只取 manifest 里真实标记为 sent 的项：first_frame_only Provider
         # 不得把已校验的角色图/场景图/尾帧虚报成已发送。
-        shot["references_sent"] = list(report.get("references_sent") or [item.get("type") for item in reference_manifest if item.get("sent")])
+        shot["references_sent"] = list(
+            report.get("references_sent") or [item.get("type") for item in reference_manifest if item.get("sent")]
+        )
         shot["references_sent_detail"] = list(report.get("references_sent_detail") or [])
         shot["control_types_sent"] = list(report.get("control_types_sent") or [])
         shot["provider_capabilities"] = dict(report.get("provider_capabilities") or {})
@@ -518,12 +541,16 @@ class VideoService:
             if role == "first_frame":
                 first_frame = first_frame or str(url)
             elif role == "end_frame":
-                assets.append(ReferenceAsset(url=str(url), type="end_frame", role="end_frame", provider_type="end_frame"))
+                assets.append(
+                    ReferenceAsset(url=str(url), type="end_frame", role="end_frame", provider_type="end_frame")
+                )
             elif not first_frame:
                 # 兼容旧 content：第一张未标 role 的图按历史语义作为首帧。
                 first_frame = str(url)
             else:
-                assets.append(ReferenceAsset(url=str(url), type=role or "reference_image", role=role or "reference_image"))
+                assets.append(
+                    ReferenceAsset(url=str(url), type=role or "reference_image", role=role or "reference_image")
+                )
         return (first_frame or None), assets, ("first_frame_reference" if first_frame else "text_only")
 
     def _resolution(self, resolution: str | None) -> str:
@@ -563,14 +590,17 @@ class VideoService:
             if execution_plan.dialogue_timing:
                 estimated_speech_ms = int(execution_plan.dialogue_end_ms or 0)
             else:
-                estimated_speech_ms = int(shot.get("estimated_speech_ms") or estimate_speech_ms(dialogue_text(shot.get("dialogue"))))
+                estimated_speech_ms = int(
+                    shot.get("estimated_speech_ms") or estimate_speech_ms(dialogue_text(shot.get("dialogue")))
+                )
             effective_duration_s = execution_plan.effective_duration_ms / 1000.0
         else:
             generation_duration = float(
-                shot.get("generation_duration_s")
-                or get_video_generation_duration_s(float(shot.get("duration") or 0))
+                shot.get("generation_duration_s") or get_video_generation_duration_s(float(shot.get("duration") or 0))
             )
-            estimated_speech_ms = int(shot.get("estimated_speech_ms") or estimate_speech_ms(dialogue_text(shot.get("dialogue"))))
+            estimated_speech_ms = int(
+                shot.get("estimated_speech_ms") or estimate_speech_ms(dialogue_text(shot.get("dialogue")))
+            )
             effective_duration_s = float(shot.get("duration") or 3.0)
         fields: list[tuple[str, str]] = [
             (
@@ -590,25 +620,42 @@ class VideoService:
         for char in selected_characters:
             appearance = char.get("appearance") or {}
             appearance_parts = [str(value) for value in appearance.values()] if isinstance(appearance, dict) else []
-            reference_lock = "preserve approved three-view character sheet identity" if char.get("reference_images") else ""
-            fields.extend([
-                ("character_identity", char.get("visual_prompt", "")),
-                ("character_features", ", ".join(char.get("key_features", []))),
-                ("character_appearance", ", ".join(appearance_parts)),
-                ("identity_lock", reference_lock),
-                ("wardrobe", char.get("wardrobe_lock", "")),
-            ])
+            reference_lock = (
+                "preserve approved three-view character sheet identity" if char.get("reference_images") else ""
+            )
+            fields.extend(
+                [
+                    ("character_identity", char.get("visual_prompt", "")),
+                    ("character_features", ", ".join(char.get("key_features", []))),
+                    ("character_appearance", ", ".join(appearance_parts)),
+                    ("identity_lock", reference_lock),
+                    ("wardrobe", char.get("wardrobe_lock", "")),
+                ]
+            )
         # --- 3. 场景、构图与首帧参考说明 ---
-        fields.extend([
-            (
-                "scene",
-                ", ".join(str(v) for v in (scene.get("visual_prompt", ""), scene.get("description", ""), scene.get("prop_lock", "")) if v),
-            ),
-            ("scene_description", shot.get("scene_description", "")),
-            ("approved_storyboard", shot.get("storyboard_prompt", "")),
-            ("first_frame_policy", "match the approved storyboard first frame for identity, costume, scene palette and composition"),
-            ("visual_notes", shot.get("visual_notes", "")),
-        ])
+        fields.extend(
+            [
+                (
+                    "scene",
+                    ", ".join(
+                        str(v)
+                        for v in (
+                            scene.get("visual_prompt", ""),
+                            scene.get("description", ""),
+                            scene.get("prop_lock", ""),
+                        )
+                        if v
+                    ),
+                ),
+                ("scene_description", shot.get("scene_description", "")),
+                ("approved_storyboard", shot.get("storyboard_prompt", "")),
+                (
+                    "first_frame_policy",
+                    "match the approved storyboard first frame for identity, costume, scene palette and composition",
+                ),
+                ("visual_notes", shot.get("visual_notes", "")),
+            ]
+        )
         if self._approved_storyboard_first_frame(shot):
             fields.append(
                 (
@@ -617,49 +664,51 @@ class VideoService:
                 )
             )
         # --- 4. 动作、情绪与运镜 ---
-        fields.extend([
-            ("character_action", shot.get("character_action", "")),
-            (
-                "action_beat",
-                "; ".join(
-                    f"{str(item.get('phase') or 'continuation')}:{str(item.get('text') or '')}"
-                    for item in (shot.get("action_beats") or [])
-                    if isinstance(item, dict)
-                ),
-            ),
-            (
-                "action_boundaries",
-                f"entry={shot.get('action_entry_state') or (shot.get('timing') or {}).get('action_entry_state') or ''}; "
-                f"exit={shot.get('action_exit_state') or (shot.get('timing') or {}).get('action_exit_state') or ''}",
-            ),
-            (
-                "gaze_and_axis",
-                f"gaze={shot.get('gaze_direction') or ''}; screen_axis={shot.get('screen_axis') or ''}",
-            ),
-            ("emotion", f"emotional tone: {shot.get('emotion', 'neutral')}"),
-            ("camera_movement", f"camera movement: {shot.get('camera_movement', '静止')}"),
-            ("camera_angle", f"camera angle: {shot.get('camera_angle', '正面')}"),
-            ("shot_type", f"shot size: {shot.get('shot_type', 'medium')}"),
-            (
-                "camera_strategy",
-                CAMERA_MOVEMENT_PROMPTS.get(
-                    str(shot.get("camera_movement") or "静止"),
-                    f"camera movement: {shot.get('camera_movement') or '静止'}",
-                ),
-            ),
-            (
-                "shot_timing",
+        fields.extend(
+            [
+                ("character_action", shot.get("character_action", "")),
                 (
-                    f"shot sequence {int(shot.get('sequence') or 0)}; "
-                    f"requested source duration {effective_duration_s:.3f}s; "
-                    f"estimated speech {estimated_speech_ms}ms; "
-                    f"dialogue and action must remain inside this shot; "
-                    f"timeline {int(shot.get('timeline_start_ms') or 0)}-{int(shot.get('timeline_end_ms') or 0)}ms; "
-                    f"timing metadata {shot.get('timing') or {}}"
+                    "action_beat",
+                    "; ".join(
+                        f"{str(item.get('phase') or 'continuation')}:{str(item.get('text') or '')}"
+                        for item in (shot.get("action_beats") or [])
+                        if isinstance(item, dict)
+                    ),
                 ),
-            ),
-            ("motion_policy", "cinematic short drama video, coherent motion, no subtitles, no watermark"),
-        ])
+                (
+                    "action_boundaries",
+                    f"entry={shot.get('action_entry_state') or (shot.get('timing') or {}).get('action_entry_state') or ''}; "
+                    f"exit={shot.get('action_exit_state') or (shot.get('timing') or {}).get('action_exit_state') or ''}",
+                ),
+                (
+                    "gaze_and_axis",
+                    f"gaze={shot.get('gaze_direction') or ''}; screen_axis={shot.get('screen_axis') or ''}",
+                ),
+                ("emotion", f"emotional tone: {shot.get('emotion', 'neutral')}"),
+                ("camera_movement", f"camera movement: {shot.get('camera_movement', '静止')}"),
+                ("camera_angle", f"camera angle: {shot.get('camera_angle', '正面')}"),
+                ("shot_type", f"shot size: {shot.get('shot_type', 'medium')}"),
+                (
+                    "camera_strategy",
+                    CAMERA_MOVEMENT_PROMPTS.get(
+                        str(shot.get("camera_movement") or "静止"),
+                        f"camera movement: {shot.get('camera_movement') or '静止'}",
+                    ),
+                ),
+                (
+                    "shot_timing",
+                    (
+                        f"shot sequence {int(shot.get('sequence') or 0)}; "
+                        f"requested source duration {effective_duration_s:.3f}s; "
+                        f"estimated speech {estimated_speech_ms}ms; "
+                        f"dialogue and action must remain inside this shot; "
+                        f"timeline {int(shot.get('timeline_start_ms') or 0)}-{int(shot.get('timeline_end_ms') or 0)}ms; "
+                        f"timing metadata {shot.get('timing') or {}}"
+                    ),
+                ),
+                ("motion_policy", "cinematic short drama video, coherent motion, no subtitles, no watermark"),
+            ]
+        )
         if execution_plan is not None and execution_plan.dialogue_timing:
             dialogue_timing = [item.to_dict() for item in execution_plan.dialogue_timing]
         else:
@@ -684,41 +733,64 @@ class VideoService:
         if continuity_profile.get("continuity_reference_used"):
             fields.append(("continuity", "previous shot last frame is used only for continuous action"))
         elif continuity_profile.get("continuity_reference_reason"):
-            fields.append(("continuity_reference", f"no previous-shot image used: {continuity_profile['continuity_reference_reason']}"))
+            fields.append(
+                (
+                    "continuity_reference",
+                    f"no previous-shot image used: {continuity_profile['continuity_reference_reason']}",
+                )
+            )
         if shot.get("reference_weights"):
             weights = shot.get("reference_weights") or {}
-            fields.append(("reference_weights",
-                f"locked reference weights: environment/style {float(weights.get('environment') or 0.45):.2f}, character/action {float(weights.get('action') or 0.30):.2f}"
-            ))
+            fields.append(
+                (
+                    "reference_weights",
+                    f"locked reference weights: environment/style {float(weights.get('environment') or 0.45):.2f}, character/action {float(weights.get('action') or 0.30):.2f}",
+                )
+            )
         if shot.get("reference_assets"):
-            roles = ", ".join(str(item.get("role", "")) for item in shot.get("reference_assets", []) if isinstance(item, dict))
-            fields.append(("reference_roles", f"validated persisted asset roles (not sent to {provider_label}): {roles}"))
+            roles = ", ".join(
+                str(item.get("role", "")) for item in shot.get("reference_assets", []) if isinstance(item, dict)
+            )
+            fields.append(
+                ("reference_roles", f"validated persisted asset roles (not sent to {provider_label}): {roles}")
+            )
         if shot.get("seedance_reference_manifest"):
             manifest = shot.get("seedance_reference_manifest") or []
             loaded = ", ".join(str(item.get("type", "")) for item in manifest if isinstance(item, dict))
-            fields.append(("validated_assets", f"validated manifest only; {provider_label} receives first frame only, not {loaded}"))
+            fields.append(
+                (
+                    "validated_assets",
+                    f"validated manifest only; {provider_label} receives first frame only, not {loaded}",
+                )
+            )
         if shot.get("continuity_profile"):
             profile = shot.get("continuity_profile") or {}
-            fields.append(("continuity_profile", f"text continuity rules: {', '.join(profile.get('editing_logic', []))}; no OpenPose/Depth control is sent"))
+            fields.append(
+                (
+                    "continuity_profile",
+                    f"text continuity rules: {', '.join(profile.get('editing_logic', []))}; no OpenPose/Depth control is sent",
+                )
+            )
             blocking = profile.get("character_blocking") or {}
             if blocking:
                 order = blocking.get("character_order_left_to_right") or []
-                fields.append(("blocking",
-                    "locked character blocking: "
-                    f"left-to-right order {', '.join(order) if order else 'single subject'}; "
-                    f"{blocking.get('axis_line', '180-degree axis locked')}; "
-                    f"eye-line {blocking.get('eye_line_target', 'locked')}; "
-                    f"{blocking.get('camera_movement_limit', '')}; "
-                    f"{blocking.get('skin_light_integration', '')}"
-                ))
+                fields.append(
+                    (
+                        "blocking",
+                        "locked character blocking: "
+                        f"left-to-right order {', '.join(order) if order else 'single subject'}; "
+                        f"{blocking.get('axis_line', '180-degree axis locked')}; "
+                        f"eye-line {blocking.get('eye_line_target', 'locked')}; "
+                        f"{blocking.get('camera_movement_limit', '')}; "
+                        f"{blocking.get('skin_light_integration', '')}",
+                    )
+                )
         if shot.get("consistency_context"):
             fields.append(("consistency_context", shot["consistency_context"]))
         if shot.get("skill_prompt_append"):
             fields.append(("skill_sop", shot["skill_prompt_append"]))
 
-        normalized_fields = [
-            (name, self._clean_prompt_part(value)) for name, value in fields
-        ]
+        normalized_fields = [(name, self._clean_prompt_part(value)) for name, value in fields]
         prompt, dropped = assemble_prompt(normalized_fields)
         critical = self._critical_fields(selected_characters, shot)
         prompt, readded = ensure_critical_fields(prompt, critical)
@@ -743,28 +815,39 @@ class VideoService:
             effective_duration_s = execution_plan.effective_duration_ms / 1000.0
         else:
             generation_duration = float(
-                shot.get("generation_duration_s")
-                or get_video_generation_duration_s(float(shot.get("duration") or 0))
+                shot.get("generation_duration_s") or get_video_generation_duration_s(float(shot.get("duration") or 0))
             )
             speech_ms = int(shot.get("estimated_speech_ms") or 0)
             effective_duration_s = float(shot.get("duration") or 3.0)
-        critical.append((
-            "duration_policy",
-            f"actual generated clip duration: {generation_duration:g} seconds",
-        ))
-        critical.append((
-            "speech_timing",
-            f"estimated speech duration: {speech_ms} ms",
-        ))
+        critical.append(
+            (
+                "duration_policy",
+                f"actual generated clip duration: {generation_duration:g} seconds",
+            )
+        )
+        critical.append(
+            (
+                "speech_timing",
+                f"estimated speech duration: {speech_ms} ms",
+            )
+        )
         for char in selected_characters[:2]:
             critical.append(("character_identity", str(char.get("visual_prompt", "") or char.get("name", ""))))
-        critical.extend([
-            ("character_action", str(shot.get("character_action", "") or "")),
-            ("emotion", f"emotional tone: {shot.get('emotion', 'neutral')}"),
-            ("camera_movement", CAMERA_MOVEMENT_PROMPTS.get(str(shot.get('camera_movement') or '静止'), f"camera movement: {shot.get('camera_movement', '静止')}")),
-            ("camera_angle", f"camera angle: {shot.get('camera_angle', '正面')}"),
-            ("shot_timing", f"requested duration {effective_duration_s:.3f}s"),
-        ])
+        critical.extend(
+            [
+                ("character_action", str(shot.get("character_action", "") or "")),
+                ("emotion", f"emotional tone: {shot.get('emotion', 'neutral')}"),
+                (
+                    "camera_movement",
+                    CAMERA_MOVEMENT_PROMPTS.get(
+                        str(shot.get("camera_movement") or "静止"),
+                        f"camera movement: {shot.get('camera_movement', '静止')}",
+                    ),
+                ),
+                ("camera_angle", f"camera angle: {shot.get('camera_angle', '正面')}"),
+                ("shot_timing", f"requested duration {effective_duration_s:.3f}s"),
+            ]
+        )
         return critical
 
     def _select_character_cards(self, shot: dict, characters: list[dict]) -> list[dict]:
@@ -810,7 +893,9 @@ class VideoService:
         text = text.replace("{", "").replace("}", "")
         return " ".join(text.split())
 
-    def _build_content(self, prompt: str, shot: dict, capabilities=None, reference_assets: list[ReferenceAsset] | None = None) -> list[dict]:
+    def _build_content(
+        self, prompt: str, shot: dict, capabilities=None, reference_assets: list[ReferenceAsset] | None = None
+    ) -> list[dict]:
         content: list[dict] = [{"type": "text", "text": prompt}]
 
         if capabilities is not None and not getattr(capabilities, "reference_image", False):
@@ -831,8 +916,7 @@ class VideoService:
             )
         if first_frame_url:
             logger.info(
-                "视频首帧参考传输: provider_budget=%s original_bytes=%s sent_bytes=%s "
-                "original_size=%s sent_size=%s",
+                "视频首帧参考传输: provider_budget=%s original_bytes=%s sent_bytes=%s original_size=%s sent_size=%s",
                 budget,
                 transform.get("original_bytes"),
                 transform.get("sent_bytes"),
@@ -865,9 +949,24 @@ class VideoService:
         first = self._approved_storyboard_first_frame(shot)
         first_url = self.reference_assets.to_image_url(first) if first else ""
         if first_url:
-            assets.append(ReferenceAsset(url=first_url, type="approved_storyboard_first_frame", role="first_frame", provider_type="first_frame", source_path=first))
+            assets.append(
+                ReferenceAsset(
+                    url=first_url,
+                    type="approved_storyboard_first_frame",
+                    role="first_frame",
+                    provider_type="first_frame",
+                    source_path=first,
+                )
+            )
         elif first:
-            invalid.append({"type": "approved_storyboard_first_frame", "role": "first_frame", "path": first, "reason": "reference_unreadable"})
+            invalid.append(
+                {
+                    "type": "approved_storyboard_first_frame",
+                    "role": "first_frame",
+                    "path": first,
+                    "reason": "reference_unreadable",
+                }
+            )
         supports_end_frame = supports_first_last_frame(capabilities)
         end_frame = str(shot.get("end_frame_path") or shot.get("last_frame_input_path") or "")
         candidates: list[tuple[str, str, str]] = []
@@ -878,9 +977,13 @@ class VideoService:
                 kind = str(item.get("type") or "reference_image")
                 if kind == "end_frame" and not supports_end_frame:
                     continue
-                if kind in {"openpose_source_frame", "pose_control", "openpose_control"} and not getattr(capabilities, "openpose", False):
+                if kind in {"openpose_source_frame", "pose_control", "openpose_control"} and not getattr(
+                    capabilities, "openpose", False
+                ):
                     continue
-                if kind in {"depth_source_frame", "depth_control", "depth_map"} and not getattr(capabilities, "depth", False):
+                if kind in {"depth_source_frame", "depth_control", "depth_map"} and not getattr(
+                    capabilities, "depth", False
+                ):
                     continue
                 candidates.append((kind, str(item.get("role") or ""), str(item["path"])))
         for path in shot.get("scene_reference_images") or []:
@@ -891,8 +994,7 @@ class VideoService:
                 candidates.append(("character_three_view", "identity_outfit_face_body_hair", str(path)))
         continuity_profile = self.consistency._profile(shot.get("continuity_profile"))
         if (
-            normalize_continuity_mode(continuity_profile.get("continuity_mode"), default="")
-            == "continuous_action"
+            normalize_continuity_mode(continuity_profile.get("continuity_mode"), default="") == "continuous_action"
             and continuity_profile.get("continuity_reference_used")
             and shot.get("continuity_reference_path")
         ):
@@ -907,7 +1009,9 @@ class VideoService:
             if not url:
                 invalid.append({"type": kind, "role": role or kind, "path": path, "reason": "reference_unreadable"})
                 continue
-            assets.append(ReferenceAsset(url=url, type=kind, role=role or kind, provider_type="reference_image", source_path=path))
+            assets.append(
+                ReferenceAsset(url=url, type=kind, role=role or kind, provider_type="reference_image", source_path=path)
+            )
         return assets, invalid
 
     @staticmethod
@@ -958,10 +1062,7 @@ class VideoService:
         first = [item for item in reference_assets if item.type == "approved_storyboard_first_frame"]
         end_frames = [item for item in reference_assets if item.type == "end_frame"]
         others = sorted(
-            (
-                item for item in reference_assets
-                if item.type not in {"approved_storyboard_first_frame", "end_frame"}
-            ),
+            (item for item in reference_assets if item.type not in {"approved_storyboard_first_frame", "end_frame"}),
             key=lambda item: reference_send_priority(item.type),
         )
         multi = bool(getattr(capabilities, "multiple_reference_images", False))
@@ -1029,7 +1130,15 @@ class VideoService:
             seen.add(key)
             image_url = self.reference_assets.to_image_url(value)
             if image_url:
-                manifest.append({"type": kind, "path": value, "loaded": True, "validated": True, "sent": kind == "approved_storyboard_first_frame"})
+                manifest.append(
+                    {
+                        "type": kind,
+                        "path": value,
+                        "loaded": True,
+                        "validated": True,
+                        "sent": kind == "approved_storyboard_first_frame",
+                    }
+                )
             elif required:
                 missing.append(f"{kind}:{value or '<empty>'}")
 

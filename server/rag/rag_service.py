@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
 import re
-from pathlib import Path
+
 from config import settings
 from services.security import validate_identifier
 
@@ -133,9 +133,7 @@ class RAGService:
             return results["documents"][0]
         return []
 
-    async def query_character_context(
-        self, project_id: str, character_name: str
-    ) -> list[str]:
+    async def query_character_context(self, project_id: str, character_name: str) -> list[str]:
         """查询角色相关上下文"""
 
         if self.chroma_client is None:

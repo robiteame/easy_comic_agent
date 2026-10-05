@@ -1,8 +1,5 @@
 import assert from 'node:assert/strict'
-import {
-  isCurrentProjectAsyncSnapshot,
-  isLatestResourceResponse,
-} from './asyncGuard.ts'
+import { isCurrentProjectAsyncSnapshot, isLatestResourceResponse } from './asyncGuard.ts'
 
 const request = { projectId: 'project-a', projectEpoch: 4, operationToken: 2 }
 assert.equal(isCurrentProjectAsyncSnapshot(request, request), true)

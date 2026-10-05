@@ -55,11 +55,7 @@ export function getWorkspacePanelAriaProps(tabId: string): WorkspacePanelAriaPro
  * 方向键 / Home / End 的目标下标（自动激活模式，首尾循环）。
  * 其它按键返回 null，调用方不得拦截，以免破坏常规键盘操作。
  */
-export function resolveWorkspaceTabIndex(
-  key: string,
-  currentIndex: number,
-  tabCount: number,
-): number | null {
+export function resolveWorkspaceTabIndex(key: string, currentIndex: number, tabCount: number): number | null {
   if (tabCount <= 0) return null
   if (currentIndex < 0 || currentIndex >= tabCount) return null
   switch (key) {

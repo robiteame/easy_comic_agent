@@ -10,13 +10,12 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402,F401
-
 from services.audio_mix_planner import (  # noqa: E402
     MixTrackInput,
     manifest_digest,
     plan_audio_mix,
 )
+from test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402,F401
 
 
 def _statement(plan, marker: str) -> str:
@@ -75,9 +74,7 @@ class PlanShapeTests(unittest.TestCase):
         self.assertIn("atrim=duration=60", final)
 
     def test_trim_and_loop(self) -> None:
-        trimmed = plan_audio_mix(
-            [_music(trim_start_ms=1000, trim_end_ms=2000)], 60.0, include_ambient_bed=False
-        )
+        trimmed = plan_audio_mix([_music(trim_start_ms=1000, trim_end_ms=2000)], 60.0, include_ambient_bed=False)
         chain = _statement(trimmed, "[t0]")
         self.assertIn("atrim=start=1", chain)
         self.assertIn("atrim=end=28", chain)
@@ -144,7 +141,10 @@ class DuckingTests(unittest.TestCase):
 
 class ReproducibilityTests(unittest.TestCase):
     def test_same_input_same_filter_and_manifest(self) -> None:
-        tracks = [_music(duck_amount_db=-9.0), MixTrackInput(id="sfx", kind="sfx", media_path="/x/a.wav", media_duration_ms=900, start_ms=5_000)]
+        tracks = [
+            _music(duck_amount_db=-9.0),
+            MixTrackInput(id="sfx", kind="sfx", media_path="/x/a.wav", media_duration_ms=900, start_ms=5_000),
+        ]
         first = plan_audio_mix(tracks, 42.0)
         second = plan_audio_mix(tracks, 42.0)
         self.assertEqual(first.filter_complex, second.filter_complex)
@@ -157,7 +157,9 @@ class ReproducibilityTests(unittest.TestCase):
         self.assertNotEqual(manifest_digest(base.track_manifest), manifest_digest(changed.track_manifest))
 
     def test_unsafe_numbers_are_clamped_not_rejected(self) -> None:
-        plan = plan_audio_mix([_music(volume=99.0, pan=5.0, fade_in_ms=-3, delay_ms=-9)], 30.0, include_ambient_bed=False)
+        plan = plan_audio_mix(
+            [_music(volume=99.0, pan=5.0, fade_in_ms=-3, delay_ms=-9)], 30.0, include_ambient_bed=False
+        )
         chain = _statement(plan, "[t0]")
         self.assertIn("volume=4", chain)
         self.assertIn("pan=stereo|c0=0*c0|c1=1*c1", chain)

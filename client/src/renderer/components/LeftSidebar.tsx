@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AppstoreAddOutlined,
   CaretDownOutlined,
@@ -22,7 +23,6 @@ import { beginProjectNavigationIntent, requestProjectNavigation } from '../servi
 import { useProjectStore } from '../stores/projectStore'
 import { useShotStore } from '../stores/shotStore'
 import { useTaskStore } from '../stores/taskStore'
-import { formatRelativeTime } from './taskCenterModel'
 import { OPEN_TASK_CENTER_EVENT } from './TaskCenter'
 import { OPEN_SETTINGS_EVENT } from './TopBar'
 
@@ -66,7 +66,8 @@ function cleanTitle(value?: string) {
 }
 
 const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed }) => {
-  const { projectId, parentProjectId, projectType, style, outputFormat, resolution, platform, setProject, reset } = useProjectStore()
+  const { projectId, parentProjectId, projectType, style, outputFormat, resolution, platform, setProject, reset } =
+    useProjectStore()
   const {
     setShots,
     selectShot,
@@ -92,7 +93,8 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
 
   const refreshProjects = () => {
     const requestId = ++projectListRequestRef.current
-    projectApi.list()
+    projectApi
+      .list()
       .then((nextProjects) => {
         if (mountedRef.current && requestId === projectListRequestRef.current) setProjects(nextProjects)
       })
@@ -129,7 +131,9 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
       if (!detail.projectId) return
       void handleSelectProject(detail.projectId).then(() => {
         if (detail.shotId) {
-          window.dispatchEvent(new CustomEvent('workspace:open-shot', { detail: { projectId: detail.projectId, shotId: detail.shotId } }))
+          window.dispatchEvent(
+            new CustomEvent('workspace:open-shot', { detail: { projectId: detail.projectId, shotId: detail.shotId } }),
+          )
         }
       })
     }
@@ -252,7 +256,10 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
       setShots(shotList || [])
       selectShot(shotList?.[0]?.id || null)
       setAwaitingStoryboardConfirm(projectDetail.status === 'storyboard_ready')
-      setVideoPath(projectDetail.video_path || (projectDetail.status === 'completed' ? `/output/projects/${projectDetail.id}/output/final.mp4` : ''))
+      setVideoPath(
+        projectDetail.video_path ||
+          (projectDetail.status === 'completed' ? `/output/projects/${projectDetail.id}/output/final.mp4` : ''),
+      )
       window.dispatchEvent(new CustomEvent(WORKSPACE_NAVIGATE_EVENT, { detail: { tab: 'script' } }))
     } catch (err: any) {
       if (requestId !== projectSelectionRequestRef.current) return
@@ -286,7 +293,8 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
         requestId !== importVideoRequestRef.current ||
         projectEpoch !== projectContextEpochRef.current ||
         useProjectStore.getState().projectId !== entryProjectId
-      ) return
+      )
+        return
       setVideoPath(result.video_path || `/output/projects/${entryProjectId}/output/final.mp4`)
       appendLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] 已导入成片：${file.name}`)
       refreshProjects()
@@ -296,7 +304,8 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
         requestId !== importVideoRequestRef.current ||
         projectEpoch !== projectContextEpochRef.current ||
         useProjectStore.getState().projectId !== entryProjectId
-      ) return
+      )
+        return
       message.error('成片导入失败：' + (err.message || '未知错误'))
     } finally {
       if (
@@ -354,7 +363,8 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
         requestId !== createEpisodeRequestRef.current ||
         projectEpoch !== projectContextEpochRef.current ||
         useProjectStore.getState().projectId !== sourceProjectId
-      ) return
+      )
+        return
       await handleSelectProject(episode.id)
       if (useProjectStore.getState().projectId === episode.id) {
         message.success('单集已创建')
@@ -364,7 +374,8 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
         requestId !== createEpisodeRequestRef.current ||
         projectEpoch !== projectContextEpochRef.current ||
         useProjectStore.getState().projectId !== sourceProjectId
-      ) return
+      )
+        return
       message.error('创建单集失败：' + (err.message || '未知错误'))
     }
   }
@@ -390,10 +401,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
           const deletingCurrent =
             currentBeforeDelete.projectId === project.id ||
             (project.project_type !== 'episode' && currentBeforeDelete.parentProjectId === project.id)
-          if (
-            deletingCurrent &&
-            !(await requestProjectNavigation(currentBeforeDelete.projectId, null))
-          ) {
+          if (deletingCurrent && !(await requestProjectNavigation(currentBeforeDelete.projectId, null))) {
             return
           }
           projectListRequestRef.current += 1
@@ -447,7 +455,10 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
             <span className={`project-item-icon${isEpisode ? '' : ' folder'}`}>
               {isEpisode ? <PlaySquareOutlined /> : <FolderOpenOutlined />}
             </span>
-            <span>{isEpisode ? `第 ${project.episode_number || 1} 集 · ` : ''}{title}</span>
+            <span>
+              {isEpisode ? `第 ${project.episode_number || 1} 集 · ` : ''}
+              {title}
+            </span>
           </div>
           <div className="project-item-meta">最近编辑：{formatUpdatedAt(project.updated_at)}</div>
         </button>
@@ -471,9 +482,19 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
   }
 
   const actionItems = [
-    { id: 'create', label: '新建项目', icon: <AppstoreAddOutlined />, onClick: () => window.dispatchEvent(new CustomEvent(OPEN_CREATE_PROJECT_EVENT)) },
+    {
+      id: 'create',
+      label: '新建项目',
+      icon: <AppstoreAddOutlined />,
+      onClick: () => window.dispatchEvent(new CustomEvent(OPEN_CREATE_PROJECT_EVENT)),
+    },
     { id: 'episode', label: '新建剧集', icon: <ProjectOutlined />, onClick: () => void handleCreateEpisode() },
-    { id: 'import-video', label: '导入成片', icon: <CloudUploadOutlined />, onClick: () => finalVideoInputRef.current?.click() },
+    {
+      id: 'import-video',
+      label: '导入成片',
+      icon: <CloudUploadOutlined />,
+      onClick: () => finalVideoInputRef.current?.click(),
+    },
   ]
 
   const openSettings = () => window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT))
@@ -579,11 +600,20 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
                 aria-haspopup="dialog"
               >
                 <UnorderedListOutlined />
-                {taskBadgeCount > 0 && <span className="sidebar-task-badge" aria-hidden="true">{taskBadgeCount}</span>}
+                {taskBadgeCount > 0 && (
+                  <span className="sidebar-task-badge" aria-hidden="true">
+                    {taskBadgeCount}
+                  </span>
+                )}
               </button>
             </Tooltip>
             <Tooltip title="系统设置" placement="right">
-              <button type="button" className="collapsed-project-btn sidebar-settings-btn" onClick={openSettings} aria-label="系统设置">
+              <button
+                type="button"
+                className="collapsed-project-btn sidebar-settings-btn"
+                onClick={openSettings}
+                aria-label="系统设置"
+              >
                 <ControlOutlined />
               </button>
             </Tooltip>
@@ -597,7 +627,9 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
               aria-haspopup="dialog"
               aria-label={'任务中心，' + taskBadgeLabel}
             >
-              <span className="linear-action-icon"><UnorderedListOutlined /></span>
+              <span className="linear-action-icon">
+                <UnorderedListOutlined />
+              </span>
               <span className="sidebar-task-copy">
                 <span>任务中心</span>
                 <em>{taskBadgeLabel}</em>
@@ -605,7 +637,9 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
               {taskBadgeCount > 0 && <span className="sidebar-task-badge">{taskBadgeCount}</span>}
             </button>
             <button type="button" className="linear-action sidebar-settings-btn" onClick={openSettings}>
-              <span className="linear-action-icon"><ControlOutlined /></span>
+              <span className="linear-action-icon">
+                <ControlOutlined />
+              </span>
               <span>系统设置</span>
             </button>
           </>

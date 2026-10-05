@@ -22,8 +22,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 import httpx  # noqa: E402
 
 from config import settings  # noqa: E402
@@ -33,6 +31,7 @@ from services.providers.http_retry import request_with_retry  # noqa: E402
 from services.providers.registry import get_adapter  # noqa: E402
 from services.providers.video_dashscope_wanx import DashscopeWanxVideoAdapter  # noqa: E402
 from services.reference_asset_service import ReferenceAssetService  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _endpoint(base_url: str = "") -> EndpointConfig:
@@ -103,9 +102,7 @@ class ApiBaseNormalizationTests(unittest.TestCase):
         self.assertIs(get_adapter("video", "dashscope-wanx"), DashscopeWanxVideoAdapter)
 
     def test_compatible_mode_url_is_normalized(self) -> None:
-        adapter = DashscopeWanxVideoAdapter(
-            _endpoint("https://llm-x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1")
-        )
+        adapter = DashscopeWanxVideoAdapter(_endpoint("https://llm-x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"))
         self.assertEqual(
             adapter._create_url(),
             "https://llm-x.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
@@ -159,7 +156,10 @@ class ReferenceBudgetTests(unittest.TestCase):
         self.assertTrue(oversized.startswith("data:image/png;base64,"))
 
     def test_http_url_passthrough(self) -> None:
-        self.assertEqual(self.service.to_image_url("https://cdn.example.test/a.png", max_bytes=1024), "https://cdn.example.test/a.png")
+        self.assertEqual(
+            self.service.to_image_url("https://cdn.example.test/a.png", max_bytes=1024),
+            "https://cdn.example.test/a.png",
+        )
 
 
 class HttpRetryTests(unittest.TestCase):
@@ -167,7 +167,9 @@ class HttpRetryTests(unittest.TestCase):
         return asyncio.run(request_with_retry(client, "POST", "https://x.test", attempts=3, backoff_seconds=0))
 
     def test_transport_errors_are_retried(self) -> None:
-        client = _FakeAsyncClient([httpx.ReadError("reset"), httpx.ConnectError("boom"), _FakeResponse(status_code=200)])
+        client = _FakeAsyncClient(
+            [httpx.ReadError("reset"), httpx.ConnectError("boom"), _FakeResponse(status_code=200)]
+        )
         response = self._run(client)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(client.requests), 3)
@@ -191,7 +193,9 @@ class HttpRetryTests(unittest.TestCase):
         self.assertEqual(len(client.requests), 3)
 
     def test_last_transient_status_returned_when_retries_exhausted(self) -> None:
-        client = _FakeAsyncClient([_FakeResponse(status_code=503), _FakeResponse(status_code=503), _FakeResponse(status_code=503)])
+        client = _FakeAsyncClient(
+            [_FakeResponse(status_code=503), _FakeResponse(status_code=503), _FakeResponse(status_code=503)]
+        )
         response = self._run(client)
         self.assertEqual(response.status_code, 503)
         self.assertEqual(len(client.requests), 3)
@@ -224,7 +228,10 @@ class CreateTaskBudgetGuardTests(unittest.TestCase):
         sent = client.requests[0]["json"]["input"]["img_url"]
         raw = base64.b64decode(sent.partition(",")[2])
         self.assertLessEqual(len(raw), settings.VIDEO_REFERENCE_INLINE_BUDGET_BYTES)
-        self.assertEqual(client.requests[0]["url"], "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis")
+        self.assertEqual(
+            client.requests[0]["url"],
+            "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+        )
         self.assertEqual(client.requests[0]["headers"]["X-DashScope-Async"], "enable")
 
     def test_create_task_rejects_uncompressible_reference(self) -> None:

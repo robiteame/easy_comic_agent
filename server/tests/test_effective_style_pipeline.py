@@ -16,8 +16,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from api.routes import script as script_route  # noqa: E402
 from services.skill_config_service import (  # noqa: E402
     DEFAULT_AGENT_CONFIG,
@@ -25,7 +23,7 @@ from services.skill_config_service import (  # noqa: E402
     resolve_effective_style,
 )
 from services.style_templates import style_prompt_params, style_template  # noqa: E402
-
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 LEGACY_SKILL = {
     "script_agent": {**DEFAULT_AGENT_CONFIG, "style_template_id": "anime"},
@@ -52,7 +50,11 @@ class ResolveEffectiveStyleTests(unittest.TestCase):
     def test_explicit_override_with_realistic_skill_keeps_realistic(self) -> None:
         skill = {
             "script_agent": {**DEFAULT_AGENT_CONFIG, "style_template_id": "realistic", "style_override_enabled": True},
-            "storyboard_agent": {**DEFAULT_AGENT_CONFIG, "style_template_id": "realistic", "style_override_enabled": True},
+            "storyboard_agent": {
+                **DEFAULT_AGENT_CONFIG,
+                "style_template_id": "realistic",
+                "style_override_enabled": True,
+            },
         }
         meta = resolve_effective_style("anime", skill, "script_agent")
         self.assertEqual(meta["effective_style"], "realistic")

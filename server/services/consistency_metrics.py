@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from config import settings
 
@@ -34,9 +34,11 @@ def payload_metrics(
 ) -> dict[str, Any]:
     """由真实请求载荷派生确定性指标。"""
 
-    sent_items = references_sent if isinstance(references_sent, list) else [
-        {"type": "reference_image", "index": index} for index in range(int(references_sent or 0))
-    ]
+    sent_items = (
+        references_sent
+        if isinstance(references_sent, list)
+        else [{"type": "reference_image", "index": index} for index in range(int(references_sent or 0))]
+    )
     sent_roles = {str(item.get("role") or item.get("type") or "") for item in sent_items if isinstance(item, dict)}
     required = [str(item) for item in (required_roles or []) if item]
     covered = [role for role in required if role in sent_roles]
@@ -163,5 +165,7 @@ def combine_report(payload: dict[str, Any], visual: dict[str, Any]) -> dict[str,
         **dict(payload or {}),
         "visual_validation": dict(visual or {}),
         "measurable": True,
-        "claim_scope": "request_payload_and_vlm" if (visual or {}).get("status") == "passed" else "request_payload_only",
+        "claim_scope": "request_payload_and_vlm"
+        if (visual or {}).get("status") == "passed"
+        else "request_payload_only",
     }

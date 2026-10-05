@@ -56,8 +56,7 @@ function normalizeAgentConfig(source: Record<string, any> | undefined | null): A
   merged.system_prompt =
     typeof merged.system_prompt === 'string' ? merged.system_prompt.slice(0, SYSTEM_PROMPT_MAX_LENGTH) : ''
   merged.camera_composition = typeof merged.camera_composition === 'string' ? merged.camera_composition : ''
-  merged.custom_style_keywords =
-    typeof merged.custom_style_keywords === 'string' ? merged.custom_style_keywords : ''
+  merged.custom_style_keywords = typeof merged.custom_style_keywords === 'string' ? merged.custom_style_keywords : ''
   merged.style_template_id = typeof merged.style_template_id === 'string' ? merged.style_template_id : ''
   return merged as AgentSkillConfig
 }

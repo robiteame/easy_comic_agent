@@ -10,16 +10,14 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-
 _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from models import Character, Project, SceneAsset, Shot
 from models.base import Base
 from services import security, storage_service
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class StorageReferenceGcTests(unittest.TestCase):

@@ -18,10 +18,10 @@ import logging
 import math
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, BeforeValidator, Field, ValidationError, ValidationInfo, AliasChoices
+from pydantic import AliasChoices, BaseModel, BeforeValidator, ConfigDict, Field, ValidationError, ValidationInfo
 
 from config import settings
-from services.consistency_service import CONTINUITY_MODES, normalize_continuity_mode
+from services.consistency_service import normalize_continuity_mode
 from services.shot_dialogue import MAX_DIALOGUE_LINES_PER_SHOT, MAX_TIMELINE_MS
 from services.style_templates import STYLE_TEMPLATES
 
@@ -469,12 +469,16 @@ class CharacterOutput(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: Annotated[str, _text(MAX_CHARACTER_NAME)] = ""
-    appearance: Annotated[dict[str, str], _mapping(MAX_APPEARANCE_KEYS, MAX_APPEARANCE_VALUE_CHARS)] = Field(default_factory=dict)
+    appearance: Annotated[dict[str, str], _mapping(MAX_APPEARANCE_KEYS, MAX_APPEARANCE_VALUE_CHARS)] = Field(
+        default_factory=dict
+    )
     personality: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
     visual_prompt: Annotated[str, _text(settings.LLM_MAX_PROMPT_CHARS)] = ""
     negative_prompt: Annotated[str, _text(settings.LLM_MAX_PROMPT_CHARS)] = ""
     voice_type: Annotated[str, _text(40)] = ""
-    key_features: Annotated[list[str], _bounded_list(MAX_FEATURE_ITEMS, MAX_FEATURE_CHARS)] = Field(default_factory=list)
+    key_features: Annotated[list[str], _bounded_list(MAX_FEATURE_ITEMS, MAX_FEATURE_CHARS)] = Field(
+        default_factory=list
+    )
     default_outfit: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
     seed: Annotated[int | None, _clamped_number(0, MAX_SEED, None, label="seed")] = None
 
@@ -486,10 +490,14 @@ class SceneOutput(BaseModel):
 
     scene_number: Annotated[int, _clamped_number(1, 9999, 1, label="场景序号")] = 1
     location: Annotated[str, _text(200)] = ""
-    characters_in_scene: Annotated[list[str], _bounded_list(MAX_CHARACTERS_IN_SCENE, MAX_CHARACTER_NAME)] = Field(default_factory=list)
+    characters_in_scene: Annotated[list[str], _bounded_list(MAX_CHARACTERS_IN_SCENE, MAX_CHARACTER_NAME)] = Field(
+        default_factory=list
+    )
     actions: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
     description: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
-    dialogue: Annotated[list[DialogueOutput], _model_list(DialogueOutput, settings.LLM_MAX_DIALOGUE_LINES, "dialogue")] = Field(default_factory=list)
+    dialogue: Annotated[
+        list[DialogueOutput], _model_list(DialogueOutput, settings.LLM_MAX_DIALOGUE_LINES, "dialogue")
+    ] = Field(default_factory=list)
     emotion: Annotated[str, _choice(normalize_emotion, "neutral")] = "neutral"
     camera_suggestion: Annotated[str, _choice(normalize_shot_type, "medium")] = "medium"
 
@@ -539,7 +547,9 @@ class ShotOutput(BaseModel):
     source_scene_number: Annotated[int, _clamped_number(1, 9999, 1, label="场景序号")] = 1
     shot_type: Annotated[str, _choice(normalize_shot_type, "medium")] = "medium"
     scene_description: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
-    characters_in_scene: Annotated[list[str], _bounded_list(MAX_CHARACTERS_IN_SCENE, MAX_CHARACTER_NAME)] = Field(default_factory=list)
+    characters_in_scene: Annotated[list[str], _bounded_list(MAX_CHARACTERS_IN_SCENE, MAX_CHARACTER_NAME)] = Field(
+        default_factory=list
+    )
     character_action: Annotated[str, _text(settings.LLM_MAX_TEXT_CHARS)] = ""
     action_beats: Annotated[list[ActionBeatOutput], _action_beat_list()] = Field(default_factory=list)
     gaze_direction: Annotated[str, _text(200)] = ""
@@ -553,7 +563,12 @@ class ShotOutput(BaseModel):
     camera_angle: Annotated[str, _choice(normalize_camera_angle, "正面")] = "正面"
     camera_movement: Annotated[str, _choice(normalize_camera_movement, "静止")] = "静止"
     emotion: Annotated[str, _choice(normalize_emotion, "neutral")] = "neutral"
-    duration: Annotated[float, _clamped_number(settings.MIN_SHOT_DURATION_SECONDS, settings.MAX_SHOT_DURATION_SECONDS, 3.0, cast=float, label="时长")] = 3.0
+    duration: Annotated[
+        float,
+        _clamped_number(
+            settings.MIN_SHOT_DURATION_SECONDS, settings.MAX_SHOT_DURATION_SECONDS, 3.0, cast=float, label="时长"
+        ),
+    ] = 3.0
     estimated_speech_ms: Annotated[int, _clamped_number(0, 600_000, 0, cast=int, label="对白预计时长")] = 0
     transition: Annotated[str, _choice(normalize_transition, "cut")] = "cut"
     continuity_mode: Annotated[str, _continuity_mode()] = ""
@@ -575,8 +590,12 @@ class ScriptParseOutput(BaseModel):
     title: Annotated[str, _text(120)] = ""
     genre: Annotated[str, _text(60)] = ""
     style_suggestion: Annotated[str, _text(40)] = "anime"
-    characters: Annotated[list[CharacterOutput], _model_list(CharacterOutput, settings.LLM_MAX_CHARACTERS, "characters")] = Field(default_factory=list)
-    script_scenes: Annotated[list[SceneOutput], _model_list(SceneOutput, settings.LLM_MAX_SCENES, "script_scenes")] = Field(default_factory=list)
+    characters: Annotated[
+        list[CharacterOutput], _model_list(CharacterOutput, settings.LLM_MAX_CHARACTERS, "characters")
+    ] = Field(default_factory=list)
+    script_scenes: Annotated[list[SceneOutput], _model_list(SceneOutput, settings.LLM_MAX_SCENES, "script_scenes")] = (
+        Field(default_factory=list)
+    )
     logic_issues: Annotated[list[str], _bounded_list(MAX_LOGIC_ISSUES, 300)] = Field(default_factory=list)
 
 
@@ -585,7 +604,9 @@ class StoryboardOutput(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    shots: Annotated[list[ShotOutput], _model_list(ShotOutput, settings.LLM_MAX_SHOTS, "shots")] = Field(default_factory=list)
+    shots: Annotated[list[ShotOutput], _model_list(ShotOutput, settings.LLM_MAX_SHOTS, "shots")] = Field(
+        default_factory=list
+    )
 
 
 # --- 顶层入口 ---
@@ -624,7 +645,11 @@ def _normalize_script_aliases(payload: dict[str, Any]) -> dict[str, Any]:
 
     normalized = dict(payload)
     raw_characters = next(
-        (payload.get(key) for key in ("characters", "character_list", "人物", "角色") if payload.get(key) not in (None, "")),
+        (
+            payload.get(key)
+            for key in ("characters", "character_list", "人物", "角色")
+            if payload.get(key) not in (None, "")
+        ),
         None,
     )
     if isinstance(raw_characters, dict):

@@ -13,8 +13,8 @@ import socket
 import stat
 import uuid
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
-from typing import Iterable
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -124,7 +124,11 @@ def validate_script_upload(path: str | Path, extension: str, content_type: str |
         ".txt": {"text/plain", "text/markdown", "application/octet-stream", ""},
         ".md": {"text/plain", "text/markdown", "application/octet-stream", ""},
         ".markdown": {"text/plain", "text/markdown", "application/octet-stream", ""},
-        ".docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/octet-stream", ""},
+        ".docx": {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/octet-stream",
+            "",
+        },
     }
     if mime not in allowed_mimes.get(extension.lower(), set()):
         raise ValueError("上传文件 MIME 类型不匹配")
@@ -267,7 +271,9 @@ def _validate_remote_target(url: str) -> tuple[str, str, tuple[str, ...]]:
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".local"):
         raise ValueError("禁止访问本机或内网资源")
     try:
-        addresses = tuple(dict.fromkeys(item[4][0] for item in socket.getaddrinfo(hostname, parsed.port, type=socket.SOCK_STREAM)))
+        addresses = tuple(
+            dict.fromkeys(item[4][0] for item in socket.getaddrinfo(hostname, parsed.port, type=socket.SOCK_STREAM))
+        )
     except OSError as exc:
         raise ValueError("远程资源域名无法解析") from exc
     if not addresses:
@@ -277,7 +283,14 @@ def _validate_remote_target(url: str) -> tuple[str, str, tuple[str, ...]]:
             import ipaddress
 
             ip = ipaddress.ip_address(address)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+                or ip.is_unspecified
+            ):
                 raise ValueError("禁止访问本机或内网资源")
         except ValueError as exc:
             # Preserve our explicit policy error; malformed addresses are also

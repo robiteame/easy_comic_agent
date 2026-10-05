@@ -2,9 +2,9 @@ from typing import Annotated
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
-from services.llm_service import LLMService
 
 from api.schemas import GenerationPrompt, Identifier
+from services.llm_service import LLMService
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 llm_service = LLMService()
@@ -49,7 +49,9 @@ async def chat_with_agent(data: ChatRequest):
     if data.current_shots:
         shots_summary = "当前镜头列表：\n"
         for s in data.current_shots[:10]:
-            shots_summary += f"- {s.get('id', '?')}: {s.get('shot_type', '?')} | {s.get('scene_description', '')[:50]}\n"
+            shots_summary += (
+                f"- {s.get('id', '?')}: {s.get('shot_type', '?')} | {s.get('scene_description', '')[:50]}\n"
+            )
 
     user_prompt = f"{shots_summary}\n用户指令：{data.message}"
 

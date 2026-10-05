@@ -6,6 +6,8 @@ AI漫剧Agent 前端是一个基于 **Electron + React + TypeScript** 的桌面�
 
 **核心定位**：五栏工作台 → 剧本驱动 → 实时预览 → 一键出片
 
+**代码规范**：TS/TSX/JSON 由 Biome 统一 lint + format（配置在仓库根 `biome.json`：单引号、JSX 属性双引号、无分号、2 空格、行宽 120；CSS 暂不格式化）。提交前 lefthook 会自动修复暂存文件；CI 中 `biome check client package.json` 为门禁。改动客户端代码后在仓库根跑 `pnpm lint`（自动修复用 `pnpm lint:fix`）。
+
 ---
 
 ## 技术栈

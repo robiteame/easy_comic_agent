@@ -51,7 +51,15 @@ class VideoCapabilities:
     duration_step: float = 1.0  # 时长步进（秒）
     camera_movement_prompt: bool = False  # 运镜是否通过 prompt 文本驱动
     supported_camera_movements: tuple[str, ...] = (
-        "静止", "推", "拉", "摇", "移", "跟", "升降", "环绕", "缓慢推进",
+        "静止",
+        "推",
+        "拉",
+        "摇",
+        "移",
+        "跟",
+        "升降",
+        "环绕",
+        "缓慢推进",
     )
     timed_dialogue: bool = False  # 是否支持带时间轴的多句对白
     reference_mode: str = "text_only"  # first_frame_only / multi_reference / model_conditional / text_only

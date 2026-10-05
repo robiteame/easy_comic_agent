@@ -7,8 +7,17 @@
   },
   "packageManager": "pnpm@11.15.1",
   "scripts": {
+    "prepare": "lefthook install",
+    "lint": "pnpm exec biome check client package.json",
+    "lint:fix": "pnpm exec biome check --write client package.json",
+    "lint:server": "ruff check server && ruff format --check server",
+    "lint:server:fix": "ruff check --fix server && ruff format server",
     "typecheck": "pnpm --dir client run typecheck",
     "test": "pnpm --dir client run test:all",
     "build": "pnpm --dir client run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "lefthook": "^2.1.16"
   }
 }

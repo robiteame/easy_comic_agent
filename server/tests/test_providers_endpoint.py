@@ -13,12 +13,11 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from services import model_config_service
 from services.llm_service import LLMService
 from services.providers import UnknownProtocolError, get_adapter
 from services.providers.endpoint import EndpointConfig, get_endpoint
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _isolated_store():
@@ -29,7 +28,12 @@ def _isolated_store():
 class EndpointConfigTests(unittest.TestCase):
     def test_script_endpoint_defaults_follow_legacy_llm_provider(self) -> None:
         settings_obj = model_config_service.settings
-        original = (settings_obj.LLM_PROVIDER, settings_obj.MIMO_API_KEY, settings_obj.MIMO_BASE_URL, settings_obj.MIMO_MODEL)
+        original = (
+            settings_obj.LLM_PROVIDER,
+            settings_obj.MIMO_API_KEY,
+            settings_obj.MIMO_BASE_URL,
+            settings_obj.MIMO_MODEL,
+        )
         try:
             settings_obj.LLM_PROVIDER = "mimo"
             settings_obj.MIMO_API_KEY = "mimo-key"
@@ -42,7 +46,12 @@ class EndpointConfigTests(unittest.TestCase):
             self.assertEqual(endpoint.model, "mimo-v2.5")
             self.assertTrue(endpoint.param("max_tokens"))
         finally:
-            settings_obj.LLM_PROVIDER, settings_obj.MIMO_API_KEY, settings_obj.MIMO_BASE_URL, settings_obj.MIMO_MODEL = original
+            (
+                settings_obj.LLM_PROVIDER,
+                settings_obj.MIMO_API_KEY,
+                settings_obj.MIMO_BASE_URL,
+                settings_obj.MIMO_MODEL,
+            ) = original
 
     def test_stored_json_overrides_env_defaults(self) -> None:
         public_dns = [(2, 1, 6, "", ("93.184.216.34", 443))]
@@ -91,7 +100,12 @@ class EndpointConfigTests(unittest.TestCase):
 
     def test_image_defaults_follow_legacy_image_provider(self) -> None:
         settings_obj = model_config_service.settings
-        original = (settings_obj.IMAGE_PROVIDER, settings_obj.ARK_API_KEY, settings_obj.SEEDDANCE_BASE_URL, settings_obj.SEEDREAM_MODEL)
+        original = (
+            settings_obj.IMAGE_PROVIDER,
+            settings_obj.ARK_API_KEY,
+            settings_obj.SEEDDANCE_BASE_URL,
+            settings_obj.SEEDREAM_MODEL,
+        )
         try:
             settings_obj.IMAGE_PROVIDER = "Doubao-Seedream-5.0-lite"
             settings_obj.ARK_API_KEY = "ark-key"
@@ -103,7 +117,12 @@ class EndpointConfigTests(unittest.TestCase):
             settings_obj.IMAGE_PROVIDER = "stability"
             self.assertEqual(get_endpoint("image").protocol, "stability")
         finally:
-            settings_obj.IMAGE_PROVIDER, settings_obj.ARK_API_KEY, settings_obj.SEEDDANCE_BASE_URL, settings_obj.SEEDREAM_MODEL = original
+            (
+                settings_obj.IMAGE_PROVIDER,
+                settings_obj.ARK_API_KEY,
+                settings_obj.SEEDDANCE_BASE_URL,
+                settings_obj.SEEDREAM_MODEL,
+            ) = original
 
 
 class LegacyMigrationTests(unittest.TestCase):
@@ -172,7 +191,14 @@ class LegacyMigrationTests(unittest.TestCase):
                 patch.object(model_config_service.socket, "getaddrinfo", return_value=public_dns),
             ):
                 model_config_service._save_raw(
-                    {"script": {"provider": "openai", "api_key": "k", "base_url": "https://s.example.test/v1", "model": "m"}}
+                    {
+                        "script": {
+                            "provider": "openai",
+                            "api_key": "k",
+                            "base_url": "https://s.example.test/v1",
+                            "model": "m",
+                        }
+                    }
                 )
                 categories = model_config_service.get_model_config()["categories"]
                 script = categories["script"]
@@ -201,9 +227,14 @@ class ScriptFallbackTests(unittest.TestCase):
             self.assertIsNone(service._fallback_endpoint)
         finally:
             settings_obj.OPENAI_API_KEY, settings_obj.OPENAI_BASE_URL, settings_obj.LLM_PROVIDER = original
+
     async def _exercise_fallback(self) -> tuple[str, str]:
-        primary = EndpointConfig(protocol="openai-chat", base_url="https://primary.example.test/v1", api_key="k1", model="m1")
-        backup = EndpointConfig(protocol="openai-chat", base_url="https://backup.example.test/v1", api_key="k2", model="m2")
+        primary = EndpointConfig(
+            protocol="openai-chat", base_url="https://primary.example.test/v1", api_key="k1", model="m1"
+        )
+        backup = EndpointConfig(
+            protocol="openai-chat", base_url="https://backup.example.test/v1", api_key="k2", model="m2"
+        )
 
         class FakeAdapter:
             def __init__(self, endpoint):

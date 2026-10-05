@@ -23,8 +23,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from agent.output_schemas import parse_storyboard_output  # noqa: E402
 from models.shot import Shot  # noqa: E402
 from services import dialogue_audio  # noqa: E402
@@ -40,6 +38,7 @@ from services.shot_dialogue import (  # noqa: E402
 )
 from services.shot_version_service import apply_snapshot_to_shot, capture_snapshot  # noqa: E402
 from services.subtitle_service import DialogueLineInput, ShotDialogueInput, cues_from_shots  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 CHARACTERS = [
     {"name": "林夏", "voice_id": "voice_linxia"},
@@ -129,7 +128,9 @@ class _FakeTTS:
         self.calls: list[dict] = []
         self.output_dir = root  # 与 TTSService.output_dir 同构（拼接目标目录）
 
-    async def generate_dialogue(self, *, text: str, voice_id: str = "", emotion: str = "neutral", project_id: str = "", shot_id: str = "") -> str:
+    async def generate_dialogue(
+        self, *, text: str, voice_id: str = "", emotion: str = "neutral", project_id: str = "", shot_id: str = ""
+    ) -> str:
         self.calls.append({"text": text, "voice_id": voice_id, "emotion": emotion, "shot_id": shot_id})
         path = self.root / f"{shot_id}.wav"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +229,10 @@ class DialogueTrackRegressionTests(unittest.TestCase):
         with self.assertLogs("services.shot_dialogue", level="WARNING") as logs:
             self._run(lines)
         self.assertEqual(self.fake_tts.calls[0]["voice_id"], "", "未登记说话人使用端点默认音色")
-        self.assertTrue(any("神秘人" in message and "voice" not in message.split("speaker=")[0] for message in logs.output), logs.output)
+        self.assertTrue(
+            any("神秘人" in message and "voice" not in message.split("speaker=")[0] for message in logs.output),
+            logs.output,
+        )
 
     def test_single_line_keeps_direct_output(self) -> None:
         lines = [DialogueLine(speaker="林夏", line="只有一句。")]
@@ -291,7 +295,14 @@ class StoryboardSchemaTests(unittest.TestCase):
                     "scene_description": "教室",
                     "characters_in_scene": ["林夏", "顾言"],
                     "dialogue": [
-                        {"speaker": "林夏", "line": "早上好", "emotion": "happy", "action": "挥手", "start_ms": 0, "end_ms": 1200},
+                        {
+                            "speaker": "林夏",
+                            "line": "早上好",
+                            "emotion": "happy",
+                            "action": "挥手",
+                            "start_ms": 0,
+                            "end_ms": 1200,
+                        },
                         {"character": "顾言", "line": "你也好", "emotion": "平静"},
                     ],
                 }
@@ -370,9 +381,10 @@ class ShotApiDialogueTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        from fastapi.testclient import TestClient
+
         from db import init_db
         from main import app
-        from fastapi.testclient import TestClient
 
         init_db()
         cls.client = TestClient(app)

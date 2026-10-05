@@ -13,13 +13,13 @@ from services.job_debug import record_api_request, record_api_result
 from services.providers.base import TTSRequest
 from services.providers.endpoint import get_endpoint
 from services.providers.registry import get_adapter
+from services.providers.tts_mimo import MIMO_TTS_VOICES, VOICE_ALIASES
+from services.providers.tts_mimo import normalize_mimo_voice as _normalize_mimo_voice
 from services.providers.usage import (
     CAPABILITY_TTS,
     ERROR_CODE_PROVIDER_CALL_FAILED,
     adapter_usage_for_request,
 )
-from services.providers.tts_mimo import VOICE_ALIASES, MIMO_TTS_VOICES
-from services.providers.tts_mimo import normalize_mimo_voice as _normalize_mimo_voice
 from services.security import atomic_write_bytes, safe_path, validate_identifier
 from services.storage_service import StorageQuotaExceeded, StorageService
 
@@ -89,7 +89,9 @@ class TTSService:
                 duration_ms=int((time.monotonic() - started) * 1000),
                 scope=scope,
             )
-            record_api_result(debug_request_id, api="TTS Synthesize", status="error", message=f"TTS API 调用失败：{exc}")
+            record_api_result(
+                debug_request_id, api="TTS Synthesize", status="error", message=f"TTS API 调用失败：{exc}"
+            )
             raise
         usage_service.record_metadata(
             metadata,

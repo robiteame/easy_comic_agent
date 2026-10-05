@@ -1,26 +1,41 @@
-import sys
 import asyncio
 import logging
 import shutil
 import subprocess
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from api.routes import asset, audio_track, budget, character, chat, graph, jobs, project, quality_review, regeneration_queue, render, script, settings as settings_routes, shot, subtitle  # noqa: E402
+from api.routes import (  # noqa: E402
+    asset,
+    audio_track,
+    budget,
+    character,
+    chat,
+    graph,
+    jobs,
+    project,
+    quality_review,
+    regeneration_queue,
+    render,
+    script,
+    shot,
+    subtitle,
+)
+from api.routes import settings as settings_routes
 from api.websocket import jobs_manager, ws_manager  # noqa: E402
 from config import settings as app_settings  # noqa: E402
 from db import SessionLocal, engine, init_db  # noqa: E402
 from services import job_center  # noqa: E402
 from services.error_reporter import install_log_redaction  # noqa: E402
-from services.task_registry import recover_interrupted  # noqa: E402
 from services.local_auth import (  # noqa: E402
     configured_token,
     is_allowed_websocket_origin,
@@ -28,6 +43,7 @@ from services.local_auth import (  # noqa: E402
     is_token_valid,
     request_token,
 )
+from services.task_registry import recover_interrupted  # noqa: E402
 
 
 @asynccontextmanager
@@ -147,6 +163,7 @@ async def local_auth_middleware(request: Request, call_next):
     ):
         return await call_next(request)
     return JSONResponse(status_code=401, content={"detail": "invalid local auth token"})
+
 
 app.include_router(project.router)
 app.include_router(asset.router)
@@ -291,7 +308,9 @@ def _check_ffmpeg() -> None:
     if not executable:
         raise RuntimeError("ffmpeg unavailable")
     try:
-        subprocess.run([executable, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=5)
+        subprocess.run(
+            [executable, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=5
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError("ffmpeg unavailable") from exc
 

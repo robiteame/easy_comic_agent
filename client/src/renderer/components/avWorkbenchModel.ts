@@ -79,8 +79,7 @@ export function buildTrackClips(tracks: AudioTrackDto[], totalDurationMs: number
   return tracks.map((track) => {
     const span = track.kind === 'dialogue' ? track.shot_span : undefined
     const start = (span ? span.start_ms : track.start_ms) + Math.max(0, track.delay_ms || 0)
-    const trimmed =
-      (track.source_duration_ms || 0) - (track.trim_start_ms || 0) - (track.trim_end_ms || 0)
+    const trimmed = (track.source_duration_ms || 0) - (track.trim_start_ms || 0) - (track.trim_end_ms || 0)
     const duration = track.loop ? Math.max(0, totalDurationMs - start) : Math.max(0, trimmed)
     return {
       track,
@@ -108,23 +107,53 @@ export function computeLocalWarnings(input: LocalWarningInput): AvWarning[] {
   for (const track of tracks) {
     const label = track.name || TRACK_KIND_LABELS[track.kind] || track.id
     if (track.muted) {
-      warnings.push({ level: 'warning', code: 'muted', message: `轨道「${label}」已静音，不参与混音`, track_id: track.id })
+      warnings.push({
+        level: 'warning',
+        code: 'muted',
+        message: `轨道「${label}」已静音，不参与混音`,
+        track_id: track.id,
+      })
     }
     if (track.kind === 'dialogue') {
       const shot = track.shot_id ? shotById.get(track.shot_id) : undefined
       if (!shot) {
-        warnings.push({ level: 'error', code: 'dialogue_unbound', message: `对白轨「${label}」未绑定有效镜头`, track_id: track.id })
+        warnings.push({
+          level: 'error',
+          code: 'dialogue_unbound',
+          message: `对白轨「${label}」未绑定有效镜头`,
+          track_id: track.id,
+        })
       } else if (!shot.has_tts && !shot.native_audio) {
-        warnings.push({ level: 'warning', code: 'dialogue_no_tts', message: `对白轨「${label}」绑定的镜头还没有配音（对白静音）`, track_id: track.id })
+        warnings.push({
+          level: 'warning',
+          code: 'dialogue_no_tts',
+          message: `对白轨「${label}」绑定的镜头还没有配音（对白静音）`,
+          track_id: track.id,
+        })
       }
     } else if (!track.source_path) {
-      warnings.push({ level: 'error', code: 'source_missing', message: `轨道「${label}」缺少素材，会被剔除出混音`, track_id: track.id })
+      warnings.push({
+        level: 'error',
+        code: 'source_missing',
+        message: `轨道「${label}」缺少素材，会被剔除出混音`,
+        track_id: track.id,
+      })
     }
     if (totalDurationMs > 0 && (track.start_ms || 0) >= totalDurationMs && track.kind !== 'dialogue') {
-      warnings.push({ level: 'error', code: 'out_of_range', message: `轨道「${label}」起点超出全片时长`, track_id: track.id })
+      warnings.push({
+        level: 'error',
+        code: 'out_of_range',
+        message: `轨道「${label}」起点超出全片时长`,
+        track_id: track.id,
+      })
     }
     if ((track.volume || 0) > 1.5 && !track.muted) {
-      warnings.push({ level: 'warning', code: 'hot_gain', message: `轨道「${label}」音量偏大（${(track.volume || 0).toFixed(2)}），注意削波`, track_id: track.id })
+      warnings.push({
+        level: 'warning',
+        code: 'hot_gain',
+        message: `轨道「${label}」音量偏大（${(track.volume || 0).toFixed(2)}），注意削波`,
+        track_id: track.id,
+      })
     }
   }
 
@@ -232,6 +261,7 @@ export function validateCueDraft(cue: { text: string; start_ms: number; end_ms: 
   if (!cue.text.trim()) return '字幕文本不能为空'
   if (cue.text.length > 500) return '字幕文本过长（上限 500 字符）'
   // 与服务端 _FORBIDDEN_CHARS 同义：C0 控制字符（保留 \t\n）、DEL、行/段分隔符。
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: 该正则的职责就是匹配这些控制字符以拒绝它们
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u2028\u2029]/.test(cue.text)) return '字幕文本包含非法控制字符'
   if (cue.end_ms <= cue.start_ms) return '结束时间必须晚于开始时间'
   if (cue.end_ms - cue.start_ms < 50) return '字幕时长不足 50 毫秒'

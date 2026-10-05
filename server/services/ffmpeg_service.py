@@ -182,7 +182,9 @@ class FFmpegService:
             raise ValueError("镜头图片文件不存在或无效")
         image_path = str(image_obj)
         video_filter = self._clip_filter(
-            self._zoom_filter(shot.get("shot_type", "medium"), width, height, frames, shot.get("camera_movement", "静止")),
+            self._zoom_filter(
+                shot.get("shot_type", "medium"), width, height, frames, shot.get("camera_movement", "静止")
+            ),
             shot,
             duration,
         )
@@ -256,7 +258,9 @@ class FFmpegService:
                 video_path,
                 *audio_input,
                 "-vf",
-                self._clip_filter(f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}", shot, duration),
+                self._clip_filter(
+                    f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}", shot, duration
+                ),
                 "-t",
                 str(duration),
                 "-map",
@@ -332,9 +336,7 @@ class FFmpegService:
                 f"{current_v}{next_v}xfade=transition={transition_name}:"
                 f"duration={transition_duration:.3f}:offset={offset:.3f}{out_v}"
             )
-            statements.append(
-                f"{current_a}{next_a}acrossfade=d={transition_duration:.3f}{out_a}"
-            )
+            statements.append(f"{current_a}{next_a}acrossfade=d={transition_duration:.3f}{out_a}")
             current_v, current_a = out_v, out_a
             current_duration = current_duration + duration - transition_duration
             if effective == "white_flash":
@@ -386,7 +388,13 @@ class FFmpegService:
                 {
                     "effective": effective,
                     "duration_ms": default_duration.get(effective, 0),
-                    "renderer": {"fade": "fade", "dissolve": "dissolve", "white_flash": "dissolve", "push": "slideleft", "wipe": "wipeleft"}.get(effective, "cut"),
+                    "renderer": {
+                        "fade": "fade",
+                        "dissolve": "dissolve",
+                        "white_flash": "dissolve",
+                        "push": "slideleft",
+                        "wipe": "wipeleft",
+                    }.get(effective, "cut"),
                     "fallback_reason": "" if supported else f"unsupported_transition:{requested}",
                 }
             )
@@ -431,9 +439,16 @@ class FFmpegService:
         target = str(path)
         try:
             proc = await asyncio.create_subprocess_exec(
-                "ffprobe", "-v", "error", "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1", target,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                target,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
             )
             try:
                 stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
@@ -452,16 +467,25 @@ class FFmpegService:
                             continue
         except FileNotFoundError:
             pass
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return 0
         # 退路：完整解码并取进度行的最后一个 time=。
         try:
             proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-hide_banner", "-i", target, "-f", "null", "-",
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+                "ffmpeg",
+                "-hide_banner",
+                "-i",
+                target,
+                "-f",
+                "null",
+                "-",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
             )
             try:
-                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=max(30, int(settings.FFMPEG_TIMEOUT_SECONDS)))
+                _, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=max(30, int(settings.FFMPEG_TIMEOUT_SECONDS))
+                )
             except asyncio.CancelledError:
                 if proc.returncode is None:
                     proc.kill()
@@ -495,12 +519,17 @@ class FFmpegService:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         await self._run(
             [
-                "ffmpeg", "-y",
+                "ffmpeg",
+                "-y",
                 *inputs,
-                "-filter_complex", ";".join(statements),
-                "-map", "[aout]",
-                "-c:a", "pcm_s16le",
-                "-ar", str(SAMPLE_RATE),
+                "-filter_complex",
+                ";".join(statements),
+                "-map",
+                "[aout]",
+                "-c:a",
+                "pcm_s16le",
+                "-ar",
+                str(SAMPLE_RATE),
                 str(output_path),
             ]
         )
@@ -562,9 +591,7 @@ class FFmpegService:
             return None
         return MixBundle(plan, main_inputs, main_statements)
 
-    def _build_main_audio_chain(
-        self, shots: list[dict], bound_dialogue_shots: set[str]
-    ) -> tuple[list[str], list[str]]:
+    def _build_main_audio_chain(self, shots: list[dict], bound_dialogue_shots: set[str]) -> tuple[list[str], list[str]]:
         """按镜头顺序重建主音轨（等价于 concat 视频内嵌的音轨）。
 
         渲染与预览共用这一重建逻辑：对白拆出区间为静音、TTS 镜头用配音文件
@@ -596,11 +623,17 @@ class FFmpegService:
             if str(shot.get("shot_id") or "") in bound_dialogue_shots:
                 head, chain = "", [f"aevalsrc=exprs=0|0:d={sec}:s={SAMPLE_RATE}", *format_chain]
             elif audio is not None:
-                head, chain = f"[{allocate(audio)}:a:0]", [*format_chain, f"apad=pad_dur={sec}", f"atrim=duration={sec}", "asetpts=PTS-STARTPTS"]
+                head, chain = (
+                    f"[{allocate(audio)}:a:0]",
+                    [*format_chain, f"apad=pad_dur={sec}", f"atrim=duration={sec}", "asetpts=PTS-STARTPTS"],
+                )
             elif self._shot_has_native_audio(shot):
                 video = self._media_path(shot.get("video_path"), minimum_size=4096)
                 if video is not None:
-                    head, chain = f"[{allocate(video)}:a:0]", [*format_chain, f"atrim=duration={sec}", "asetpts=PTS-STARTPTS"]
+                    head, chain = (
+                        f"[{allocate(video)}:a:0]",
+                        [*format_chain, f"atrim=duration={sec}", "asetpts=PTS-STARTPTS"],
+                    )
                 else:
                     head, chain = "", [f"aevalsrc=exprs=0|0:d={sec}:s={SAMPLE_RATE}", *format_chain]
             else:
@@ -615,7 +648,9 @@ class FFmpegService:
             )
         return input_files, statements
 
-    async def _apply_audio_mix(self, video_path: Path, bundle: MixBundle, work_dir: Path, total_duration_s: float) -> Path:
+    async def _apply_audio_mix(
+        self, video_path: Path, bundle: MixBundle, work_dir: Path, total_duration_s: float
+    ) -> Path:
         normalized = await self._produce_normalized_mix(bundle, work_dir)
         (work_dir / "mix_manifest.json").write_text(
             json.dumps(bundle.manifest(), ensure_ascii=False, indent=2), encoding="utf-8"
@@ -625,12 +660,22 @@ class FFmpegService:
         output = work_dir / "final_mixed.mp4"
         await self._run(
             [
-                "ffmpeg", "-y",
-                "-i", str(video_path),
-                "-i", str(normalized),
-                "-map", "0:v:0", "-map", "1:a:0",
-                "-c:v", "copy", "-c:a", "aac",
-                "-movflags", "+faststart",
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(video_path),
+                "-i",
+                str(normalized),
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-movflags",
+                "+faststart",
                 "-shortest",
                 str(output),
             ]
@@ -650,10 +695,17 @@ class FFmpegService:
             inputs.extend(["-i", path])
         await self._run(
             [
-                "ffmpeg", "-y", *inputs,
-                "-filter_complex", bundle.filter_complex,
-                "-map", bundle.plan.output_label,
-                "-c:a", "pcm_s16le", "-ar", str(SAMPLE_RATE),
+                "ffmpeg",
+                "-y",
+                *inputs,
+                "-filter_complex",
+                bundle.filter_complex,
+                "-map",
+                bundle.plan.output_label,
+                "-c:a",
+                "pcm_s16le",
+                "-ar",
+                str(SAMPLE_RATE),
                 str(raw),
             ]
         )
@@ -677,7 +729,19 @@ class FFmpegService:
         limit = 10 ** (max(float(settings.LOUDNESS_TARGET_TP), -6.0) / 20.0)
         audio_filter += f",alimiter=limit={limit:.4f}:level=false"
         await self._run(
-            ["ffmpeg", "-y", "-i", str(raw), "-af", audio_filter, "-c:a", "pcm_s16le", "-ar", str(SAMPLE_RATE), str(normalized)]
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(raw),
+                "-af",
+                audio_filter,
+                "-c:a",
+                "pcm_s16le",
+                "-ar",
+                str(SAMPLE_RATE),
+                str(normalized),
+            ]
         )
         stats = await self.detect_volume(normalized)
         max_db = stats.get("max_volume_db")
@@ -692,11 +756,16 @@ class FFmpegService:
 
         _, stderr = await self._run_capture(
             [
-                "ffmpeg", "-hide_banner", "-i", str(media),
+                "ffmpeg",
+                "-hide_banner",
+                "-i",
+                str(media),
                 "-af",
                 f"loudnorm=I={_loud(settings.LOUDNESS_TARGET_I)}:TP={_loud(settings.LOUDNESS_TARGET_TP)}"
                 f":LRA={_loud(settings.LOUDNESS_TARGET_LRA)}:print_format=json",
-                "-f", "null", "-",
+                "-f",
+                "null",
+                "-",
             ]
         )
         match = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", stderr.decode("utf-8", errors="ignore"), re.S)
@@ -772,9 +841,7 @@ class FFmpegService:
             try:
                 stdout, _ = await self._run_capture(["ffmpeg", "-hide_banner", "-filters"])
                 lines = stdout.decode("utf-8", errors="ignore").splitlines()
-                available = any(
-                    line.split() and line.split()[-1] == "subtitles" for line in lines
-                )
+                available = any(line.split() and line.split()[-1] == "subtitles" for line in lines)
             except (RuntimeError, TimeoutError, OSError):
                 available = True
             FFmpegService._subtitles_filter_available = available
@@ -810,11 +877,20 @@ class FFmpegService:
         output = work_dir / "final_subtitled.mp4"
         await self._run(
             [
-                "ffmpeg", "-y", "-i", str(video_path),
-                "-vf", f"subtitles=filename='{self._escape_filter_path(ass_path)}'",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                "-c:a", "copy",
-                "-movflags", "+faststart",
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(video_path),
+                "-vf",
+                f"subtitles=filename='{self._escape_filter_path(ass_path)}'",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "copy",
+                "-movflags",
+                "+faststart",
                 str(output),
             ]
         )
@@ -848,10 +924,21 @@ class FFmpegService:
         output = work_dir / "final_soft_subtitles.mp4"
         await self._run(
             [
-                "ffmpeg", "-y", "-i", str(video_path), *inputs, *maps,
-                "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text",
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(video_path),
+                *inputs,
+                *maps,
+                "-c:v",
+                "copy",
+                "-c:a",
+                "copy",
+                "-c:s",
+                "mov_text",
                 *metadata,
-                "-movflags", "+faststart",
+                "-movflags",
+                "+faststart",
                 str(output),
             ]
         )
@@ -925,20 +1012,20 @@ class FFmpegService:
             x_expr, y_expr = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
         elif movement == "摇":
             zoom = "1.08"
-            x_expr, y_expr = "(iw-iw/zoom)*on/{frames}".format(frames=max(1, frames)), "ih/2-(ih/zoom/2)"
+            x_expr, y_expr = f"(iw-iw/zoom)*on/{max(1, frames)}", "ih/2-(ih/zoom/2)"
         elif movement == "移":
             zoom = "1.08"
-            x_expr, y_expr = "(iw-iw/zoom)*(0.25+0.5*on/{frames})".format(frames=max(1, frames)), "ih/2-(ih/zoom/2)"
+            x_expr, y_expr = f"(iw-iw/zoom)*(0.25+0.5*on/{max(1, frames)})", "ih/2-(ih/zoom/2)"
         elif movement == "跟":
             zoom = "1.12"
-            x_expr, y_expr = "(iw-iw/zoom)*(0.35+0.3*on/{frames})".format(frames=max(1, frames)), "ih/2-(ih/zoom/2)"
+            x_expr, y_expr = f"(iw-iw/zoom)*(0.35+0.3*on/{max(1, frames)})", "ih/2-(ih/zoom/2)"
         elif movement == "升降":
             zoom = "1.08"
-            x_expr, y_expr = "iw/2-(iw/zoom/2)", "(ih-ih/zoom)*on/{frames}".format(frames=max(1, frames))
+            x_expr, y_expr = "iw/2-(iw/zoom/2)", f"(ih-ih/zoom)*on/{max(1, frames)}"
         elif movement == "环绕":
             zoom = "1.12"
-            x_expr = "iw/2-(iw/zoom/2)+sin(2*PI*on/{frames})*(iw/zoom/6)".format(frames=max(1, frames))
-            y_expr = "ih/2-(ih/zoom/2)+cos(2*PI*on/{frames})*(ih/zoom/8)".format(frames=max(1, frames))
+            x_expr = f"iw/2-(iw/zoom/2)+sin(2*PI*on/{max(1, frames)})*(iw/zoom/6)"
+            y_expr = f"ih/2-(ih/zoom/2)+cos(2*PI*on/{max(1, frames)})*(ih/zoom/8)"
         else:
             if shot_type == "wide":
                 zoom = "min(zoom+0.001,1.25)"
@@ -1017,7 +1104,7 @@ class FFmpegService:
                 proc.kill()
             await proc.communicate()
             raise
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             proc.kill()
             await proc.communicate()
             raise TimeoutError("FFmpeg 执行超时") from exc

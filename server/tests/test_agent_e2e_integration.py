@@ -22,8 +22,6 @@ if str(_SERVER_DIR) not in sys.path:
 
 from PIL import Image  # noqa: E402
 
-from db import SessionLocal, init_db  # noqa: E402
-from models import Project, Shot  # noqa: E402
 from agent import graph, shot_work  # noqa: E402
 from agent import nodes as agent_nodes  # noqa: E402
 from agent.checkpoints import CheckpointStore  # noqa: E402
@@ -34,6 +32,8 @@ from agent.contracts import (  # noqa: E402
     StageStatus,
     select_video_candidate,
 )
+from db import SessionLocal, init_db  # noqa: E402
+from models import Project, Shot  # noqa: E402
 
 
 def _image_file(root: Path, name: str) -> str:
@@ -83,8 +83,22 @@ def _parsed_payload() -> dict:
 def _storyboard_payload() -> dict:
     return {
         "shots": [
-            {"shot_id": "shot-1", "shot_type": "medium", "duration": 4.0, "dialogue": "", "character_action": "看向窗外", "scene_description": "房间"},
-            {"shot_id": "shot-2", "shot_type": "close-up", "duration": 3.0, "dialogue": "", "character_action": "微笑", "scene_description": "房间"},
+            {
+                "shot_id": "shot-1",
+                "shot_type": "medium",
+                "duration": 4.0,
+                "dialogue": "",
+                "character_action": "看向窗外",
+                "scene_description": "房间",
+            },
+            {
+                "shot_id": "shot-2",
+                "shot_type": "close-up",
+                "duration": 3.0,
+                "dialogue": "",
+                "character_action": "微笑",
+                "scene_description": "房间",
+            },
         ],
         "timing_plan": {},
     }
@@ -98,14 +112,18 @@ def _seed_project_shots(project_id: str, shots: list[dict]) -> None:
         db.query(Project).filter(Project.id == project_id).delete(synchronize_session=False)
         db.add(Project(id=project_id, title=project_id))
         for index, item in enumerate(shots, start=1):
-            db.add(Shot(
-                id=item["id"], project_id=project_id, sequence=index,
-                version=int(item.get("version", 1)),
-                duration=float(item.get("duration", 4.0)),
-                dialogue=item.get("dialogue", ""),
-                storyboard_path=item.get("storyboard_path", ""),
-                video_path=item.get("video_path", ""),
-            ))
+            db.add(
+                Shot(
+                    id=item["id"],
+                    project_id=project_id,
+                    sequence=index,
+                    version=int(item.get("version", 1)),
+                    duration=float(item.get("duration", 4.0)),
+                    dialogue=item.get("dialogue", ""),
+                    storyboard_path=item.get("storyboard_path", ""),
+                    video_path=item.get("video_path", ""),
+                )
+            )
         db.commit()
     finally:
         db.close()
@@ -193,7 +211,9 @@ class Scenario1LLMInvalidJSONTests(_TempRootTestCase):
         self.assertTrue(any(p["field"] == "output_format" and p["value"] == "strict_json" for p in patches))
 
         with patch.object(graph.CheckpointStore, "get", return_value=store):
-            recovery = graph._recovery_node({**state, **failed}, StageName.DIRECTOR_PLANNING, default_target="director_planning")
+            recovery = graph._recovery_node(
+                {**state, **failed}, StageName.DIRECTOR_PLANNING, default_target="director_planning"
+            )
         self.assertEqual(recovery["selected_strategy"], RecoveryStrategy.REVISE_PROMPT.value)
         self.assertTrue(recovery["prompt_revisions"])
         self.assertEqual(recovery["recovery_attempts"][StageName.DIRECTOR_PLANNING.value], 1)
@@ -213,7 +233,9 @@ class Scenario1LLMInvalidJSONTests(_TempRootTestCase):
         self.assertEqual(calls["parser"], 2)
         self.assertEqual(recovered["stage_status"][StageName.DIRECTOR_PLANNING.value], StageStatus.SUCCEEDED.value)
         self.assertTrue(any(event["event"] == "recovery_selected" for event in store.snapshot()["events"]))
-        self.assertFalse(any(item["selected"] and item["selected"]["strategy"] == "human_review" for item in store.decisions()))
+        self.assertFalse(
+            any(item["selected"] and item["selected"]["strategy"] == "human_review" for item in store.decisions())
+        )
 
 
 class Scenario2ImageProviderFailureTests(_TempRootTestCase):
@@ -254,7 +276,13 @@ class Scenario3VideoProviderFailureTests(_TempRootTestCase):
         async def worker(shot_id: str, version: int, **kwargs) -> dict:
             if shot_id == "shot-2":
                 raise RuntimeError("video provider 渲染失败")
-            return {"shot_id": shot_id, "shot_version": version, "status": "succeeded", "path": video, "provider": "mock-video"}
+            return {
+                "shot_id": shot_id,
+                "shot_version": version,
+                "status": "succeeded",
+                "path": video,
+                "provider": "mock-video",
+            }
 
         state = _base_state(project_id)
         with (
@@ -265,6 +293,7 @@ class Scenario3VideoProviderFailureTests(_TempRootTestCase):
         ):
             gate = types.SimpleNamespace(storyboard_gate_status=lambda pid, **_kwargs: {"ok": True})
             from services.quality_review_service import quality_review_service
+
             with patch.object(quality_review_service, "storyboard_gate_status", gate.storyboard_gate_status):
                 result = asyncio.run(_run_video_stage(state))
         self.assertEqual(result["stage_status"][StageName.VIDEO_GENERATION.value], StageStatus.DEGRADED.value)
@@ -274,7 +303,9 @@ class Scenario3VideoProviderFailureTests(_TempRootTestCase):
         self.assertEqual(decision["failure"]["kind"], "video_failed")
         self.assertNotEqual(decision["selected"]["strategy"], RecoveryStrategy.HUMAN_REVIEW.value)
         self.assertEqual(graph._route_video_generation_decision(result), "recover")
-        self.assertEqual(store.shot_artifact("shot-2", StageName.VIDEO_GENERATION.value)["status"], StageStatus.FAILED.value)
+        self.assertEqual(
+            store.shot_artifact("shot-2", StageName.VIDEO_GENERATION.value)["status"], StageStatus.FAILED.value
+        )
 
 
 class Scenario4DialogueTooLongTests(_TempRootTestCase):
@@ -323,15 +354,39 @@ class Scenario5ReferenceUnsupportedTests(_TempRootTestCase):
 
         project_id = "e2e-ref-unsupported"
         store = self.store(project_id)
-        no_ref_profiles = [ProviderProfile(capability="image", provider="mock-no-ref", available=True, supports_reference_images=False, reliability=0.9)]
-        with_ref_profiles = no_ref_profiles + [
-            ProviderProfile(capability="image", provider="mock-with-ref", available=True, supports_reference_images=True, reliability=0.95)
+        no_ref_profiles = [
+            ProviderProfile(
+                capability="image",
+                provider="mock-no-ref",
+                available=True,
+                supports_reference_images=False,
+                reliability=0.9,
+            )
         ]
-        artifacts = [{
-            "shot_id": "shot-1", "shot_version": 1, "stage": StageName.IMAGE_GENERATION.value,
-            "status": StageStatus.FAILED.value, "path": "",
-            "failure": {"kind": "provider_reference_unsupported", "stage": StageName.IMAGE_GENERATION.value, "shot_id": "shot-1", "message": "references_sent=0 当前 Provider 不支持参考图"},
-        }]
+        with_ref_profiles = no_ref_profiles + [
+            ProviderProfile(
+                capability="image",
+                provider="mock-with-ref",
+                available=True,
+                supports_reference_images=True,
+                reliability=0.95,
+            )
+        ]
+        artifacts = [
+            {
+                "shot_id": "shot-1",
+                "shot_version": 1,
+                "stage": StageName.IMAGE_GENERATION.value,
+                "status": StageStatus.FAILED.value,
+                "path": "",
+                "failure": {
+                    "kind": "provider_reference_unsupported",
+                    "stage": StageName.IMAGE_GENERATION.value,
+                    "shot_id": "shot-1",
+                    "message": "references_sent=0 当前 Provider 不支持参考图",
+                },
+            }
+        ]
 
         def make_state(**extra) -> dict:
             return _base_state(
@@ -339,7 +394,21 @@ class Scenario5ReferenceUnsupportedTests(_TempRootTestCase):
                 shot_artifacts=artifacts,
                 failed_shot_ids=["shot-1"],
                 stage_status={StageName.IMAGE_GENERATION.value: StageStatus.FAILED.value},
-                critiques=[{"stage": StageName.IMAGE_GENERATION.value, "passed": False, "score": 0.2, "issues": [{"code": "provider_reference_unsupported", "severity": "error", "message": "不支持参考图", "shot_id": "shot-1"}]}],
+                critiques=[
+                    {
+                        "stage": StageName.IMAGE_GENERATION.value,
+                        "passed": False,
+                        "score": 0.2,
+                        "issues": [
+                            {
+                                "code": "provider_reference_unsupported",
+                                "severity": "error",
+                                "message": "不支持参考图",
+                                "shot_id": "shot-1",
+                            }
+                        ],
+                    }
+                ],
                 **extra,
             )
 
@@ -356,7 +425,10 @@ class Scenario5ReferenceUnsupportedTests(_TempRootTestCase):
         rejected = {item["strategy"]: item["reason"] for item in decision["considered_rejected"]}
         self.assertIn(RecoveryStrategy.SWITCH_PROVIDER.value, rejected)
         self.assertIn("Provider 能力不匹配", rejected[RecoveryStrategy.SWITCH_PROVIDER.value])
-        self.assertIn(no_ref_decision["selected_strategy"], {RecoveryStrategy.REPLACE_REFERENCE.value, RecoveryStrategy.REVISE_PROMPT.value})
+        self.assertIn(
+            no_ref_decision["selected_strategy"],
+            {RecoveryStrategy.REPLACE_REFERENCE.value, RecoveryStrategy.REVISE_PROMPT.value},
+        )
         self.assertNotEqual(no_ref_decision["selected_strategy"], RecoveryStrategy.HUMAN_REVIEW.value)
 
         # 场景 B：存在支持参考图的 Provider 时，阶梯依次修正 Prompt → 替换参考 → 切换 Provider。
@@ -370,9 +442,13 @@ class Scenario5ReferenceUnsupportedTests(_TempRootTestCase):
             patch.object(decision_module, "budget_snapshot", lambda project_id="": dict(unlimited)),
         ):
             history: list[dict] = []
-            step1 = graph._recovery_node(ladder_state(history), StageName.IMAGE_GENERATION, default_target="image_generation")
+            step1 = graph._recovery_node(
+                ladder_state(history), StageName.IMAGE_GENERATION, default_target="image_generation"
+            )
             history += step1["recovery_history"]
-            step2 = graph._recovery_node(ladder_state(history), StageName.IMAGE_GENERATION, default_target="image_generation")
+            step2 = graph._recovery_node(
+                ladder_state(history), StageName.IMAGE_GENERATION, default_target="image_generation"
+            )
             history += step2["recovery_history"]
             step3 = graph._recovery_node(
                 ladder_state(history, provider_switch={StageName.IMAGE_GENERATION.value: "mock-no-ref"}),
@@ -402,7 +478,13 @@ class Scenario6PartialFailureTests(_TempRootTestCase):
             calls.append(shot_id)
             if shot_id == "shot-2" and fail_first["shot-2"]:
                 raise RuntimeError("image provider failed")
-            return {"shot_id": shot_id, "shot_version": version, "status": "succeeded", "path": image, "provider": "mock-image"}
+            return {
+                "shot_id": shot_id,
+                "shot_version": version,
+                "status": "succeeded",
+                "path": image,
+                "provider": "mock-image",
+            }
 
         state = _base_state(project_id)
         shot_versions = _shot_versions_filter({"shot-1": 1, "shot-2": 1})
@@ -417,7 +499,9 @@ class Scenario6PartialFailureTests(_TempRootTestCase):
         self.assertEqual(first["successful_shot_ids"], ["shot-1"])
         self.assertEqual(first["failed_shot_ids"], ["shot-2"])
         self.assertEqual(graph._route_image_decision(first), "recover")
-        self.assertEqual(store.shot_artifact("shot-1", StageName.IMAGE_GENERATION.value)["status"], StageStatus.SUCCEEDED.value)
+        self.assertEqual(
+            store.shot_artifact("shot-1", StageName.IMAGE_GENERATION.value)["status"], StageStatus.SUCCEEDED.value
+        )
 
         fail_first["shot-2"] = False
         with (
@@ -441,10 +525,13 @@ class Scenario6PartialFailureTests(_TempRootTestCase):
 class Scenario7VersionConflictTests(_TempRootTestCase):
     def test_user_edit_invalidates_changed_shot_and_recovery_selects_resume(self) -> None:
         project_id = "e2e-version-conflict"
-        _seed_project_shots(project_id, [
-            {"id": "shot-1", "storyboard_path": "a.png"},
-            {"id": "shot-2", "storyboard_path": "b.png"},
-        ])
+        _seed_project_shots(
+            project_id,
+            [
+                {"id": "shot-1", "storyboard_path": "a.png"},
+                {"id": "shot-2", "storyboard_path": "b.png"},
+            ],
+        )
         self.addCleanup(_cleanup_project, project_id)
         store = self.store(project_id)
         image = _image_file(self.root, "storyboard.png")
@@ -455,7 +542,13 @@ class Scenario7VersionConflictTests(_TempRootTestCase):
             calls.append((shot_id, version))
             if conflict["on"] and shot_id == "shot-2":
                 raise RuntimeError("shot version changed: expected 1, got 2")
-            return {"shot_id": shot_id, "shot_version": version, "status": "succeeded", "path": image, "provider": "mock-image"}
+            return {
+                "shot_id": shot_id,
+                "shot_version": version,
+                "status": "succeeded",
+                "path": image,
+                "provider": "mock-image",
+            }
 
         state = _base_state(project_id)
         with (
@@ -485,7 +578,9 @@ class Scenario7VersionConflictTests(_TempRootTestCase):
         self.assertEqual(decision["failure"]["kind"], "version_conflict")
         self.assertEqual(decision["selected"]["strategy"], RecoveryStrategy.RESUME_CHECKPOINT.value)
         self.assertEqual(conflicted["stage_status"][StageName.IMAGE_GENERATION.value], StageStatus.DEGRADED.value)
-        self.assertEqual(store.shot_artifact("shot-1", StageName.IMAGE_GENERATION.value)["status"], StageStatus.SUCCEEDED.value)
+        self.assertEqual(
+            store.shot_artifact("shot-1", StageName.IMAGE_GENERATION.value)["status"], StageStatus.SUCCEEDED.value
+        )
 
         conflict["on"] = False
         with (
@@ -496,7 +591,9 @@ class Scenario7VersionConflictTests(_TempRootTestCase):
             repaired = asyncio.run(graph._image_generation_fan_out({**state, "pending_shot_ids": ["shot-2"]}))
         self.assertEqual(repaired["successful_shot_ids"], ["shot-2"])
         self.assertIn(("shot-2", 2), calls)
-        self.assertEqual(store.shot_artifact("shot-2", StageName.IMAGE_GENERATION.value)["status"], StageStatus.SUCCEEDED.value)
+        self.assertEqual(
+            store.shot_artifact("shot-2", StageName.IMAGE_GENERATION.value)["status"], StageStatus.SUCCEEDED.value
+        )
 
 
 class Scenario8ProcessRestartTests(_TempRootTestCase):
@@ -512,7 +609,13 @@ class Scenario8ProcessRestartTests(_TempRootTestCase):
 
         async def worker(shot_id: str, version: int, **kwargs) -> dict:
             worker_calls["count"] += 1
-            return {"shot_id": shot_id, "shot_version": version, "status": "succeeded", "path": image, "provider": "mock-image"}
+            return {
+                "shot_id": shot_id,
+                "shot_version": version,
+                "status": "succeeded",
+                "path": image,
+                "provider": "mock-image",
+            }
 
         state = _base_state(project_id, run_id="run-1")
         store_a = self.store(project_id, "run-1")
@@ -563,14 +666,51 @@ class Scenario9CandidateSelectionTests(_TempRootTestCase):
 
         async def worker(shot_id: str, version: int, **kwargs) -> dict:
             return {
-                "shot_id": shot_id, "shot_version": version, "status": "succeeded", "path": video, "provider": "mock-video",
+                "shot_id": shot_id,
+                "shot_version": version,
+                "status": "succeeded",
+                "path": video,
+                "provider": "mock-video",
                 "video_candidates": [
-                    {"candidate_id": "c-broken", "shot_id": shot_id, "shot_version": version, "status": "succeeded", "path": video, "provider": "mock-video", "score": 0.95, "structural_passed": False},
-                    {"candidate_id": "c-good", "shot_id": shot_id, "shot_version": version, "status": "succeeded", "path": video, "provider": "mock-video", "score": 0.8, "structural_passed": True},
-                    {"candidate_id": "c-failed", "shot_id": shot_id, "shot_version": version, "status": "failed", "path": "", "provider": "mock-video", "score": 0.0, "structural_passed": None},
+                    {
+                        "candidate_id": "c-broken",
+                        "shot_id": shot_id,
+                        "shot_version": version,
+                        "status": "succeeded",
+                        "path": video,
+                        "provider": "mock-video",
+                        "score": 0.95,
+                        "structural_passed": False,
+                    },
+                    {
+                        "candidate_id": "c-good",
+                        "shot_id": shot_id,
+                        "shot_version": version,
+                        "status": "succeeded",
+                        "path": video,
+                        "provider": "mock-video",
+                        "score": 0.8,
+                        "structural_passed": True,
+                    },
+                    {
+                        "candidate_id": "c-failed",
+                        "shot_id": shot_id,
+                        "shot_version": version,
+                        "status": "failed",
+                        "path": "",
+                        "provider": "mock-video",
+                        "score": 0.0,
+                        "structural_passed": None,
+                    },
                 ],
                 "selected_video_candidate_id": "c-good",
-                "candidate_selection": {"candidate_id": "c-good", "score": 0.8, "reason": "structural_pass_highest_score", "considered": ["c-broken", "c-good", "c-failed"], "rejected": [{"candidate_id": "c-broken", "reason": "structural_check_failed"}]},
+                "candidate_selection": {
+                    "candidate_id": "c-good",
+                    "score": 0.8,
+                    "reason": "structural_pass_highest_score",
+                    "considered": ["c-broken", "c-good", "c-failed"],
+                    "rejected": [{"candidate_id": "c-broken", "reason": "structural_check_failed"}],
+                },
             }
 
         state = _base_state(project_id)
@@ -581,6 +721,7 @@ class Scenario9CandidateSelectionTests(_TempRootTestCase):
             patch.object(graph, "generate_video_shot", side_effect=worker),
         ):
             from services.quality_review_service import quality_review_service
+
             with patch.object(quality_review_service, "storyboard_gate_status", lambda pid, **_kwargs: {"ok": True}):
                 result = asyncio.run(_run_video_stage(state))
         artifact = next(item for item in result["shot_artifacts"] if item["shot_id"] == "shot-1")
@@ -617,10 +758,13 @@ class Scenario10AutoCompletionTests(_TempRootTestCase):
         video_a = _video_file(self.root, "auto-1.mp4")
         video_b = _video_file(self.root, "auto-2.mp4")
         final_path = _video_file(self.root, "final.mp4")
-        _seed_project_shots(project_id, [
-            {"id": "shot-1", "storyboard_path": image_a, "video_path": video_a},
-            {"id": "shot-2", "storyboard_path": image_b, "video_path": video_b},
-        ])
+        _seed_project_shots(
+            project_id,
+            [
+                {"id": "shot-1", "storyboard_path": image_a, "video_path": video_a},
+                {"id": "shot-2", "storyboard_path": image_b, "video_path": video_b},
+            ],
+        )
         self.addCleanup(_cleanup_project, project_id)
         store = self.store(project_id, "auto")
 
@@ -631,14 +775,43 @@ class Scenario10AutoCompletionTests(_TempRootTestCase):
             return _storyboard_payload()
 
         async def image_worker(shot_id: str, version: int, **kwargs) -> dict:
-            return {"shot_id": shot_id, "shot_version": version, "status": "succeeded", "path": image_a if shot_id == "shot-1" else image_b, "provider": "mock-image", "cost_micro": 100, "duration_ms": 900}
+            return {
+                "shot_id": shot_id,
+                "shot_version": version,
+                "status": "succeeded",
+                "path": image_a if shot_id == "shot-1" else image_b,
+                "provider": "mock-image",
+                "cost_micro": 100,
+                "duration_ms": 900,
+            }
 
         async def video_worker(shot_id: str, version: int, **kwargs) -> dict:
             return {
-                "shot_id": shot_id, "shot_version": version, "status": "succeeded",
-                "path": video_a if shot_id == "shot-1" else video_b, "provider": "mock-video", "model": "mock-video-v1",
-                "cost_micro": 200, "duration_ms": 1500, "score": 0.9,
-                "video_candidates": [{"candidate_id": f"{shot_id}-c1", "shot_id": shot_id, "shot_version": version, "status": "succeeded", "path": video_a if shot_id == "shot-1" else video_b, "provider": "mock-video", "model": "mock-video-v1", "score": 0.9, "structural_passed": True, "selected": True, "selection_reason": "structural_pass_highest_score", "reference_manifest": [{"kind": "character", "name": "主角三视图"}]}],
+                "shot_id": shot_id,
+                "shot_version": version,
+                "status": "succeeded",
+                "path": video_a if shot_id == "shot-1" else video_b,
+                "provider": "mock-video",
+                "model": "mock-video-v1",
+                "cost_micro": 200,
+                "duration_ms": 1500,
+                "score": 0.9,
+                "video_candidates": [
+                    {
+                        "candidate_id": f"{shot_id}-c1",
+                        "shot_id": shot_id,
+                        "shot_version": version,
+                        "status": "succeeded",
+                        "path": video_a if shot_id == "shot-1" else video_b,
+                        "provider": "mock-video",
+                        "model": "mock-video-v1",
+                        "score": 0.9,
+                        "structural_passed": True,
+                        "selected": True,
+                        "selection_reason": "structural_pass_highest_score",
+                        "reference_manifest": [{"kind": "character", "name": "主角三视图"}],
+                    }
+                ],
                 "selected_video_candidate_id": f"{shot_id}-c1",
                 "candidate_selection": {"candidate_id": f"{shot_id}-c1", "reason": "structural_pass_highest_score"},
             }
@@ -658,9 +831,18 @@ class Scenario10AutoCompletionTests(_TempRootTestCase):
             patch.object(script_route, "_ensure_scene_baseline_images", new_callable=AsyncMock),
             patch.object(graph, "_persist_phase1_idempotent", new_callable=AsyncMock),
             patch.object(graph, "refresh_project_reference_state_for_graph", return_value={"blocking": False}),
-            patch.object(graph, "provider_profiles", lambda *args, **kwargs: [types.SimpleNamespace(supports_reference_images=True, available=True)]),
+            patch.object(
+                graph,
+                "provider_profiles",
+                lambda *args, **kwargs: [types.SimpleNamespace(supports_reference_images=True, available=True)],
+            ),
             patch.object(graph, "_reference_gate", return_value={}),
-            patch.object(graph, "_run_storyboard_quality_gate", new_callable=AsyncMock, return_value={"passed": True, "reviews": {}}),
+            patch.object(
+                graph,
+                "_run_storyboard_quality_gate",
+                new_callable=AsyncMock,
+                return_value={"passed": True, "reviews": {}},
+            ),
             patch.object(graph, "generate_storyboard_shot", side_effect=image_worker),
             patch.object(quality_review_service, "storyboard_gate_status", lambda pid, **_kwargs: {"ok": True}),
             patch.object(quality_review_service, "video_gate_status", lambda pid, **_kwargs: {"ok": True}),
@@ -668,9 +850,11 @@ class Scenario10AutoCompletionTests(_TempRootTestCase):
             patch.object(graph, "critique_videos", side_effect=passing_video_critique),
             patch.object(graph, "_review_shot_videos", new_callable=AsyncMock, return_value={}),
             patch.object(render_route, "_render_task", new_callable=AsyncMock),
-            patch.object(render_route, "_render_status", {project_id: {"status": "completed", "video_path": final_path}}),
+            patch.object(
+                render_route, "_render_status", {project_id: {"status": "completed", "video_path": final_path}}
+            ),
         ):
-            result = asyncio.run(getattr(graph, "get_graph")().ainvoke(initial, config={"recursion_limit": 160}))
+            result = asyncio.run(graph.get_graph().ainvoke(initial, config={"recursion_limit": 160}))
 
         self.assertEqual(result.get("errors"), [])
         self.assertEqual(result["stage_status"][StageName.FINAL_REVIEW.value], StageStatus.SUCCEEDED.value)
@@ -721,17 +905,41 @@ class Scenario12BudgetExhaustedTests(_TempRootTestCase):
         store = self.store(project_id)
         empty_budget = {"level": "project", "remaining_cost_micro": 0, "remaining_seconds": 0}
 
-        failed_only = [{
-            "shot_id": "shot-1", "shot_version": 1, "stage": StageName.IMAGE_GENERATION.value,
-            "status": StageStatus.FAILED.value, "path": "",
-            "failure": {"kind": "image_failed", "stage": StageName.IMAGE_GENERATION.value, "shot_id": "shot-1", "message": "image provider failed"},
-        }]
+        failed_only = [
+            {
+                "shot_id": "shot-1",
+                "shot_version": 1,
+                "stage": StageName.IMAGE_GENERATION.value,
+                "status": StageStatus.FAILED.value,
+                "path": "",
+                "failure": {
+                    "kind": "image_failed",
+                    "stage": StageName.IMAGE_GENERATION.value,
+                    "shot_id": "shot-1",
+                    "message": "image provider failed",
+                },
+            }
+        ]
         state = _base_state(
             project_id,
             shot_artifacts=failed_only,
             failed_shot_ids=["shot-1"],
             stage_status={StageName.IMAGE_GENERATION.value: StageStatus.FAILED.value},
-            critiques=[{"stage": StageName.IMAGE_GENERATION.value, "passed": False, "score": 0.1, "issues": [{"code": "image_generation_failure", "severity": "error", "message": "生成失败", "shot_id": "shot-1"}]}],
+            critiques=[
+                {
+                    "stage": StageName.IMAGE_GENERATION.value,
+                    "passed": False,
+                    "score": 0.1,
+                    "issues": [
+                        {
+                            "code": "image_generation_failure",
+                            "severity": "error",
+                            "message": "生成失败",
+                            "shot_id": "shot-1",
+                        }
+                    ],
+                }
+            ],
         )
         with (
             patch.object(graph.CheckpointStore, "get", return_value=store),
@@ -746,16 +954,31 @@ class Scenario12BudgetExhaustedTests(_TempRootTestCase):
         self.assertNotEqual(decision["selected"]["strategy"], RecoveryStrategy.HUMAN_REVIEW.value)
 
         # 存在结构完整可用结果时：预算耗尽必须走降级发布而不是悄悄失败。
-        usable = [{
-            "shot_id": "shot-2", "shot_version": 1, "stage": StageName.IMAGE_GENERATION.value,
-            "status": StageStatus.SUCCEEDED.value, "path": "usable.png", "provider": "mock-image",
-            "structural_passed": True, "technical_passed": True,
-        }]
+        usable = [
+            {
+                "shot_id": "shot-2",
+                "shot_version": 1,
+                "stage": StageName.IMAGE_GENERATION.value,
+                "status": StageStatus.SUCCEEDED.value,
+                "path": "usable.png",
+                "provider": "mock-image",
+                "structural_passed": True,
+                "technical_passed": True,
+            }
+        ]
         degraded_state = _base_state(
             project_id,
             shot_artifacts=usable,
             stage_status={StageName.IMAGE_GENERATION.value: StageStatus.FAILED.value},
-            critiques=[{"stage": StageName.IMAGE_GENERATION.value, "passed": False, "score": 0.4, "failure_kind": "budget_exceeded", "issues": [{"code": "budget_exceeded", "severity": "error", "message": "预算不足"}]}],
+            critiques=[
+                {
+                    "stage": StageName.IMAGE_GENERATION.value,
+                    "passed": False,
+                    "score": 0.4,
+                    "failure_kind": "budget_exceeded",
+                    "issues": [{"code": "budget_exceeded", "severity": "error", "message": "预算不足"}],
+                }
+            ],
         )
         with (
             patch.object(graph.CheckpointStore, "get", return_value=store),
@@ -779,18 +1002,40 @@ class Scenario13FinalFeedbackTests(_TempRootTestCase):
         store = self.store(project_id)
         video = _video_file(self.root, "feedback.mp4")
         critique = {
-            "stage": StageName.FINAL_REVIEW.value, "passed": False, "score": 0.5,
+            "stage": StageName.FINAL_REVIEW.value,
+            "passed": False,
+            "score": 0.5,
             "failure_kind": "quality_below_threshold",
             "issues": [
-                {"code": "video_frozen", "severity": "error", "message": "镜头 shot-2 画面冻结", "shot_id": "shot-2", "details": {"source_stage": StageName.VIDEO_GENERATION.value}},
+                {
+                    "code": "video_frozen",
+                    "severity": "error",
+                    "message": "镜头 shot-2 画面冻结",
+                    "shot_id": "shot-2",
+                    "details": {"source_stage": StageName.VIDEO_GENERATION.value},
+                },
             ],
         }
         state = _base_state(
             project_id,
             critiques=[critique],
             shot_artifacts=[
-                {"shot_id": "shot-1", "shot_version": 1, "stage": StageName.VIDEO_GENERATION.value, "status": "succeeded", "path": video, "provider": "mock-video"},
-                {"shot_id": "shot-2", "shot_version": 1, "stage": StageName.VIDEO_GENERATION.value, "status": "succeeded", "path": video, "provider": "mock-video"},
+                {
+                    "shot_id": "shot-1",
+                    "shot_version": 1,
+                    "stage": StageName.VIDEO_GENERATION.value,
+                    "status": "succeeded",
+                    "path": video,
+                    "provider": "mock-video",
+                },
+                {
+                    "shot_id": "shot-2",
+                    "shot_version": 1,
+                    "stage": StageName.VIDEO_GENERATION.value,
+                    "status": "succeeded",
+                    "path": video,
+                    "provider": "mock-video",
+                },
             ],
             stage_status={StageName.FINAL_REVIEW.value: StageStatus.FAILED.value},
         )
@@ -798,9 +1043,16 @@ class Scenario13FinalFeedbackTests(_TempRootTestCase):
 
         async def worker(shot_id: str, version: int, **kwargs) -> dict:
             calls.append(shot_id)
-            return {"shot_id": shot_id, "shot_version": version, "status": "succeeded", "path": video, "provider": "mock-video"}
+            return {
+                "shot_id": shot_id,
+                "shot_version": version,
+                "status": "succeeded",
+                "path": video,
+                "provider": "mock-video",
+            }
 
         from services.quality_review_service import quality_review_service
+
         shot_versions = _shot_versions_filter({"shot-1": 1, "shot-2": 1})
         with (
             patch.object(graph.CheckpointStore, "get", return_value=store),

@@ -10,14 +10,11 @@ import asyncio
 import sys
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
-
-from test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402,F401
 
 from api.routes import audio_track as audio_track_route  # noqa: E402
 from api.routes import render as render_route  # noqa: E402
@@ -26,6 +23,7 @@ from config import settings  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
 from models import AudioTrack, BackgroundJob, Project, Shot, SubtitleCue, SubtitleTrack  # noqa: E402
 from services.subtitle_service import format_srt_time  # noqa: E402
+from test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402,F401
 
 
 class AvWorkbenchTestCase(unittest.TestCase):
@@ -54,7 +52,9 @@ class AvWorkbenchTestCase(unittest.TestCase):
 class SubtitleRouteTests(AvWorkbenchTestCase):
     def test_track_crud_bumps_av_config_version(self) -> None:
         base_version = self.db.get(Project, self.project.id).av_config_version or 0
-        track = asyncio.run(subtitle_route.create_subtitle_track(self.project.id, subtitle_route.SubtitleTrackCreate(), self.db))
+        track = asyncio.run(
+            subtitle_route.create_subtitle_track(self.project.id, subtitle_route.SubtitleTrackCreate(), self.db)
+        )
         self.db.expire_all()
         self.assertEqual(self.db.get(Project, self.project.id).av_config_version, base_version + 1)
 
@@ -81,7 +81,9 @@ class SubtitleRouteTests(AvWorkbenchTestCase):
     def test_cue_validation_rejects_bad_payload(self) -> None:
         from fastapi import HTTPException
 
-        track = asyncio.run(subtitle_route.create_subtitle_track(self.project.id, subtitle_route.SubtitleTrackCreate(), self.db))
+        track = asyncio.run(
+            subtitle_route.create_subtitle_track(self.project.id, subtitle_route.SubtitleTrackCreate(), self.db)
+        )
         bad = subtitle_route.SubtitleCueReplace(
             project_id=self.project.id,
             cues=[subtitle_route.SubtitleCueInput(start_ms=1000, end_ms=500, text="倒序")],
@@ -99,7 +101,9 @@ class SubtitleRouteTests(AvWorkbenchTestCase):
         self.assertEqual(saved["cues"][0]["text"], "合法")
 
     def test_import_export_round_trip_is_lossless(self) -> None:
-        track = asyncio.run(subtitle_route.create_subtitle_track(self.project.id, subtitle_route.SubtitleTrackCreate(), self.db))
+        track = asyncio.run(
+            subtitle_route.create_subtitle_track(self.project.id, subtitle_route.SubtitleTrackCreate(), self.db)
+        )
         raw = "1\n00:00:01,000 --> 00:00:02,500\n第一句\n多行\n\n2\n00:00:03,000 --> 00:00:04,000\n第二句\n"
         imported = asyncio.run(
             subtitle_route.import_subtitle(
@@ -128,11 +132,15 @@ class SubtitleRouteTests(AvWorkbenchTestCase):
         )
 
     def test_generate_from_shots_uses_tts_duration(self) -> None:
-        shot = Shot(id="av-shot-1", project_id=self.project.id, sequence=1, duration=4.0, dialogue="自动字幕", confirmed=True)
+        shot = Shot(
+            id="av-shot-1", project_id=self.project.id, sequence=1, duration=4.0, dialogue="自动字幕", confirmed=True
+        )
         shot.audio_path = "/nonexistent/tts.wav"
         self.db.add(shot)
         self.db.commit()
-        track = asyncio.run(subtitle_route.create_subtitle_track(self.project.id, subtitle_route.SubtitleTrackCreate(), self.db))
+        track = asyncio.run(
+            subtitle_route.create_subtitle_track(self.project.id, subtitle_route.SubtitleTrackCreate(), self.db)
+        )
 
         async def fake_probe(path):
             return 2_500
@@ -174,6 +182,7 @@ class AudioTrackRouteTests(AvWorkbenchTestCase):
             outside.unlink(missing_ok=True)
 
         media = self._media_file()
+
         async def fake_probe(path):
             return 12_000
 
@@ -181,7 +190,9 @@ class AudioTrackRouteTests(AvWorkbenchTestCase):
             track = asyncio.run(
                 audio_track_route.create_audio_track(
                     self.project.id,
-                    audio_track_route.AudioTrackCreate(kind="music", source_path=str(media), duck_amount_db=-12.0, loop=True),
+                    audio_track_route.AudioTrackCreate(
+                        kind="music", source_path=str(media), duck_amount_db=-12.0, loop=True
+                    ),
                     self.db,
                 )
             )
@@ -227,7 +238,9 @@ class AudioTrackRouteTests(AvWorkbenchTestCase):
         self.assertEqual(track["shot_span"]["end_ms"], 2500)
 
     def test_analyze_reports_structural_warnings(self) -> None:
-        shot = Shot(id="av-analyze-shot", project_id=self.project.id, sequence=1, duration=3.0, dialogue="对白", audio_path="")
+        shot = Shot(
+            id="av-analyze-shot", project_id=self.project.id, sequence=1, duration=3.0, dialogue="对白", audio_path=""
+        )
         self.db.add(shot)
         self.db.add(
             AudioTrack(

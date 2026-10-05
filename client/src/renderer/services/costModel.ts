@@ -131,11 +131,7 @@ function groupDigits(value: number): string {
  *
  * `costKnown=false` 时无论 micro 是什么（包括 0）都必须显示「成本未知」。
  */
-export function formatCostValue(
-  micro: number | null | undefined,
-  costKnown: boolean,
-  currency = 'CNY',
-): string {
+export function formatCostValue(micro: number | null | undefined, costKnown: boolean, currency = 'CNY'): string {
   if (!costKnown || micro === null || micro === undefined) return UNKNOWN_COST_TEXT
   return formatMicroAmount(micro, currency)
 }
@@ -338,18 +334,17 @@ export function normalizeEffectiveBudget(raw: unknown): EffectiveBudgetDto {
   const row = normalizeBudgetConfigRow(raw)
   const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   const origin = asString(source.source, 'none') as BudgetSource
-  const base: BudgetConfigRowDto =
-    row || {
-      scope_type: '',
-      scope_id: '',
-      currency: 'CNY',
-      soft_cost_micro: null,
-      hard_cost_micro: null,
-      soft_seconds: null,
-      hard_seconds: null,
-      enabled: false,
-      note: '',
-    }
+  const base: BudgetConfigRowDto = row || {
+    scope_type: '',
+    scope_id: '',
+    currency: 'CNY',
+    soft_cost_micro: null,
+    hard_cost_micro: null,
+    soft_seconds: null,
+    hard_seconds: null,
+    enabled: false,
+    note: '',
+  }
   return {
     ...base,
     source: origin === 'project' || origin === 'global' ? origin : 'none',
@@ -692,8 +687,7 @@ export function normalizeJobCost(raw: unknown): JobCostDto {
     failed_call_count: asCount(source.failed_call_count),
     provider_seconds: asCount(source.provider_seconds),
     by_capability: byCapability,
-    estimated_cost_micro:
-      estimated === null || estimated === undefined ? null : Math.round(asNumber(estimated, 0)),
+    estimated_cost_micro: estimated === null || estimated === undefined ? null : Math.round(asNumber(estimated, 0)),
     estimated_cost_known: asBoolean(source.estimated_cost_known, estimated !== null && estimated !== undefined),
     estimated_seconds: estimatedSeconds === null || estimatedSeconds === undefined ? null : asCount(estimatedSeconds),
     duration_source:
@@ -873,7 +867,10 @@ function normalizeEpisode(raw: unknown): EpisodeCostDto | null {
 export function normalizeBudgetSummary(raw: unknown): BudgetSummaryDto {
   const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   const used = (source.used && typeof source.used === 'object' ? source.used : {}) as Record<string, unknown>
-  const reserved = (source.reserved && typeof source.reserved === 'object' ? source.reserved : {}) as Record<string, unknown>
+  const reserved = (source.reserved && typeof source.reserved === 'object' ? source.reserved : {}) as Record<
+    string,
+    unknown
+  >
   const byCapability: CapabilityUsageDto[] = []
   if (Array.isArray(used.by_capability)) {
     for (const item of used.by_capability) byCapability.push(normalizeCapabilityUsage(item))
@@ -925,11 +922,7 @@ export function normalizeBudgetSummary(raw: unknown): BudgetSummaryDto {
 }
 
 /** 项目已用成本文案：全部已知才给金额，否则写「成本未知」并给出已知部分。 */
-export function usedCostText(
-  costMicro: number | null | undefined,
-  costKnown: boolean,
-  currency = 'CNY',
-): string {
+export function usedCostText(costMicro: number | null | undefined, costKnown: boolean, currency = 'CNY'): string {
   if (costKnown && costMicro !== null && costMicro !== undefined) return formatMicroAmount(costMicro, currency)
   if (costMicro === null || costMicro === undefined || costMicro === 0) return UNKNOWN_COST_TEXT
   return UNKNOWN_COST_TEXT + '（已知部分 ' + formatMicroAmount(costMicro, currency) + '）'
@@ -959,7 +952,10 @@ export function providerBlockedFromError(error: unknown): ProviderBlockedDetail 
   const source = detail as Record<string, unknown>
   const message = asString(source.message).trim()
   if (!message) return null
-  if (asString(source.status) !== 'provider_not_configured' && asString(source.error_code) !== 'provider_not_configured')
+  if (
+    asString(source.status) !== 'provider_not_configured' &&
+    asString(source.error_code) !== 'provider_not_configured'
+  )
     return null
   const rawMissing = Array.isArray(source.missing) ? source.missing : []
   const missing = rawMissing

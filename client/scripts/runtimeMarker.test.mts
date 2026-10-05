@@ -52,14 +52,8 @@ test('PBS 资产名或资产 sha256 变化时缓存失效', () => {
 })
 
 test('标记 schema 版本或构建脚本版本变化时缓存失效', () => {
-  assert.equal(
-    markerMatches({ ...expected, schemaVersion: RUNTIME_MARKER_SCHEMA_VERSION + 1 }, expected),
-    false,
-  )
-  assert.equal(
-    markerMatches({ ...expected, scriptVersion: RUNTIME_BUILD_SCRIPT_VERSION + 1 }, expected),
-    false,
-  )
+  assert.equal(markerMatches({ ...expected, schemaVersion: RUNTIME_MARKER_SCHEMA_VERSION + 1 }, expected), false)
+  assert.equal(markerMatches({ ...expected, scriptVersion: RUNTIME_BUILD_SCRIPT_VERSION + 1 }, expected), false)
 })
 
 test('旧版标记缺少新增字段时一律视为过期', () => {
@@ -88,11 +82,7 @@ test('requirements.lock 缺失时使用哨兵值,不会抛出异常', () => {
       requirementsLockSha256: missing,
     })
     assert.equal(marker.requirementsLockSha256, MISSING_REQUIREMENTS_LOCK_SHA256)
-    assert.equal(
-      markerMatches(marker, expected),
-      false,
-      '哨兵值不等于真实锁文件哈希,不能命中',
-    )
+    assert.equal(markerMatches(marker, expected), false, '哨兵值不等于真实锁文件哈希,不能命中')
   }
   assert.equal(expected.requirementsLockSha256, LOCK_SHA256, '有锁文件时必须记录真实 sha256')
 })

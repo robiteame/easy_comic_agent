@@ -18,18 +18,16 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from db import SessionLocal, init_db  # noqa: E402
 from models import BudgetReservation, CostEstimate, Project, Shot, UsageRecord  # noqa: E402
 from services import pricing_service, task_registry, usage_service  # noqa: E402
-from services.providers.usage import CAPABILITY_IMAGE, CAPABILITY_LLM, UsageMetadata  # noqa: E402
 from services.image_service import ImageService  # noqa: E402
 from services.llm_service import LLMService  # noqa: E402
 from services.providers.endpoint import EndpointConfig  # noqa: E402
-from services.providers.image_placeholder import PlaceholderImageAdapter  # noqa: E402
 from services.providers.image_stability import StabilityImageAdapter  # noqa: E402
 from services.providers.llm_openai_chat import OpenAIChatAdapter  # noqa: E402
+from services.providers.usage import UsageMetadata  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 init_db()
 

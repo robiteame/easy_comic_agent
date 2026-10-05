@@ -19,13 +19,12 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from services.providers.endpoint import EndpointConfig, normalize_protocol, settings_defaults  # noqa: E402
 from services.providers.registry import get_adapter  # noqa: E402
 from services.providers.tts_tencent import TencentTTSAdapter, normalize_tencent_voice  # noqa: E402
 from services.providers.usage import CAPABILITY_TTS, CAPABILITY_VIDEO  # noqa: E402
 from services.providers.video_dashscope_wanx import DashscopeWanxVideoAdapter  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class _FakeResponse:
@@ -139,9 +138,7 @@ class DashscopeWanxAdapterTests(unittest.TestCase):
             self.assertEqual(adapter._resolve_resolution("480p"), "480P")
 
     def test_create_task_payload_and_headers(self) -> None:
-        client = _FakeAsyncClient(
-            [_FakeResponse({"output": {"task_id": "tid-1", "task_status": "PENDING"}})]
-        )
+        client = _FakeAsyncClient([_FakeResponse({"output": {"task_id": "tid-1", "task_status": "PENDING"}})])
         from services.providers.base import VideoRequest
 
         request = VideoRequest(
@@ -170,9 +167,7 @@ class DashscopeWanxAdapterTests(unittest.TestCase):
 
     def test_create_task_wan3_uses_media_and_disables_audio(self) -> None:
         adapter = DashscopeWanxVideoAdapter(_wanx_endpoint(model="wan3.0-video"))
-        client = _FakeAsyncClient(
-            [_FakeResponse({"output": {"task_id": "tid-3", "task_status": "PENDING"}})]
-        )
+        client = _FakeAsyncClient([_FakeResponse({"output": {"task_id": "tid-3", "task_status": "PENDING"}})])
         from services.providers.base import VideoRequest
 
         request = VideoRequest(
@@ -195,9 +190,7 @@ class DashscopeWanxAdapterTests(unittest.TestCase):
 
     def test_create_task_wan27_media_without_audio_toggle(self) -> None:
         adapter = DashscopeWanxVideoAdapter(_wanx_endpoint(model="wan2.7-i2v"))
-        client = _FakeAsyncClient(
-            [_FakeResponse({"output": {"task_id": "tid-7", "task_status": "PENDING"}})]
-        )
+        client = _FakeAsyncClient([_FakeResponse({"output": {"task_id": "tid-7", "task_status": "PENDING"}})])
         from services.providers.base import VideoRequest
 
         request = VideoRequest(prompt="空镜", reference_image="data:image/png;base64,AAAA", duration=5)
@@ -213,9 +206,7 @@ class DashscopeWanxAdapterTests(unittest.TestCase):
         # r2v 契约：参考图像/参考视频至少 1 个，仅传 first_frame 会被服务商判
         # InvalidParameter；已审核故事板首帧同时以主体参考身份重复传入。
         adapter = DashscopeWanxVideoAdapter(_wanx_endpoint(model="wan2.7-r2v"))
-        client = _FakeAsyncClient(
-            [_FakeResponse({"output": {"task_id": "tid-r", "task_status": "PENDING"}})]
-        )
+        client = _FakeAsyncClient([_FakeResponse({"output": {"task_id": "tid-r", "task_status": "PENDING"}})])
         from services.providers.base import VideoRequest
 
         request = VideoRequest(
@@ -253,9 +244,7 @@ class DashscopeWanxAdapterTests(unittest.TestCase):
             )
 
     def test_create_task_text_only_omits_reference_fields(self) -> None:
-        client = _FakeAsyncClient(
-            [_FakeResponse({"output": {"task_id": "tid-2", "task_status": "PENDING"}})]
-        )
+        client = _FakeAsyncClient([_FakeResponse({"output": {"task_id": "tid-2", "task_status": "PENDING"}})])
         from services.providers.base import VideoRequest
 
         with patch("services.providers.video_dashscope_wanx.httpx.AsyncClient", return_value=client):
@@ -374,9 +363,7 @@ class TencentTTSAdapterTests(unittest.TestCase):
             TencentTTSAdapter(_tencent_endpoint(api_key=""))._credentials()
 
     def test_signed_headers_structure(self) -> None:
-        headers = self.adapter._signed_headers(
-            "tts.tencentcloudapi.com", "TextToVoice", "{}", "AKIDtest", "secret"
-        )
+        headers = self.adapter._signed_headers("tts.tencentcloudapi.com", "TextToVoice", "{}", "AKIDtest", "secret")
         authorization = headers["Authorization"]
         self.assertTrue(authorization.startswith("TC3-HMAC-SHA256 Credential=AKIDtest/"))
         self.assertIn("SignedHeaders=content-type;host;x-tc-action", authorization)
@@ -408,9 +395,7 @@ class TencentTTSAdapterTests(unittest.TestCase):
         from services.providers.base import TTSRequest
 
         wav = _make_wav(1)
-        client = _FakeAsyncClient(
-            [_FakeResponse({"Response": {"Audio": base64.b64encode(wav).decode("ascii")}})]
-        )
+        client = _FakeAsyncClient([_FakeResponse({"Response": {"Audio": base64.b64encode(wav).decode("ascii")}})])
         with patch("services.providers.tts_tencent.httpx.AsyncClient", return_value=client):
             audio = asyncio.run(self.adapter.synthesize(TTSRequest(text="你好")))
         self.assertEqual(audio, wav)

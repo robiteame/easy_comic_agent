@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from config import settings
 from services.ffmpeg_service import FFmpegService
@@ -133,7 +133,7 @@ async def generate_dialogue_track(
                 logger.warning("清理逐句配音中间件失败: path=%s", path)
 
     timed: list[DialogueLine] = []
-    for line, (start_ms, end_ms) in zip(prepared, assign_line_timings(durations)):
+    for line, (start_ms, end_ms) in zip(prepared, assign_line_timings(durations), strict=True):
         timed.append(
             DialogueLine(
                 speaker=line.speaker,

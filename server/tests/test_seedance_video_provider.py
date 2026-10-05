@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import io
 import sys
 import unittest
 from pathlib import Path
@@ -22,15 +21,13 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from PIL import Image  # noqa: E402
 
-from config import settings  # noqa: E402
 from services.providers.base import VideoCapabilities, VideoRequest  # noqa: E402
 from services.providers.endpoint import EndpointConfig  # noqa: E402
 from services.providers.video_ark_seedance import ArkSeedanceVideoAdapter  # noqa: E402
 from services.video_service import VideoService  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _endpoint() -> EndpointConfig:
@@ -89,11 +86,7 @@ class FixedDurationTests(unittest.TestCase):
             patch("services.video_service.get_adapter", return_value=ArkSeedanceVideoAdapter),
         ):
             with self.assertRaisesRegex(RuntimeError, "拆分"):
-                asyncio.run(
-                    service.generate_shot_video(
-                        _shot(duration=12.0), [], {}, project_id="seedance_tests"
-                    )
-                )
+                asyncio.run(service.generate_shot_video(_shot(duration=12.0), [], {}, project_id="seedance_tests"))
 
     def test_short_shot_uses_fixed_duration(self) -> None:
         adapter = ArkSeedanceVideoAdapter(_endpoint())
@@ -155,9 +148,7 @@ class FirstFrameOnlyTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "approved_storyboard_first_frame"):
                 asyncio.run(
-                    service.generate_shot_video(
-                        _shot(storyboard_path="", image_path=""), [], {}, "seedance_tests"
-                    )
+                    service.generate_shot_video(_shot(storyboard_path="", image_path=""), [], {}, "seedance_tests")
                 )
 
     def test_no_silent_fallback_to_wanx(self) -> None:
@@ -207,8 +198,6 @@ class SeedancePayloadTests(unittest.TestCase):
                 captured.update(kwargs)
                 captured["url"] = url
                 return _FakeResponse()
-
-        import httpx
 
         with patch("services.providers.video_ark_seedance.httpx.AsyncClient", return_value=_FakeClient()):
             asyncio.run(adapter._create_task(request.prompt, 5, "9:16", "720p", None))

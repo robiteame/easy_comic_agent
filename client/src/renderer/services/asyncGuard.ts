@@ -9,10 +9,12 @@ export function isCurrentProjectAsyncSnapshot(
   current: ProjectAsyncSnapshot,
   mounted = true,
 ): boolean {
-  return mounted &&
+  return (
+    mounted &&
     expected.projectId === current.projectId &&
     expected.projectEpoch === current.projectEpoch &&
     expected.operationToken === current.operationToken
+  )
 }
 
 export function isLatestResourceResponse(

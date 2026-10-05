@@ -10,8 +10,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402,F401
-
 from config import settings  # noqa: E402
 from services.subtitle_service import (  # noqa: E402
     ShotDialogueInput,
@@ -27,12 +25,12 @@ from services.subtitle_service import (  # noqa: E402
     parse_srt,
     parse_timecode,
     parse_vtt,
-    serialize_cues,
     serialize_srt,
     serialize_vtt,
     validate_cue_text,
     validate_cues,
 )
+from test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402,F401
 
 
 def _cue(start: int, end: int, text: str, name: str = "") -> SubtitleCueData:
@@ -47,12 +45,16 @@ class SrtVttRoundTripTests(unittest.TestCase):
             _cue(61_500, 62_000, "roll 'em!"),
         ]
         parsed = parse_srt(serialize_srt(cues))
-        self.assertEqual([(c.start_ms, c.end_ms, c.text) for c in parsed], [(c.start_ms, c.end_ms, c.text) for c in cues])
+        self.assertEqual(
+            [(c.start_ms, c.end_ms, c.text) for c in parsed], [(c.start_ms, c.end_ms, c.text) for c in cues]
+        )
 
     def test_vtt_round_trip_is_lossless(self) -> None:
         cues = [_cue(120, 9_800, "第一句"), _cue(10_000, 12_500, "line A\nline B")]
         parsed = parse_vtt(serialize_vtt(cues))
-        self.assertEqual([(c.start_ms, c.end_ms, c.text) for c in parsed], [(c.start_ms, c.end_ms, c.text) for c in cues])
+        self.assertEqual(
+            [(c.start_ms, c.end_ms, c.text) for c in parsed], [(c.start_ms, c.end_ms, c.text) for c in cues]
+        )
 
     def test_parse_srt_tolerates_bom_crlf_and_missing_index(self) -> None:
         raw = "\ufeff1\r\n00:00:01,000 --> 00:00:02,000\r\nhello\r\n\r\n00:00:03,000 --> 00:00:04,500\r\nworld\r\n"

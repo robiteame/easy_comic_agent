@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ApiOutlined,
   BugOutlined,
@@ -56,16 +57,16 @@ const ProgressDebugPanel: React.FC<ProgressDebugPanelProps> = ({
   const listRef = useRef<HTMLDivElement | null>(null)
 
   const events = useMemo(() => mergeDebugEvents(restEvents, liveEvents), [restEvents, liveEvents])
-  const visibleEvents = useMemo(
-    () => events.filter((event) => debugFilterMatches(event, filter)),
-    [events, filter],
-  )
+  const visibleEvents = useMemo(() => events.filter((event) => debugFilterMatches(event, filter)), [events, filter])
   const fallbackSelected = useMemo(() => latestApiRequest(events) || events[events.length - 1] || null, [events])
   const selected = useMemo(
     () => events.find((event) => event.id === selectedId) || fallbackSelected,
     [events, fallbackSelected, selectedId],
   )
-  const result = useMemo(() => apiResultFor(events, selected?.kind === 'api_request' ? selected : null), [events, selected])
+  const result = useMemo(
+    () => apiResultFor(events, selected?.kind === 'api_request' ? selected : null),
+    [events, selected],
+  )
 
   const refresh = useCallback(async () => {
     if (!job?.id) {
@@ -185,7 +186,11 @@ const ProgressDebugPanel: React.FC<ProgressDebugPanelProps> = ({
         </button>
       </div>
 
-      {error && <div className="progress-debug-error" role="status">{error}</div>}
+      {error && (
+        <div className="progress-debug-error" role="status">
+          {error}
+        </div>
+      )}
 
       <div className="progress-debug-body">
         <div className="progress-debug-log" ref={listRef}>
@@ -232,40 +237,66 @@ const ProgressDebugPanel: React.FC<ProgressDebugPanelProps> = ({
                   <span>{selected.api || '任务步骤'}</span>
                   <strong>{selected.message}</strong>
                 </div>
-                <em className={`debug-detail-level debug-detail-${selected.level}`}>{debugLevelLabel(selected.level)}</em>
+                <em className={`debug-detail-level debug-detail-${selected.level}`}>
+                  {debugLevelLabel(selected.level)}
+                </em>
               </div>
 
               <dl className="debug-detail-meta">
-                <div><dt>时间</dt><dd>{formatDebugTimestamp(selected.timestamp)}</dd></div>
-                <div><dt>当前步骤</dt><dd>{progressStepLabel(selected.step)}</dd></div>
-                {selected.provider && <div><dt>Provider</dt><dd>{selected.provider}</dd></div>}
-                {selected.model && <div><dt>模型</dt><dd>{selected.model}</dd></div>}
+                <div>
+                  <dt>时间</dt>
+                  <dd>{formatDebugTimestamp(selected.timestamp)}</dd>
+                </div>
+                <div>
+                  <dt>当前步骤</dt>
+                  <dd>{progressStepLabel(selected.step)}</dd>
+                </div>
+                {selected.provider && (
+                  <div>
+                    <dt>Provider</dt>
+                    <dd>{selected.provider}</dd>
+                  </div>
+                )}
+                {selected.model && (
+                  <div>
+                    <dt>模型</dt>
+                    <dd>{selected.model}</dd>
+                  </div>
+                )}
               </dl>
 
               {selected.kind === 'api_request' && (
                 <section className="debug-payload-section">
-                  <h3><ApiOutlined aria-hidden="true" /> 请求参数</h3>
+                  <h3>
+                    <ApiOutlined aria-hidden="true" /> 请求参数
+                  </h3>
                   <pre>{formatDebugPayload(selected.params)}</pre>
                 </section>
               )}
 
               {promptPrompt.map((section) => (
                 <section className="debug-payload-section" key={section.label}>
-                  <h3><MessageOutlined aria-hidden="true" /> {section.label}</h3>
+                  <h3>
+                    <MessageOutlined aria-hidden="true" /> {section.label}
+                  </h3>
                   <pre>{section.content}</pre>
                 </section>
               ))}
 
               {result && (
                 <section className="debug-payload-section">
-                  <h3><CodeOutlined aria-hidden="true" /> 请求结果</h3>
+                  <h3>
+                    <CodeOutlined aria-hidden="true" /> 请求结果
+                  </h3>
                   <pre>{formatDebugPayload({ message: result.message, detail: result.detail })}</pre>
                 </section>
               )}
 
               {!isApiDebugEvent(selected) && (
                 <section className="debug-payload-section">
-                  <h3><CodeOutlined aria-hidden="true" /> 日志详情</h3>
+                  <h3>
+                    <CodeOutlined aria-hidden="true" /> 日志详情
+                  </h3>
                   <pre>{formatDebugPayload(selected.detail || selected.message)}</pre>
                 </section>
               )}

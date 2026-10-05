@@ -145,9 +145,7 @@ function isWindows(targetKey) {
 }
 
 function pythonExecutable(dir, targetKey) {
-  return isWindows(targetKey)
-    ? path.join(dir, 'python.exe')
-    : path.join(dir, 'bin', 'python3')
+  return isWindows(targetKey) ? path.join(dir, 'python.exe') : path.join(dir, 'bin', 'python3')
 }
 
 async function sha256File(file) {
@@ -174,18 +172,26 @@ async function download(url, dest) {
   // connects) and ships on macOS, Linux and Windows 10+ alike; keep a
   // fetch fallback for odd environments without it.
   if (HAVE_CURL) {
-    const result = run('curl', [
-      '--location',
-      '--fail',
-      '--silent',
-      '--show-error',
-      '--retry', '10',
-      '--retry-all-errors',
-      '--retry-delay', '5',
-      '--connect-timeout', '30',
-      '--output', dest,
-      url,
-    ], { stdio: 'inherit' })
+    const result = run(
+      'curl',
+      [
+        '--location',
+        '--fail',
+        '--silent',
+        '--show-error',
+        '--retry',
+        '10',
+        '--retry-all-errors',
+        '--retry-delay',
+        '5',
+        '--connect-timeout',
+        '30',
+        '--output',
+        dest,
+        url,
+      ],
+      { stdio: 'inherit' },
+    )
     if (result.status !== 0) {
       rmSync(dest, { force: true })
       throw new Error(`curl 退出码 ${result.status}`)
@@ -323,12 +329,7 @@ function installDependencies(interpreter) {
   const uvAvailable = run('uv', ['--version'], { stdio: 'pipe' }).status === 0
   if (uvAvailable) {
     log('使用 uv 安装生产依赖')
-    const result = run('uv', [
-      'pip', 'install',
-      '--python', interpreter,
-      '--require-hashes',
-      '-r', lockFile,
-    ])
+    const result = run('uv', ['pip', 'install', '--python', interpreter, '--require-hashes', '-r', lockFile])
     if (result.status !== 0) fail('uv pip install 失败')
     return
   }
@@ -336,12 +337,7 @@ function installDependencies(interpreter) {
   log('uv 不可用,回退 pip(ensurepip)')
   let result = run(interpreter, ['-m', 'ensurepip', '--upgrade'])
   if (result.status !== 0) fail('ensurepip 失败')
-  result = run(interpreter, [
-    '-m', 'pip', 'install',
-    '--no-warn-script-location',
-    '--require-hashes',
-    '-r', lockFile,
-  ])
+  result = run(interpreter, ['-m', 'pip', 'install', '--no-warn-script-location', '--require-hashes', '-r', lockFile])
   if (result.status !== 0) fail('pip install 失败')
 }
 
@@ -441,7 +437,7 @@ function ffmpegMarker(targetKey) {
   }
 }
 
-function verifyFfmpegBinary(target, targetKey) {
+function verifyFfmpegBinary(target, _targetKey) {
   const version = run(target, ['-version'], { stdio: 'pipe' })
   if (version.status !== 0) fail(`捆绑 ffmpeg 无法执行: ${target}`)
   const banner = String(version.stdout)
@@ -474,12 +470,11 @@ async function buildFfmpegFromSource(buildRoot) {
 
   const x264Prefix = path.join(prefix, 'x264')
   log(`编译 x264 ${X264_COMMIT.slice(0, 8)} -> ${x264Prefix}`)
-  let result = run(path.join(x264Src, 'configure'), [
-    `--prefix=${x264Prefix}`,
-    '--enable-static',
-    '--disable-cli',
-    '--disable-opencl',
-  ], { cwd: x264Src, stdio: 'inherit', env: buildEnv })
+  let result = run(
+    path.join(x264Src, 'configure'),
+    [`--prefix=${x264Prefix}`, '--enable-static', '--disable-cli', '--disable-opencl'],
+    { cwd: x264Src, stdio: 'inherit', env: buildEnv },
+  )
   if (result.status !== 0) fail('x264 configure 失败')
   result = run('make', [`-j${jobs}`], { cwd: x264Src, stdio: 'inherit', env: buildEnv })
   if (result.status !== 0) fail('x264 编译失败')
@@ -487,27 +482,31 @@ async function buildFfmpegFromSource(buildRoot) {
   if (result.status !== 0) fail('x264 install 失败')
 
   log(`编译 ffmpeg ${FFMPEG_VERSION} -> ${binDir}`)
-  result = run(path.join(ffmpegSrc, 'configure'), [
-    `--prefix=${path.join(prefix, 'ffmpeg')}`,
-    '--enable-gpl',
-    '--enable-libx264',
-    // Explicitly opt into zlib (png decode); everything else in-tree is
-    // built by default while --disable-autodetect keeps random host libs
-    // out of the relocatable binary.
-    '--enable-zlib',
-    '--disable-autodetect',
-    '--disable-shared',
-    '--enable-static',
-    '--disable-ffplay',
-    '--disable-ffprobe',
-    '--disable-doc',
-    `--extra-cflags=-I${path.join(x264Prefix, 'include')}`,
-    `--extra-ldflags=-L${path.join(x264Prefix, 'lib')}`,
-  ], {
-    cwd: ffmpegSrc,
-    stdio: 'inherit',
-    env: { ...buildEnv, PKG_CONFIG_PATH: path.join(x264Prefix, 'lib', 'pkgconfig') },
-  })
+  result = run(
+    path.join(ffmpegSrc, 'configure'),
+    [
+      `--prefix=${path.join(prefix, 'ffmpeg')}`,
+      '--enable-gpl',
+      '--enable-libx264',
+      // Explicitly opt into zlib (png decode); everything else in-tree is
+      // built by default while --disable-autodetect keeps random host libs
+      // out of the relocatable binary.
+      '--enable-zlib',
+      '--disable-autodetect',
+      '--disable-shared',
+      '--enable-static',
+      '--disable-ffplay',
+      '--disable-ffprobe',
+      '--disable-doc',
+      `--extra-cflags=-I${path.join(x264Prefix, 'include')}`,
+      `--extra-ldflags=-L${path.join(x264Prefix, 'lib')}`,
+    ],
+    {
+      cwd: ffmpegSrc,
+      stdio: 'inherit',
+      env: { ...buildEnv, PKG_CONFIG_PATH: path.join(x264Prefix, 'lib', 'pkgconfig') },
+    },
+  )
   if (result.status !== 0) fail('ffmpeg configure 失败')
   result = run('make', [`-j${jobs}`, 'ffmpeg'], { cwd: ffmpegSrc, stdio: 'inherit', env: buildEnv })
   if (result.status !== 0) fail('ffmpeg 编译失败')

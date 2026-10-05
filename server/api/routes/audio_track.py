@@ -25,7 +25,6 @@ from models import AudioTrack, Project, Shot
 from services.av_config_service import bump_av_config_version, collect_render_config
 from services.error_reporter import ERROR_RENDER, error_payload, log_failure
 from services.ffmpeg_service import FFmpegService
-from services.shot_dialogue import dialogue_display_text, parse_shot_dialogue
 from services.security import (
     UploadLimitExceeded,
     existing_file,
@@ -34,11 +33,18 @@ from services.security import (
     save_upload_stream,
     validate_identifier,
 )
+from services.shot_dialogue import dialogue_display_text, parse_shot_dialogue
 from services.storage_service import StorageQuotaExceeded, StorageService
 from services.task_registry import (
     cancel_scopes,
+)
+from services.task_registry import (
     snapshot as task_snapshot,
+)
+from services.task_registry import (
     start as start_task,
+)
+from services.task_registry import (
     update_progress as update_job_progress,
 )
 
@@ -233,7 +239,9 @@ async def list_audio_tracks(project_id: str, db: Session = Depends(get_db)):
         "total_duration_ms": total_ms,
         "shots": shot_infos,
         "max_tracks": int(settings.MAX_AUDIO_TRACKS),
-        "tracks": [_serialize_track(track, spans.get(track.shot_id) if track.kind == "dialogue" else None) for track in tracks],
+        "tracks": [
+            _serialize_track(track, spans.get(track.shot_id) if track.kind == "dialogue" else None) for track in tracks
+        ],
     }
 
 
@@ -246,7 +254,9 @@ async def upload_audio_asset(project_id: str, file: UploadFile = File(...), db: 
     try:
         _, extension = safe_filename(file.filename, allowed_extensions=_AUDIO_EXTENSIONS)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"请上传支持的音频格式（{'/'.join(sorted(_AUDIO_EXTENSIONS))}）") from exc
+        raise HTTPException(
+            status_code=400, detail=f"请上传支持的音频格式（{'/'.join(sorted(_AUDIO_EXTENSIONS))}）"
+        ) from exc
     media_dir = safe_path(settings.OUTPUT_DIR / "projects", project_id, "audio_tracks", create_parent=True)
     target = media_dir / f"asset-{uuid.uuid4().hex}{extension}"
     try:
@@ -410,9 +420,16 @@ async def analyze_audio_setup(project_id: str, db: Session = Depends(get_db)):
             if not track.get("shot_id"):
                 add("error", "dialogue_unbound", f"对白轨「{label}」未绑定镜头", track_id)
             elif not source:
-                shot_native = next((info["native_audio"] for info in shot_infos if info["id"] == track["shot_id"]), False)
+                shot_native = next(
+                    (info["native_audio"] for info in shot_infos if info["id"] == track["shot_id"]), False
+                )
                 if shot_native:
-                    add("warning", "dialogue_native", f"对白轨「{label}」绑定的镜头使用原生音轨，对白无法单独调整", track_id)
+                    add(
+                        "warning",
+                        "dialogue_native",
+                        f"对白轨「{label}」绑定的镜头使用原生音轨，对白无法单独调整",
+                        track_id,
+                    )
                 else:
                     add("warning", "dialogue_no_tts", f"对白轨「{label}」绑定的镜头尚未生成配音", track_id)
         else:
@@ -444,7 +461,12 @@ async def analyze_audio_setup(project_id: str, db: Session = Depends(get_db)):
         for index in range(1, len(ordered)):
             previous, current = ordered[index - 1], ordered[index]
             if current[0] < previous[1]:
-                add("warning", "overlap", f"同一{ _KIND_LABELS.get(kind, kind) }轨上有两条轨道时间重叠（{current[0]}ms 处）", current[2])
+                add(
+                    "warning",
+                    "overlap",
+                    f"同一{_KIND_LABELS.get(kind, kind)}轨上有两条轨道时间重叠（{current[0]}ms 处）",
+                    current[2],
+                )
 
     for subtitle in av_config.subtitle_tracks:
         label = subtitle.get("name") or subtitle["id"]
@@ -456,9 +478,7 @@ async def analyze_audio_setup(project_id: str, db: Session = Depends(get_db)):
         if subtitle["burn_in"] and not subtitle["cues"]:
             add("warning", "subtitle_empty", f"字幕轨「{label}」没有字幕条目", subtitle["id"])
 
-    if total_ms > 0 and not any(
-        track["kind"] != "dialogue" and not track["muted"] for track in av_config.audio_tracks
-    ):
+    if total_ms > 0 and not any(track["kind"] != "dialogue" and not track["muted"] for track in av_config.audio_tracks):
         add("info", "no_bed", "尚未配置背景音乐 / 环境音 / 音效轨，成片将只包含对白与环境底噪")
 
     return {"project_id": project_id, "total_duration_ms": total_ms, "warnings": warnings}
@@ -487,7 +507,13 @@ async def start_mix_preview(project_id: str, data: AudioPreviewRequest, db: Sess
         return {"status": "mixing", "project_id": project_id, "deduplicated": True}
     start_task(task_key, _preview_task(project_id, scope, data.shot_id))
     _preview_status[project_id] = {"status": "mixing", "scope": scope, "shot_id": data.shot_id, "progress": 0}
-    return {"status": "mixing", "project_id": project_id, "scope": scope, "shot_id": data.shot_id, **budget_notice(claim)}
+    return {
+        "status": "mixing",
+        "project_id": project_id,
+        "scope": scope,
+        "shot_id": data.shot_id,
+        **budget_notice(claim),
+    }
 
 
 @router.get("/{project_id}/preview/status")
@@ -578,6 +604,8 @@ async def _preview_task(project_id: str, scope: str, shot_id: str) -> None:
         }
         await ws_manager.send_to_project(
             project_id,
-            error_payload(error_type=ERROR_RENDER, message="混音预览生成失败，请检查轨道素材与参数后重试。", error_id=error_id),
+            error_payload(
+                error_type=ERROR_RENDER, message="混音预览生成失败，请检查轨道素材与参数后重试。", error_id=error_id
+            ),
         )
         raise

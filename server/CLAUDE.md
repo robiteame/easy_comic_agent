@@ -6,6 +6,8 @@ AI漫剧Agent 是一套"全流程自动化+轻量化人工干预"的漫剧生产
 
 **核心定位**：输入脚本 → Agent 智能拆解 → 逐镜头生成 → 成片输出
 
+**代码规范**：Python 代码由 Ruff 统一 lint + format（配置在 `server/pyproject.toml`，行宽 120、双引号）。提交前 lefthook 会自动修复暂存文件；CI 中 `ruff check` + `ruff format --check` 为门禁。改动服务端代码后请保持 `ruff check server && ruff format --check server` 通过（本地用 `server/.venv/bin/ruff`）。
+
 **两种运行模式**：
 - **手动模式（默认）**：由 `api/routes` 逐步触发（解析→分镜→定稿故事板→逐镜头审核→逐镜头视频→合成），每步之间有人工卡点，进度经 WebSocket 实时推送。
 - **自动模式**：由 `agent/graph.py` 的 LangGraph 图一次 `ainvoke` 端到端跑到成片，无人工卡点。图节点**复用手动模式同一批 route 步骤函数**，不重复实现业务逻辑。
@@ -166,11 +168,11 @@ START → parse_and_storyboard → generate_storyboard_images
 class AgentState(TypedDict):
     project_id: str
     mode: Literal["manual", "auto"]
-    initial_state: dict                 # 传给阶段1 (_run_storyboard_phase) 的初始 state
+    initial_state: dict  # 传给阶段1 (_run_storyboard_phase) 的初始 state
     output_format: Literal["9:16", "16:9", "1:1"]
     resolution: str
     current_step: str
-    errors: Annotated[list[str], add]   # reducer: 追加; 非空即触发后续节点短路
+    errors: Annotated[list[str], add]  # reducer: 追加; 非空即触发后续节点短路
     # ... 另含手动流程节点 (script_parser/storyboard_gen) 操作的工作字段
     #     (characters / script_scenes / shots / style_params / rag_context 等)
 ```

@@ -1,7 +1,6 @@
 import json
-import asyncio
-from fastapi import WebSocket, WebSocketDisconnect
-from typing import Dict, Set
+
+from fastapi import WebSocket
 
 
 class ConnectionManager:
@@ -9,7 +8,7 @@ class ConnectionManager:
 
     def __init__(self):
         # project_id -> set of websockets
-        self.active_connections: Dict[str, Set[WebSocket]] = {}
+        self.active_connections: dict[str, set[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket, project_id: str):
         await websocket.accept()
@@ -45,7 +44,7 @@ class JobsConnectionManager:
     """
 
     def __init__(self):
-        self.connections: Set[WebSocket] = set()
+        self.connections: set[WebSocket] = set()
 
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()

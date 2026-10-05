@@ -11,16 +11,21 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from services.image_service import ImageService  # noqa: E402
 from services.providers.endpoint import EndpointConfig  # noqa: E402
 from services.providers.image_placeholder import PlaceholderImageAdapter  # noqa: E402
 from services.providers.registry import UnknownProtocolError, get_adapter  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _endpoint(protocol: str, api_key: str = "") -> EndpointConfig:
-    return EndpointConfig(protocol=protocol, base_url="https://img.example.test", api_key=api_key, model="m", params={"image_size": "1024x1024"})
+    return EndpointConfig(
+        protocol=protocol,
+        base_url="https://img.example.test",
+        api_key=api_key,
+        model="m",
+        params={"image_size": "1024x1024"},
+    )
 
 
 class OfflineImageFlowTests(unittest.TestCase):

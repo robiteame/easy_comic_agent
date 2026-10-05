@@ -10,7 +10,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.style_templates import STYLE_TEMPLATES, style_prompt_params
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -82,7 +81,7 @@ def main() -> None:
         _assert(
             "first_episode_title" in project_route
             and '"first_episode"' in project_route
-            and "project_type=\"episode\"" in project_route
+            and 'project_type="episode"' in project_route
             and "first_episode_title" in api_ts
             and "project.first_episode || project" in main_workspace,
             "series_create_auto_first_episode",
@@ -103,7 +102,10 @@ def main() -> None:
 
     checks.append(
         _assert(
-            all(label in main_workspace for label in ["新建剧集", "上传剧本", "AI解析", "资产板", "批量分镜", "逐镜审核", "生成视频"])
+            all(
+                label in main_workspace
+                for label in ["新建剧集", "上传剧本", "AI解析", "资产板", "批量分镜", "逐镜审核", "生成视频"]
+            )
             and "scriptApi.upload" in main_workspace
             and "scriptApi.parse" in main_workspace
             and "asset-board-panel" in main_workspace

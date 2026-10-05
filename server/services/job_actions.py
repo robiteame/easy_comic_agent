@@ -37,8 +37,8 @@ from services.job_types import (
     parse_job_key,
 )
 from services.provider_readiness import CODE_PROVIDER_NOT_CONFIGURED, format_message, missing_providers
-from services.task_registry import cancel as cancel_job_task
 from services.shot_dialogue import parse_shot_dialogue
+from services.task_registry import cancel as cancel_job_task
 
 RETRY_MODE = "retry"
 RESUME_MODE = "resume"

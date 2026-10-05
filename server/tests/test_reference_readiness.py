@@ -13,8 +13,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: E402
-
 from PIL import Image  # noqa: E402
 
 from agent import graph  # noqa: E402
@@ -26,10 +24,10 @@ from services.job_dto import job_dto  # noqa: E402
 from services.reference_readiness_service import (  # noqa: E402
     accept_degraded_reference,
     build_manifest_for_shot,
-    ensure_generation_gate,
     mark_reference_success,
     refresh_project_reference_state,
 )
+from test_environment import TEST_ROOT  # noqa: E402
 
 
 def _image(path: Path) -> str:
@@ -152,7 +150,9 @@ class ReferenceReadinessTestCase(unittest.TestCase):
         self._shot(project_id, 2, character_id=character.id, scene_id=scene.id)
         refresh_project_reference_state(self.db, project_id)
 
-        item = accept_degraded_reference(self.db, "character", character.id, reason="用户明确确认降级")["project_report"]
+        item = accept_degraded_reference(self.db, "character", character.id, reason="用户明确确认降级")[
+            "project_report"
+        ]
         self.assertEqual(item["status"], "degraded")
         self.assertEqual(item["shot_range"], "镜头 1-2")
         self.assertEqual(item["affected_shot_count"], 2)

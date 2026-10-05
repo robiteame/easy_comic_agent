@@ -1,4 +1,3 @@
-from .graph import build_graph, get_graph
 from .checkpoints import CheckpointStore
 from .contracts import (
     CheckpointRecord,
@@ -13,6 +12,7 @@ from .contracts import (
     StageName,
     StageStatus,
 )
+from .graph import build_graph, get_graph
 
 __all__ = [
     "build_graph",

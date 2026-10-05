@@ -12,7 +12,10 @@ import path from 'node:path'
 const args = process.argv.slice(2)
 const outputIndex = args.indexOf('--output')
 const outputName = outputIndex >= 0 ? args[outputIndex + 1] : 'SHA256SUMS.txt'
-const positional = args.filter((_, index) => index !== outputIndex && index !== outputIndex + 1)
+// --output 不存在时（outputIndex=-1）必须保留全部位置参数；
+// 此前 -1 + 1 = 0 会把 release-dir 本身误当作输出名丢弃。
+const positional =
+  outputIndex >= 0 ? args.filter((_, index) => index !== outputIndex && index !== outputIndex + 1) : args
 const releaseDir = positional[0]
 if (!releaseDir) {
   console.error('用法: node artifact-hashes.mjs <release-dir> --output <name>')
@@ -31,7 +34,9 @@ if (entries.length === 0) {
 }
 
 const lines = entries.map((name) => {
-  const digest = createHash('sha256').update(readFileSync(path.join(releaseDir, name))).digest('hex')
+  const digest = createHash('sha256')
+    .update(readFileSync(path.join(releaseDir, name)))
+    .digest('hex')
   return `${digest}  ${name}`
 })
 

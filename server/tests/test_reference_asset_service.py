@@ -19,13 +19,11 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from PIL import Image  # noqa: E402
 
-from config import settings  # noqa: E402
 from services.providers.video_ark_seedance import ArkSeedanceVideoAdapter  # noqa: E402
 from services.reference_asset_service import ReferenceAssetService  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _png_bytes(width: int, height: int, *, noise: bool = False) -> bytes:
@@ -50,9 +48,7 @@ class CompressionBudgetTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.service = ReferenceAssetService()
-        cls.noise_png = _write_png(
-            TEST_ROOT / "output" / "ref_assets" / "noise_720x1280.png", 720, 1280, noise=True
-        )
+        cls.noise_png = _write_png(TEST_ROOT / "output" / "ref_assets" / "noise_720x1280.png", 720, 1280, noise=True)
 
     def test_oversized_file_recompressed_within_budget_with_metadata(self) -> None:
         budget = 128 * 1024

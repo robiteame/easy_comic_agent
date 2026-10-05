@@ -1,7 +1,7 @@
-import uuid
 import json
 import os
 import shutil
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,11 +17,24 @@ from db import SessionLocal, get_db
 from models import Character, Project, SceneAsset, Shot, ShotVersion
 from services.image_service import ImageService
 from services.invalidation_service import mark_shot_media_stale
-from services.reference_readiness_service import mark_reference_failure, mark_reference_success, refresh_project_reference_state
-from services.security import UploadLimitExceeded, safe_path, save_upload_stream, validate_identifier, validate_video_upload
+from services.reference_readiness_service import (
+    mark_reference_failure,
+    mark_reference_success,
+    refresh_project_reference_state,
+)
+from services.security import (
+    UploadLimitExceeded,
+    safe_path,
+    save_upload_stream,
+    validate_identifier,
+    validate_video_upload,
+)
 from services.skill_config_service import agent_prompt_append, resolve_effective_style, resolve_skill_config
 from services.storage_service import StorageQuotaExceeded, StorageService
-from services.task_registry import ScopeCancellation, cancel_scopes, claim as claim_task, finish as finish_task, release_scope_block, start as start_task
+from services.task_registry import ScopeCancellation, cancel_scopes, release_scope_block
+from services.task_registry import claim as claim_task
+from services.task_registry import finish as finish_task
+from services.task_registry import start as start_task
 
 router = APIRouter(prefix="/api/project", tags=["project"])
 storage_service = StorageService()
@@ -116,7 +129,9 @@ async def get_project(project_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="项目正在删除")
     _sync_completed_status(db, [project])
     result = _serialize_project(project, _parent_titles(db, [project]))
-    result.update(resolve_effective_style(project.style or "anime", resolve_skill_config(project_id, db), "storyboard_agent"))
+    result.update(
+        resolve_effective_style(project.style or "anime", resolve_skill_config(project_id, db), "storyboard_agent")
+    )
     return result
 
 
@@ -128,8 +143,7 @@ async def update_project(project_id: str, data: ProjectUpdate, db: Session = Dep
     changed = data.model_dump(exclude_unset=True)
     generation_fields = {"style", "output_format", "resolution", "target_duration"}
     generation_changed = any(
-        key in generation_fields and getattr(project, key) != value
-        for key, value in changed.items()
+        key in generation_fields and getattr(project, key) != value for key, value in changed.items()
     )
     tree_fields = {"project_type", "parent_project_id", "episode_number"}
     if tree_fields & changed.keys():
@@ -167,7 +181,9 @@ async def update_project(project_id: str, data: ProjectUpdate, db: Session = Dep
     db.commit()
     if generation_changed:
         await cancel_scopes({f"project:{project_id}"}, "project generation settings changed")
-    style_meta = resolve_effective_style(project.style or "anime", resolve_skill_config(project_id, db), "storyboard_agent")
+    style_meta = resolve_effective_style(
+        project.style or "anime", resolve_skill_config(project_id, db), "storyboard_agent"
+    )
     assets_stale = bool("style" in changed) and not project.parent_project_id
     return {
         "id": project_id,
@@ -226,7 +242,9 @@ async def _run_asset_rebuild(project_id: str) -> None:
                 return None, None, [], []
             skill_config = resolve_skill_config(project_id, db)
             asset_project_id = project.parent_project_id or project.id
-            style = resolve_effective_style(project.style or "anime", skill_config, "storyboard_agent")["effective_style"]
+            style = resolve_effective_style(project.style or "anime", skill_config, "storyboard_agent")[
+                "effective_style"
+            ]
             characters = (
                 db.query(Character)
                 .filter(Character.project_id == asset_project_id, Character.asset_status == "stale")
@@ -286,9 +304,7 @@ async def _run_asset_rebuild(project_id: str) -> None:
             if payload is None:
                 return False
             if skill_append:
-                payload["visual_prompt"] = ", ".join(
-                    part for part in [payload["visual_prompt"], skill_append] if part
-                )
+                payload["visual_prompt"] = ", ".join(part for part in [payload["visual_prompt"], skill_append] if part)
             ref_path = await image_service.generate_character_reference(
                 character=payload,
                 style=style,
@@ -307,10 +323,8 @@ async def _run_asset_rebuild(project_id: str) -> None:
             finally:
                 db.close()
 
-    results = await asyncio.gather(
-        *(rebuild_character(item) for item in characters), return_exceptions=True
-    )
-    for item, result in zip(characters, results):
+    results = await asyncio.gather(*(rebuild_character(item) for item in characters), return_exceptions=True)
+    for item, result in zip(characters, results, strict=True):
         if isinstance(result, BaseException):
             failures.append(f"角色 {item['name']}: {result}")
             db = SessionLocal()
@@ -515,7 +529,7 @@ async def import_final_video(project_id: str, file: UploadFile = File(...), db: 
         validate_video_upload(candidate, mime)
     except (OSError, ValueError):
         candidate.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail="上传文件不是有效的 MP4 视频")
+        raise HTTPException(status_code=400, detail="上传文件不是有效的 MP4 视频") from None
 
     # Hold the project scope while promoting the candidate. This cancels and
     # waits for an in-flight render before it can publish over the import.
@@ -681,11 +695,7 @@ def _resolve_project_tree(
 def _episode_count(db: Session, project_id: str) -> int:
     """该项目直属的剧集数量，用于阻止会把剧集变成孤儿的类型变更。"""
 
-    return (
-        db.query(Project)
-        .filter(Project.parent_project_id == project_id, Project.project_type == "episode")
-        .count()
-    )
+    return db.query(Project).filter(Project.parent_project_id == project_id, Project.project_type == "episode").count()
 
 
 def _next_episode_number(db: Session, parent_project_id: str) -> int:
@@ -704,7 +714,9 @@ def _final_video_path(project_id: str) -> Path:
     return settings.OUTPUT_DIR / "projects" / project_id / "output" / "final.mp4"
 
 
-def _stage_project_paths(project_ids: list[str], token: str, previous_statuses: dict[str, str]) -> list[_StagedProjectPath]:
+def _stage_project_paths(
+    project_ids: list[str], token: str, previous_statuses: dict[str, str]
+) -> list[_StagedProjectPath]:
     """Move project trees into same-filesystem trash before deleting rows."""
 
     staged: list[_StagedProjectPath] = []
@@ -952,7 +964,11 @@ def _sync_completed_status(db: Session, projects: list[Project]) -> None:
         "deleting",
     }
     for project in projects:
-        if project.status not in nonfinal_statuses and project.status != "completed" and _has_file(_final_video_path(project.id)):
+        if (
+            project.status not in nonfinal_statuses
+            and project.status != "completed"
+            and _has_file(_final_video_path(project.id))
+        ):
             project.status = "completed"
             project.updated_at = datetime.utcnow()
             changed = True

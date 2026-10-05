@@ -22,7 +22,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from config import settings
 from db import SessionLocal
@@ -37,7 +36,6 @@ from services.job_types import (
     JOB_TYPE_SHOT_IMAGE,
     JOB_TYPE_SHOT_VIDEO,
     JOB_TYPE_STORYBOARD,
-    STATUS_COMPLETED,
     parse_job_key,
 )
 from services.security import existing_file

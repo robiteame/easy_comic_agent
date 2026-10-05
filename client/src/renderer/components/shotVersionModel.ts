@@ -70,9 +70,8 @@ export function normalizeVersionSummary(raw: unknown): ShotVersionSummary | null
   if (!raw || typeof raw !== 'object') return null
   const item = raw as Record<string, unknown>
   if (typeof item.id !== 'string' || !item.id) return null
-  const source = VERSION_SOURCES.indexOf(item.source as ShotVersionSource) >= 0
-    ? (item.source as ShotVersionSource)
-    : 'manual_edit'
+  const source =
+    VERSION_SOURCES.indexOf(item.source as ShotVersionSource) >= 0 ? (item.source as ShotVersionSource) : 'manual_edit'
   return {
     id: item.id,
     shot_id: String(item.shot_id || ''),
@@ -129,12 +128,12 @@ export function formatSnapshotValue(value: unknown, field = ''): string {
 export function visibleDiffRows(diff: ShotVersionDiffRow[], showUnchanged: boolean): ShotVersionDiffRow[] {
   if (!Array.isArray(diff)) return []
   if (showUnchanged) return diff
-  return diff.filter((row) => row && row.changed)
+  return diff.filter((row) => row?.changed)
 }
 
 export function changedFieldCount(diff: ShotVersionDiffRow[]): number {
   if (!Array.isArray(diff)) return 0
-  return diff.filter((row) => row && row.changed).length
+  return diff.filter((row) => row?.changed).length
 }
 
 /**
@@ -163,11 +162,7 @@ export interface CompareSelection {
  * A/B 槽位选择：点击已选中的槽位取消选择；同一个版本不允许同时占据两个
  * 槽位（先清掉另一侧）。
  */
-export function nextCompareSelection(
-  current: CompareSelection,
-  slot: 'a' | 'b',
-  versionId: string,
-): CompareSelection {
+export function nextCompareSelection(current: CompareSelection, slot: 'a' | 'b', versionId: string): CompareSelection {
   if (slot === 'a') {
     if (current.a === versionId) return { a: null, b: current.b === versionId ? null : current.b }
     return { a: versionId, b: current.b === versionId ? null : current.b }

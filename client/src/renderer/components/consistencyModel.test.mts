@@ -43,5 +43,8 @@ test('只有明确确认后的 degraded 不再阻断手动流程', () => {
     { asset_id: 'c2', status: 'unsupported' },
     { asset_id: 'c3', status: 'ready' },
   ])
-  assert.deepEqual(blocking.map((item) => item.asset_id), ['c1', 's2', 'c2'])
+  assert.deepEqual(
+    blocking.map((item) => item.asset_id),
+    ['c1', 's2', 'c2'],
+  )
 })

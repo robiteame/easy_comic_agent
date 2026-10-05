@@ -15,7 +15,7 @@ import math
 import re
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints
 
 from config import settings
 from services.security import validate_identifier

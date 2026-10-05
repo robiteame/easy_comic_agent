@@ -24,7 +24,7 @@ from db import get_db
 from models import BackgroundJob, Project, Shot
 from services import budget_service, pricing_service, usage_service
 from services.job_dto import job_duration_seconds
-from services.job_types import JOB_TYPES, JOB_TYPE_UNKNOWN, parse_job_key
+from services.job_types import JOB_TYPE_UNKNOWN, JOB_TYPES, parse_job_key
 from services.security import validate_identifier
 
 router = APIRouter(prefix="/api/budget", tags=["budget"])

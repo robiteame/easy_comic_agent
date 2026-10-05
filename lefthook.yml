@@ -1,0 +1,13 @@
+# 提交前自动 lint + format,自动修复的内容会重新暂存。
+# 手动跳过一次:git commit --no-verify(不建议,CI 会兜底拦截)。
+pre-commit:
+  commands:
+    biome:
+      glob: "*.{js,mjs,cjs,ts,tsx,mts,json}"
+      run: pnpm exec biome check --write --no-errors-on-unmatched {staged_files}
+      stage_fixed: true
+    ruff:
+      glob: "server/**/*.py"
+      # 本地没有 server/.venv 时静默跳过,由 CI 兜底。
+      run: if [ -x server/.venv/bin/ruff ]; then server/.venv/bin/ruff check --fix --no-cache {staged_files} && server/.venv/bin/ruff format --no-cache {staged_files}; fi
+      stage_fixed: true

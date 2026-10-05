@@ -225,7 +225,9 @@ class CheckpointLifecycleTests(unittest.TestCase):
                 output_fingerprint="image-output-2",
             )
             self.assertTrue(store.stage_is_reusable(StageName.IMAGE_GENERATION.value, "input-1"))
-            self.assertEqual(store.stage(StageName.QUALITY_REVIEW.value)["invalidated_reason"], "output_fingerprint_changed")
+            self.assertEqual(
+                store.stage(StageName.QUALITY_REVIEW.value)["invalidated_reason"], "output_fingerprint_changed"
+            )
             self.assertFalse(store.stage_is_reusable(StageName.QUALITY_REVIEW.value, "quality-input-1"))
 
     def test_shot_version_change_invalidates_related_shot_checkpoints(self) -> None:
@@ -256,7 +258,10 @@ class CheckpointLifecycleTests(unittest.TestCase):
                 output_fingerprint="image-output-2",
             )
             self.assertIsNone(store.reusable_shot_artifact("shot-1", StageName.VIDEO_GENERATION.value, shot_version=1))
-            self.assertEqual(store.shot_artifact("shot-1", StageName.VIDEO_GENERATION.value)["invalidated_reason"], "shot_version_changed")
+            self.assertEqual(
+                store.shot_artifact("shot-1", StageName.VIDEO_GENERATION.value)["invalidated_reason"],
+                "shot_version_changed",
+            )
 
     def test_fingerprint_is_stable_for_unordered_sets_and_changes_with_payload(self) -> None:
         self.assertEqual(fingerprint({"values": {1, 2, 3}}), fingerprint({"values": {3, 2, 1}}))

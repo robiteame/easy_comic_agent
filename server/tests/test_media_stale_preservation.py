@@ -25,18 +25,17 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from fastapi.testclient import TestClient  # noqa: E402
 
+from agent import graph  # noqa: E402
 from api.routes import project as project_route  # noqa: E402
 from api.routes import shot as shot_route  # noqa: E402
-from agent import graph  # noqa: E402
 from config import settings  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
 from main import app  # noqa: E402
 from models import Character, Project, SceneAsset, Shot, ShotVersion  # noqa: E402
 from services.shot_version_service import parse_snapshot  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _media_file(name: str, size: int = 2048) -> str:
@@ -88,12 +87,7 @@ class MediaStaleTestCase(unittest.TestCase):
         return shot
 
     def _versions(self, shot_id: str) -> list[ShotVersion]:
-        return (
-            self.db.query(ShotVersion)
-            .filter(ShotVersion.shot_id == shot_id)
-            .order_by(ShotVersion.number)
-            .all()
-        )
+        return self.db.query(ShotVersion).filter(ShotVersion.shot_id == shot_id).order_by(ShotVersion.number).all()
 
 
 class EditPreservesMediaTests(MediaStaleTestCase):
@@ -114,9 +108,7 @@ class EditPreservesMediaTests(MediaStaleTestCase):
         )
         self.db.commit()
 
-        asyncio.run(
-            shot_route.update_shot(shot_id, shot_route.ShotUpdate(visual_notes="新的画面重点"), self.db)
-        )
+        asyncio.run(shot_route.update_shot(shot_id, shot_route.ShotUpdate(visual_notes="新的画面重点"), self.db))
 
         self.db.expire_all()
         shot = self.db.get(Shot, shot_id)
@@ -300,9 +292,7 @@ class ProjectConfigChangeTests(MediaStaleTestCase):
             )
         self.db.commit()
 
-        asyncio.run(
-            project_route.update_project(project_id, project_route.ProjectUpdate(style="realistic"), self.db)
-        )
+        asyncio.run(project_route.update_project(project_id, project_route.ProjectUpdate(style="realistic"), self.db))
 
         self.db.expire_all()
         shots = self.db.query(Shot).filter(Shot.project_id == project_id).order_by(Shot.sequence).all()
@@ -346,9 +336,7 @@ class ProjectConfigChangeTests(MediaStaleTestCase):
         )
         self.db.commit()
 
-        asyncio.run(
-            project_route.update_project(episode_id, project_route.ProjectUpdate(style="realistic"), self.db)
-        )
+        asyncio.run(project_route.update_project(episode_id, project_route.ProjectUpdate(style="realistic"), self.db))
 
         self.db.expire_all()
         self.assertEqual(character.reference_images, '["/shared/character_ref.png"]', "父项目共享角色资产不得被清空")

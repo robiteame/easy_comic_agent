@@ -180,10 +180,7 @@ def _validate_base_url(value: Any) -> str:
         ):
             raise ValueError("Base URL 主机名非法")
         try:
-            addresses = {
-                result[4][0]
-                for result in socket.getaddrinfo(ascii_host, port, type=socket.SOCK_STREAM)
-            }
+            addresses = {result[4][0] for result in socket.getaddrinfo(ascii_host, port, type=socket.SOCK_STREAM)}
         except OSError as exc:
             raise ValueError("Base URL 主机名无法解析") from exc
         if not addresses:
@@ -234,6 +231,7 @@ def _capability_summary(capability: str, protocol: str, model: str = "") -> dict
 
     family = protocol_family(capability)
     return capability_report(family, protocol, model=model)
+
 
 def _effective(*, mask_secrets: bool = True) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
@@ -300,8 +298,7 @@ def save_model_config(data: dict[str, Any]) -> dict[str, Any]:
                 if "base_url" in sanitized_payload and sanitized_payload["base_url"] not in (None, ""):
                     sanitized_payload["base_url"] = _validate_base_url(sanitized_payload["base_url"])
                 if "api_key" in sanitized_payload and (
-                    not _clean(sanitized_payload["api_key"])
-                    or _clean(sanitized_payload["api_key"]) == MASKED_SECRET
+                    not _clean(sanitized_payload["api_key"]) or _clean(sanitized_payload["api_key"]) == MASKED_SECRET
                 ):
                     sanitized_payload.pop("api_key", None)
                 merged = {**(stored.get(capability) or {}), **sanitized_payload}

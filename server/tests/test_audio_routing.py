@@ -22,24 +22,29 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
+from api.routes import shot as shot_route  # noqa: E402
 from config import settings  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
 from models import Project, Shot  # noqa: E402
-from api.routes import shot as shot_route  # noqa: E402
 from services import audio_routing, dialogue_audio  # noqa: E402
 from services.audio_routing import native_audio_capable, resolve_audio_mode  # noqa: E402
 from services.ffmpeg_service import FFmpegService  # noqa: E402
 from services.providers.base import VideoCapabilities, VideoResult  # noqa: E402
 from services.providers.endpoint import EndpointConfig  # noqa: E402
 from services.providers.video_native_audio import NativeAudioVideoAdapter  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg")) and bool(shutil.which("ffprobe"))
 
 
 def _endpoint(protocol: str = "ark-seedance", audio_mode: str = "tts") -> EndpointConfig:
-    return EndpointConfig(protocol=protocol, base_url="https://video.example.test", api_key="k", model="m", params={"audio_mode": audio_mode})
+    return EndpointConfig(
+        protocol=protocol,
+        base_url="https://video.example.test",
+        api_key="k",
+        model="m",
+        params={"audio_mode": audio_mode},
+    )
 
 
 class _FakeNativeAdapter:
@@ -72,7 +77,9 @@ class ResolveAudioModeTests(unittest.TestCase):
     def test_native_falls_back_to_tts_when_adapter_lacks_capability(self) -> None:
         shot = {"dialogue": "你好"}
         with (
-            patch.object(audio_routing, "get_endpoint", return_value=_endpoint(protocol="ark-seedance", audio_mode="native")),
+            patch.object(
+                audio_routing, "get_endpoint", return_value=_endpoint(protocol="ark-seedance", audio_mode="native")
+            ),
             patch.object(audio_routing, "get_adapter", return_value=_FakeSilentAdapter),
         ):
             with self.assertLogs(audio_routing.logger, level="WARNING"):
@@ -128,7 +135,9 @@ class ResolveAudioModeTests(unittest.TestCase):
             raise UnknownProtocolError("boom")
 
         with (
-            patch.object(audio_routing, "get_endpoint", return_value=_endpoint(protocol="mystery", audio_mode="native")),
+            patch.object(
+                audio_routing, "get_endpoint", return_value=_endpoint(protocol="mystery", audio_mode="native")
+            ),
             patch.object(audio_routing, "get_adapter", side_effect=_raise),
         ):
             self.assertFalse(native_audio_capable())
@@ -207,11 +216,24 @@ class NativeModeSkipsVoiceTests(_PipelineTestCase):
                 video_path.parent.mkdir(parents=True, exist_ok=True)
                 subprocess.run(
                     [
-                        "ffmpeg", "-y",
-                        "-f", "lavfi", "-i", "color=c=green:s=256x256:d=3",
-                        "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
-                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
-                        "-shortest", str(video_path),
+                        "ffmpeg",
+                        "-y",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "color=c=green:s=256x256:d=3",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "sine=frequency=440:duration=3",
+                        "-c:v",
+                        "libx264",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        str(video_path),
                     ],
                     check=True,
                     capture_output=True,
@@ -234,7 +256,9 @@ class NativeModeSkipsVoiceTests(_PipelineTestCase):
             patch.object(audio_routing, "get_endpoint", return_value=_endpoint(audio_mode="native")),
             patch.object(audio_routing, "get_adapter", return_value=_RecordingNativeAdapter),
             patch("services.video_service.get_adapter", return_value=_RecordingNativeAdapter),
-            patch.object(shot_route, "validate_video_file", return_value={"kind": "video", "passed": True, "issues": []}),
+            patch.object(
+                shot_route, "validate_video_file", return_value={"kind": "video", "passed": True, "issues": []}
+            ),
             patch.object(dialogue_audio.tts_service, "generate_dialogue", side_effect=fake_tts),
         ):
             asyncio.run(shot_route._run_single_shot_video(self.shot.id, force=True))
@@ -402,11 +426,24 @@ class OutputContractTests(unittest.TestCase):
     def _make_video_with_audio(self, path: Path) -> None:
         subprocess.run(
             [
-                "ffmpeg", "-y",
-                "-f", "lavfi", "-i", "color=c=blue:s=256x256:d=1",
-                "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
-                "-shortest", str(path),
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=256x256:d=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-shortest",
+                str(path),
             ],
             check=True,
             capture_output=True,
@@ -415,9 +452,18 @@ class OutputContractTests(unittest.TestCase):
     def _make_silent_video(self, path: Path) -> None:
         subprocess.run(
             [
-                "ffmpeg", "-y",
-                "-f", "lavfi", "-i", "testsrc=size=512x512:duration=2",
-                "-frames:v", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=512x512:duration=2",
+                "-frames:v",
+                "30",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
                 str(path),
             ],
             check=True,
@@ -464,9 +510,7 @@ class OutputContractTests(unittest.TestCase):
         self.assertIn("audio", streams, "tts 路径产物必须带合成音轨")
 
     def test_native_flag_from_continuity_profile(self) -> None:
-        self.assertTrue(
-            FFmpegService._shot_has_native_audio({"continuity_profile": {"audio_source": "native"}})
-        )
+        self.assertTrue(FFmpegService._shot_has_native_audio({"continuity_profile": {"audio_source": "native"}}))
         self.assertFalse(FFmpegService._shot_has_native_audio({"continuity_profile": {}}))
         self.assertFalse(FFmpegService._shot_has_native_audio({}))
 

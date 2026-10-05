@@ -21,7 +21,6 @@ from services.reference_asset_service import ReferenceAssetService
 from services.security import (
     UploadLimitExceeded,
     atomic_write_bytes,
-    download_remote_bytes,
     download_remote_file,
 )
 from services.storage_service import StorageQuotaExceeded, StorageService
@@ -84,9 +83,7 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
             )
             if not reference_url:
                 raise RuntimeError("视频首帧参考图缺失，或无法压缩到方舟请求体预算内")
-            content.append(
-                {"type": "image_url", "image_url": {"url": reference_url}, "role": "first_frame"}
-            )
+            content.append({"type": "image_url", "image_url": {"url": reference_url}, "role": "first_frame"})
         payload_mode = self._reference_payload_mode(content)
 
         task = await self._create_task(request.prompt, request.duration, request.ratio, request.resolution, content)
@@ -292,7 +289,7 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
                 proc.kill()
             await proc.communicate()
             raise
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             proc.kill()
             await proc.communicate()
             raise TimeoutError("提取 Seedance 单帧超时") from exc

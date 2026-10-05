@@ -20,7 +20,7 @@ import json
 import sys
 import time
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,18 +28,17 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from fastapi.testclient import TestClient  # noqa: E402
 
 from config import settings  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
 from main import app, jobs_snapshot  # noqa: E402
 from models import BackgroundJob, Character, Project, SceneAsset, Shot  # noqa: E402
-from services import job_actions, job_center, job_dispatch, task_registry  # noqa: E402
-from services.job_actions import RETRY_MODE, RESUME_MODE  # noqa: E402
+from services import job_actions, job_dispatch, task_registry  # noqa: E402
+from services.job_actions import RESUME_MODE, RETRY_MODE  # noqa: E402
 from services.job_dispatch import DispatchResult  # noqa: E402
 from services.job_types import can_transition, parse_job_key  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _write_media(relative: str, size: int = 2048) -> str:
@@ -131,11 +130,19 @@ class JobListApiTests(JobCenterTestCase):
     def test_list_supports_pagination_filters_and_default_sort(self) -> None:
         base = datetime.utcnow()
         self.make_project("p-list")
-        self.make_job("project:p-list:render", "project:p-list", status="completed", updated_at=base - timedelta(minutes=5))
-        self.make_job("project:p-list:storyboard", "project:p-list", status="failed", updated_at=base - timedelta(minutes=4))
+        self.make_job(
+            "project:p-list:render", "project:p-list", status="completed", updated_at=base - timedelta(minutes=5)
+        )
+        self.make_job(
+            "project:p-list:storyboard", "project:p-list", status="failed", updated_at=base - timedelta(minutes=4)
+        )
         self.make_job("shot:s-list:video", "shot:s-list", status="running", updated_at=base - timedelta(minutes=3))
-        self.make_job("project:p-other:render", "project:p-other", status="completed", updated_at=base - timedelta(minutes=2))
-        self.make_job("project:p-other:pipeline:auto", "project:p-other", status="running", updated_at=base - timedelta(minutes=1))
+        self.make_job(
+            "project:p-other:render", "project:p-other", status="completed", updated_at=base - timedelta(minutes=2)
+        )
+        self.make_job(
+            "project:p-other:pipeline:auto", "project:p-other", status="running", updated_at=base - timedelta(minutes=1)
+        )
 
         page = self.client.get("/api/jobs", params={"page": 1, "page_size": 2}).json()
         self.assertEqual(page["total"], 5)
@@ -147,7 +154,7 @@ class JobListApiTests(JobCenterTestCase):
         # DTO 时刻必须带 UTC 时区（历史 naive 行按 UTC 解释，见 test_job_dto_timezone）。
         self.assertEqual(
             page["items"][1]["updated_at"],
-            (base - timedelta(minutes=2)).replace(tzinfo=timezone.utc).isoformat(),
+            (base - timedelta(minutes=2)).replace(tzinfo=UTC).isoformat(),
         )
 
         second = self.client.get("/api/jobs", params={"page": 2, "page_size": 2}).json()
@@ -587,7 +594,9 @@ class JobStatusTransitionTests(JobCenterTestCase):
         self.assertTrue(task_registry.claim(key, "project:p-step"))
         token = task_registry.snapshot(key)["run_token"]
         self.assertTrue(
-            task_registry.update_progress(key, 48, run_token=token, current_step="generate_storyboard", message="正在生成分镜")
+            task_registry.update_progress(
+                key, 48, run_token=token, current_step="generate_storyboard", message="正在生成分镜"
+            )
         )
         job = self.db.query(BackgroundJob).filter_by(idempotency_key=key).one()
         self.assertEqual(job.current_step, "generate_storyboard")
@@ -600,7 +609,9 @@ class JobDispatchTests(JobCenterTestCase):
     def test_resume_skips_completed_shots_in_a_batch(self) -> None:
         self.make_project("p-batch")
         done = _write_media("projects/p-batch/storyboard/shot-done.png")
-        self.make_shot("shot-done", "p-batch", sequence=1, storyboard_status="done", storyboard_path=done, image_path=done)
+        self.make_shot(
+            "shot-done", "p-batch", sequence=1, storyboard_status="done", storyboard_path=done, image_path=done
+        )
         self.make_shot("shot-missing", "p-batch", sequence=2, storyboard_status="failed", status="failed")
         job = self.make_job("project:p-batch:storyboard", "project:p-batch", status="failed", project_id="p-batch")
 
@@ -625,8 +636,12 @@ class JobDispatchTests(JobCenterTestCase):
     def test_retry_of_a_storyboard_batch_repeats_unconfirmed_shots(self) -> None:
         self.make_project("p-batch2")
         done = _write_media("projects/p-batch2/storyboard/shot-a.png")
-        self.make_shot("shot-a", "p-batch2", sequence=1, storyboard_status="done", storyboard_path=done, image_path=done)
-        self.make_shot("shot-b", "p-batch2", sequence=2, storyboard_status="done", storyboard_path=done, image_path=done)
+        self.make_shot(
+            "shot-a", "p-batch2", sequence=1, storyboard_status="done", storyboard_path=done, image_path=done
+        )
+        self.make_shot(
+            "shot-b", "p-batch2", sequence=2, storyboard_status="done", storyboard_path=done, image_path=done
+        )
         job = self.make_job("project:p-batch2:storyboard", "project:p-batch2", status="failed", project_id="p-batch2")
 
         calls: list[list[str]] = []
@@ -728,7 +743,9 @@ class JobDispatchTests(JobCenterTestCase):
 
     def test_retry_without_saved_script_returns_explicit_error(self) -> None:
         self.make_project("p-notext", input_text="")
-        job = self.make_job("project:p-notext:pipeline:manual", "project:p-notext", status="failed", project_id="p-notext")
+        job = self.make_job(
+            "project:p-notext:pipeline:manual", "project:p-notext", status="failed", project_id="p-notext"
+        )
         result = asyncio.run(job_dispatch.redispatch(job, RETRY_MODE))
         self.assertEqual(result.status, "rejected")
         self.assertIn("原始剧本", result.message)
@@ -782,7 +799,9 @@ class JobEventTests(JobCenterTestCase):
             socket = _FakeSocket()
             await jobs_manager.connect(socket)
             try:
-                task_registry.claim("project:p-events:render", "project:p-events", current_step="rendering", message="开始导出")
+                task_registry.claim(
+                    "project:p-events:render", "project:p-events", current_step="rendering", message="开始导出"
+                )
                 await asyncio.sleep(0.05)
                 token = task_registry.snapshot("project:p-events:render")["run_token"]
                 task_registry.update_progress(
@@ -933,12 +952,40 @@ def websocket_payload_keys(job: dict) -> None:
     """断言任务 DTO 只包含稳定的、可公开的字段。"""
 
     allowed = {
-        "id", "scope", "project_id", "job_type", "job_type_label", "display_name", "status", "status_label",
-        "progress", "current_step", "message", "error_code", "error_code_label", "error_message", "error_detail",
-        "attempt", "retry_of", "version",
-        "created_at", "started_at", "updated_at", "finished_at", "cancel_requested_at", "duration_seconds",
-        "eta_seconds", "is_active", "is_terminal", "has_active_successor", "can_cancel", "can_retry",
-        "can_resume", "can_delete", "retry_blocked_reason", "resume_blocked_reason",
+        "id",
+        "scope",
+        "project_id",
+        "job_type",
+        "job_type_label",
+        "display_name",
+        "status",
+        "status_label",
+        "progress",
+        "current_step",
+        "message",
+        "error_code",
+        "error_code_label",
+        "error_message",
+        "error_detail",
+        "attempt",
+        "retry_of",
+        "version",
+        "created_at",
+        "started_at",
+        "updated_at",
+        "finished_at",
+        "cancel_requested_at",
+        "duration_seconds",
+        "eta_seconds",
+        "is_active",
+        "is_terminal",
+        "has_active_successor",
+        "can_cancel",
+        "can_retry",
+        "can_resume",
+        "can_delete",
+        "retry_blocked_reason",
+        "resume_blocked_reason",
         # 成本快照（实际金额 + 启动前估算）：只含归一化后的金额与数量，
         # 不含密钥、供应商原始响应或本地路径，因此属于可公开字段。
         "cost",

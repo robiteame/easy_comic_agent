@@ -52,10 +52,7 @@ export function isStaleServerUpdate(current: Shot, incoming: ShotServerUpdate): 
  * 把服务端更新合并成可安全应用到当前镜头的 patch。
  * 返回 null 表示该更新已过期（旧任务响应），必须整体丢弃。
  */
-export function mergeShotServerUpdate(
-  current: Shot,
-  incoming: ShotServerUpdate,
-): Partial<Shot> | null {
+export function mergeShotServerUpdate(current: Shot, incoming: ShotServerUpdate): Partial<Shot> | null {
   if (isStaleServerUpdate(current, incoming)) return null
 
   const patch: Partial<Shot> = {}
@@ -69,12 +66,9 @@ export function mergeShotServerUpdate(
   }
 
   // 后端口径：storyboard_path 优先，缺省回退 image_path。
-  const storyboard = patch.storyboard_path !== undefined
-    ? String(patch.storyboard_path)
-    : String(current.storyboard_path || '')
-  const image = patch.image_path !== undefined
-    ? String(patch.image_path)
-    : String(current.image_path || '')
+  const storyboard =
+    patch.storyboard_path !== undefined ? String(patch.storyboard_path) : String(current.storyboard_path || '')
+  const image = patch.image_path !== undefined ? String(patch.image_path) : String(current.image_path || '')
   if (!storyboard && image) patch.storyboard_path = image
 
   for (const field of SHOT_META_FIELDS) {

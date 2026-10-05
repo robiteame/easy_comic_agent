@@ -12,8 +12,9 @@
 from __future__ import annotations
 
 import statistics
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
 from services.error_reporter import summarize
 from services.job_types import (
@@ -43,8 +44,8 @@ def as_utc(value: datetime | None) -> datetime | None:
     if not isinstance(value, datetime):
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _as_iso(value: datetime | None) -> str | None:
@@ -117,7 +118,7 @@ def _error_detail(value: Any) -> dict[str, Any] | None:
 def job_duration_seconds(job: Any, *, now: datetime | None = None) -> int:
     """已运行时长（秒）。排队中且未开始的按 0 处理。"""
 
-    moment = as_utc(now) if now is not None else datetime.now(timezone.utc)
+    moment = as_utc(now) if now is not None else datetime.now(UTC)
     started = as_utc(job.started_at or job.created_at)
     if started is None:
         return 0
@@ -207,7 +208,9 @@ def cost_dto(usage: dict[str, Any] | None, estimate: dict[str, Any] | None = Non
             int(estimate["estimated_cost_micro"]) if estimate.get("estimated_cost_micro") is not None else None
         ),
         "estimated_cost_known": bool(estimate.get("cost_known", False)),
-        "estimated_seconds": int(estimate["estimated_seconds"]) if estimate.get("estimated_seconds") is not None else None,
+        "estimated_seconds": int(estimate["estimated_seconds"])
+        if estimate.get("estimated_seconds") is not None
+        else None,
         "duration_source": str(estimate.get("duration_source") or ""),
         "has_usage": bool(usage.get("call_count")),
     }
@@ -226,7 +229,7 @@ def job_dto(
 ) -> dict[str, Any]:
     """把一条任务行转成稳定 DTO。绝不包含 run_token。"""
 
-    moment = now if now is not None else datetime.now(timezone.utc)
+    moment = now if now is not None else datetime.now(UTC)
     status = str(job.status or "")
     job_type = str(job.job_type or JOB_TYPE_UNKNOWN)
     error_message = _short_message(job.error_message or job.error)

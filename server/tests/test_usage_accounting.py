@@ -17,8 +17,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from db import SessionLocal, init_db  # noqa: E402
 from models import CostEstimate, PricingConfig, Project, Shot, UsageRecord  # noqa: E402
 from services import pricing_service, usage_service  # noqa: E402
@@ -36,6 +34,7 @@ from services.providers.usage import (  # noqa: E402
     usage_from_chat_response,
 )
 from services.providers.video_ark_seedance import ArkSeedanceVideoAdapter  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 init_db()
 
@@ -92,8 +91,16 @@ def _shot(project_id: str, sequence: int = 1, duration: float = 3.0, dialogue: s
         db.close()
 
 
-def _set_price(capability: str, provider: str, price: int | None, *, model: str = "", secondary: int | None = None,
-               multipliers: dict | None = None, configured: bool | None = None) -> None:
+def _set_price(
+    capability: str,
+    provider: str,
+    price: int | None,
+    *,
+    model: str = "",
+    secondary: int | None = None,
+    multipliers: dict | None = None,
+    configured: bool | None = None,
+) -> None:
     item: dict = {
         "capability": capability,
         "provider": provider,
@@ -368,9 +375,7 @@ class UsageRecordingTests(unittest.TestCase):
 
         db = SessionLocal()
         try:
-            estimate_row = (
-                db.query(CostEstimate).filter(CostEstimate.estimate_key == estimate["estimate_key"]).first()
-            )
+            estimate_row = db.query(CostEstimate).filter(CostEstimate.estimate_key == estimate["estimate_key"]).first()
             usage_row = db.query(UsageRecord).filter(UsageRecord.usage_key == actual["usage_key"]).first()
             self.assertIsNotNone(estimate_row)
             self.assertIsNotNone(usage_row)

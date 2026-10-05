@@ -83,7 +83,9 @@ REQUIRED_CRITIQUE_FIELDS = (
 )
 
 
-def _failure(kind: FailureKind, stage: StageName = StageName.IMAGE_GENERATION, shot_id: str = "s1", message: str = "boom") -> FailureRecord:
+def _failure(
+    kind: FailureKind, stage: StageName = StageName.IMAGE_GENERATION, shot_id: str = "s1", message: str = "boom"
+) -> FailureRecord:
     return FailureRecord(kind=kind, stage=stage, shot_id=shot_id, message=message, provider="failing-provider")
 
 
@@ -104,7 +106,9 @@ class CriticReflectionTests(unittest.TestCase):
     def _all_critique_reports(self) -> list[CritiqueReport]:
         return [
             critique_director({"characters": [{"name": "林夏"}], "script_scenes": [{"id": "scene-1"}]}),
-            critique_storyboard({"shots": [{"shot_id": "s1", "dialogue": "长" * (MAX_DIALOGUE_CHARS_PER_SHOT + 1), "duration": 3.0}]}),
+            critique_storyboard(
+                {"shots": [{"shot_id": "s1", "dialogue": "长" * (MAX_DIALOGUE_CHARS_PER_SHOT + 1), "duration": 3.0}]}
+            ),
             critique_assets({"characters": [], "script_scenes": []}, reference_supported=True),
             critique_images([{"shot_id": "s1", "path": "", "score": 0.2}]),
             critique_videos([{"shot_id": "s1", "path": ""}]),
@@ -123,7 +127,9 @@ class CriticReflectionTests(unittest.TestCase):
             self.assertIsInstance(report.recoverable, bool)
 
     def test_dialogue_failure_is_classified_with_affected_shot_and_strategy(self) -> None:
-        report = critique_storyboard({"shots": [{"shot_id": "s9", "dialogue": "长" * (MAX_DIALOGUE_CHARS_PER_SHOT + 1), "duration": 3.0}]})
+        report = critique_storyboard(
+            {"shots": [{"shot_id": "s9", "dialogue": "长" * (MAX_DIALOGUE_CHARS_PER_SHOT + 1), "duration": 3.0}]}
+        )
         self.assertFalse(report.passed)
         self.assertEqual(report.failure_kind, FailureKind.DIALOGUE_TOO_LONG)
         self.assertEqual(report.affected_shot_ids, ["s9"])
@@ -174,14 +180,22 @@ class RecoveryCandidateGenerationTests(unittest.TestCase):
         self.assertTrue(all(item.budget_fit for item in candidates))
 
     def test_unknown_failure_never_proposes_unconditional_retry(self) -> None:
-        candidates = recovery_candidates(_failure(FailureKind.UNKNOWN), budget=_UNLIMITED_BUDGET, provider_profiles_by_capability={})
+        candidates = recovery_candidates(
+            _failure(FailureKind.UNKNOWN), budget=_UNLIMITED_BUDGET, provider_profiles_by_capability={}
+        )
         strategies = {item.strategy for item in candidates}
         self.assertNotIn(RecoveryStrategy.RETRY, strategies)
-        timeout = recovery_candidates(_failure(FailureKind.TIMEOUT), budget=_UNLIMITED_BUDGET, provider_profiles_by_capability={})
+        timeout = recovery_candidates(
+            _failure(FailureKind.TIMEOUT), budget=_UNLIMITED_BUDGET, provider_profiles_by_capability={}
+        )
         self.assertIn(RecoveryStrategy.RETRY, {item.strategy for item in timeout})
 
     def test_prompt_modifications_are_structured_patches(self) -> None:
-        candidates = recovery_candidates(_failure(FailureKind.LLM_INVALID_OUTPUT, stage=StageName.DIRECTOR_PLANNING), budget=_UNLIMITED_BUDGET, provider_profiles_by_capability={})
+        candidates = recovery_candidates(
+            _failure(FailureKind.LLM_INVALID_OUTPUT, stage=StageName.DIRECTOR_PLANNING),
+            budget=_UNLIMITED_BUDGET,
+            provider_profiles_by_capability={},
+        )
         revise = next(item for item in candidates if item.strategy is RecoveryStrategy.REVISE_PROMPT)
         self.assertTrue(revise.prompt_patches)
         for patch_entry in revise.prompt_patches:
@@ -190,10 +204,17 @@ class RecoveryCandidateGenerationTests(unittest.TestCase):
         fields = {patch_entry.field for patch_entry in revise.prompt_patches}
         self.assertIn("output_format", fields)
         self.assertEqual(revise.prompt_changes["shot_id"], "s1")
-        self.assertEqual(revise.prompt_changes["patches"], [patch_entry.model_dump(mode="json") for patch_entry in revise.prompt_patches])
+        self.assertEqual(
+            revise.prompt_changes["patches"],
+            [patch_entry.model_dump(mode="json") for patch_entry in revise.prompt_patches],
+        )
         split = next(
             item
-            for item in recovery_candidates(_failure(FailureKind.DIALOGUE_TOO_LONG, stage=StageName.STORYBOARD_DESIGN), budget=_UNLIMITED_BUDGET, provider_profiles_by_capability={})
+            for item in recovery_candidates(
+                _failure(FailureKind.DIALOGUE_TOO_LONG, stage=StageName.STORYBOARD_DESIGN),
+                budget=_UNLIMITED_BUDGET,
+                provider_profiles_by_capability={},
+            )
             if item.strategy is RecoveryStrategy.SPLIT_SHOT
         )
         self.assertEqual(split.prompt_patches[0].field, "dialogue")
@@ -223,9 +244,30 @@ class RecoveryCandidateGenerationTests(unittest.TestCase):
 class RecoverySelectionTests(unittest.TestCase):
     def test_selects_highest_scoring_feasible_candidate_and_records_rejections(self) -> None:
         candidates = [
-            RecoveryCandidate(strategy=RecoveryStrategy.SWITCH_PROVIDER, quality_gain=0.5, estimated_cost_micro=999_999, estimated_seconds=500, provider_capability_ok=True, budget_fit=False),
-            RecoveryCandidate(strategy=RecoveryStrategy.REVISE_PROMPT, quality_gain=0.3, estimated_cost_micro=100, estimated_seconds=10, provider_capability_ok=True, budget_fit=True),
-            RecoveryCandidate(strategy=RecoveryStrategy.LOWER_RESOLUTION, quality_gain=0.1, estimated_cost_micro=100, estimated_seconds=10, provider_capability_ok=False, budget_fit=True),
+            RecoveryCandidate(
+                strategy=RecoveryStrategy.SWITCH_PROVIDER,
+                quality_gain=0.5,
+                estimated_cost_micro=999_999,
+                estimated_seconds=500,
+                provider_capability_ok=True,
+                budget_fit=False,
+            ),
+            RecoveryCandidate(
+                strategy=RecoveryStrategy.REVISE_PROMPT,
+                quality_gain=0.3,
+                estimated_cost_micro=100,
+                estimated_seconds=10,
+                provider_capability_ok=True,
+                budget_fit=True,
+            ),
+            RecoveryCandidate(
+                strategy=RecoveryStrategy.LOWER_RESOLUTION,
+                quality_gain=0.1,
+                estimated_cost_micro=100,
+                estimated_seconds=10,
+                provider_capability_ok=False,
+                budget_fit=True,
+            ),
         ]
         trace = choose_recovery(
             _failure(FailureKind.IMAGE_FAILED),
@@ -309,12 +351,18 @@ class RecoverySelectionTests(unittest.TestCase):
             retries_remaining=3,
             budget=_ZERO_BUDGET,
             provider_profiles_by_capability={},
-            candidate_results=[{"status": "succeeded", "provider": "p1", "path": "/tmp/video.mp4", "structural_passed": True}],
+            candidate_results=[
+                {"status": "succeeded", "provider": "p1", "path": "/tmp/video.mp4", "structural_passed": True}
+            ],
         )
         self.assertEqual(trace.selected.strategy, RecoveryStrategy.DEGRADED_PUBLISH)
         self.assertEqual(trace.selected.estimated_cost_micro, 0)
         for item in trace.candidates:
-            if item.strategy not in {RecoveryStrategy.DEGRADED_PUBLISH, RecoveryStrategy.TERMINAL_FAILURE, RecoveryStrategy.HUMAN_REVIEW}:
+            if item.strategy not in {
+                RecoveryStrategy.DEGRADED_PUBLISH,
+                RecoveryStrategy.TERMINAL_FAILURE,
+                RecoveryStrategy.HUMAN_REVIEW,
+            }:
                 self.assertFalse(item.budget_fit)
 
     def test_selection_prefers_primary_strategy_for_failure_kind(self) -> None:
@@ -363,7 +411,14 @@ class GraphRecoveryWiringTests(unittest.TestCase):
             "run_id": "r1",
             "mode": "auto",
             "quality_profile": "standard",
-            "critiques": [{"stage": StageName.IMAGE_GENERATION.value, "passed": False, "score": 0.4, "failure_kind": FailureKind.IMAGE_FAILED.value}],
+            "critiques": [
+                {
+                    "stage": StageName.IMAGE_GENERATION.value,
+                    "passed": False,
+                    "score": 0.4,
+                    "failure_kind": FailureKind.IMAGE_FAILED.value,
+                }
+            ],
             "shot_artifacts": [
                 {
                     "stage": StageName.IMAGE_GENERATION.value,
@@ -404,10 +459,16 @@ class GraphRecoveryWiringTests(unittest.TestCase):
             "shot_artifacts": [],
             "recovery_attempts": {StageName.IMAGE_GENERATION.value: 9},
         }
-        auto = graph._recovery_node({**base, "mode": "auto"}, StageName.IMAGE_GENERATION, default_target="image_generation")
+        auto = graph._recovery_node(
+            {**base, "mode": "auto"}, StageName.IMAGE_GENERATION, default_target="image_generation"
+        )
         self.assertNotIn("needs_human_review", auto)
         self.assertEqual(auto["run_status"], "failed")
-        manual = graph._recovery_node({**base, "mode": "manual", "human_gate_policy": "manual"}, StageName.IMAGE_GENERATION, default_target="image_generation")
+        manual = graph._recovery_node(
+            {**base, "mode": "manual", "human_gate_policy": "manual"},
+            StageName.IMAGE_GENERATION,
+            default_target="image_generation",
+        )
         self.assertTrue(manual.get("needs_human_review"))
 
     def test_terminal_strategy_routes_to_failed(self) -> None:
@@ -427,7 +488,10 @@ class ConditionalRetryTests(unittest.TestCase):
         with (
             patch.object(graph, "_shot_ids", return_value=["s1"]),
             patch.object(graph, "_has_unfinished_videos", return_value=False),
-            patch("services.quality_review_service.quality_review_service.storyboard_gate_status", return_value={"ok": True}),
+            patch(
+                "services.quality_review_service.quality_review_service.storyboard_gate_status",
+                return_value={"ok": True},
+            ),
             patch("api.routes.shot._run_single_shot_video", new=call),
         ):
             result = asyncio.run(graph._generate_shot_videos({"project_id": "retry-project"}))

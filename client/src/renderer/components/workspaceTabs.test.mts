@@ -36,7 +36,9 @@ test('roving tabindex：任意时刻只有一个标签进入 Tab 序列，且与
     assert.equal(focusable[0].id, selected[0].id, 'tabIndex=0 的标签必须就是 aria-selected 的标签')
     tabs
       .filter((tab) => tab.id !== selected[0].id)
-      .forEach((tab) => assert.equal(tab.tabIndex, -1, '未选中标签必须 tabIndex=-1'))
+      .forEach((tab) => {
+        assert.equal(tab.tabIndex, -1, '未选中标签必须 tabIndex=-1')
+      })
   })
 })
 

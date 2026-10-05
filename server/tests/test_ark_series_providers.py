@@ -22,13 +22,12 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402  (必须先于服务导入，绑定隔离环境)
-
-from services.providers.base import ImageRequest, VideoRequest  # noqa: E402
+from services.image_service import ImageService  # noqa: E402
+from services.providers.base import ImageRequest  # noqa: E402
 from services.providers.endpoint import EndpointConfig  # noqa: E402
 from services.providers.image_ark_seedream import ArkSeedreamImageAdapter  # noqa: E402
 from services.providers.video_ark_seedance import ArkSeedanceVideoAdapter  # noqa: E402
-from services.image_service import ImageService  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402  (必须先于服务导入，绑定隔离环境)
 
 
 def _image_endpoint(model: str) -> EndpointConfig:

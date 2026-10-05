@@ -7,14 +7,12 @@ import unittest
 import zipfile
 from pathlib import Path
 
-
 _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from services.security import validate_script_upload
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class DocxUploadSecurityTests(unittest.TestCase):
@@ -58,8 +56,12 @@ class DocxUploadSecurityTests(unittest.TestCase):
             content = bytearray(encrypted.read_bytes())
             local = content.index(b"PK\x03\x04")
             central = content.index(b"PK\x01\x02")
-            content[local + 6 : local + 8] = (int.from_bytes(content[local + 6 : local + 8], "little") | 1).to_bytes(2, "little")
-            content[central + 8 : central + 10] = (int.from_bytes(content[central + 8 : central + 10], "little") | 1).to_bytes(2, "little")
+            content[local + 6 : local + 8] = (int.from_bytes(content[local + 6 : local + 8], "little") | 1).to_bytes(
+                2, "little"
+            )
+            content[central + 8 : central + 10] = (
+                int.from_bytes(content[central + 8 : central + 10], "little") | 1
+            ).to_bytes(2, "little")
             encrypted.write_bytes(content)
             with self.assertRaisesRegex(ValueError, "加密"):
                 validate_script_upload(encrypted, ".docx", "application/octet-stream")

@@ -1,5 +1,4 @@
 import sys
-import os
 from pathlib import Path
 
 # Add server directory to path
@@ -15,33 +14,38 @@ def _run_startup_check() -> None:
     print("\n[1/5] Testing config import...")
     try:
         from config import settings
-        print(f"  ✓ Config loaded successfully")
+
+        print("  ✓ Config loaded successfully")
         print(f"  - DATABASE_URL: {settings.DATABASE_URL}")
         print(f"  - LLM_PROVIDER: {settings.LLM_PROVIDER}")
         print(f"  - IMAGE_PROVIDER: {settings.IMAGE_PROVIDER}")
     except Exception as e:
         print(f"  ✗ Config error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
     # Test 2: Import database
     print("\n[2/5] Testing database import...")
     try:
-        from db import init_db, engine
-        print(f"  ✓ Database module loaded")
+        from db import engine, init_db
+
+        print("  ✓ Database module loaded")
         print(f"  - Engine: {engine.url}")
     except Exception as e:
         print(f"  ✗ Database error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
     # Test 3: Import models
     print("\n[3/5] Testing models import...")
     try:
-        from models import Project, Shot, Character, SceneAsset
-        print(f"  ✓ Models loaded")
+        from models import Character, Project, SceneAsset, Shot
+
+        print("  ✓ Models loaded")
         print(f"  - Project: {Project.__tablename__}")
         print(f"  - Shot: {Shot.__tablename__}")
         print(f"  - Character: {Character.__tablename__}")
@@ -49,6 +53,7 @@ def _run_startup_check() -> None:
     except Exception as e:
         print(f"  ✗ Models error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
@@ -56,7 +61,8 @@ def _run_startup_check() -> None:
     print("\n[4/5] Testing routes import...")
     try:
         from api.routes import asset, character, chat, graph, project, render, script, shot
-        print(f"  ✓ All routes loaded")
+
+        print("  ✓ All routes loaded")
         print(f"  - asset: {asset.router.prefix}")
         print(f"  - character: {character.router.prefix}")
         print(f"  - chat: {chat.router.prefix}")
@@ -68,17 +74,18 @@ def _run_startup_check() -> None:
     except Exception as e:
         print(f"  ✗ Routes error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
     # Test 5: Import websocket
     print("\n[5/5] Testing websocket import...")
     try:
-        from api.websocket import ws_manager
-        print(f"  ✓ WebSocket manager loaded")
+        print("  ✓ WebSocket manager loaded")
     except Exception as e:
         print(f"  ✗ WebSocket error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
@@ -86,10 +93,11 @@ def _run_startup_check() -> None:
     print("\n[6/6] Testing database initialization...")
     try:
         init_db()
-        print(f"  ✓ Database initialized successfully")
+        print("  ✓ Database initialized successfully")
     except Exception as e:
         print(f"  ✗ Database initialization error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
@@ -101,12 +109,14 @@ def _run_startup_check() -> None:
     print("\nStarting server on port 8011...")
     try:
         import uvicorn
+
         uvicorn.run("main:app", host="0.0.0.0", port=8011, reload=False)
     except KeyboardInterrupt:
         print("\nServer stopped by user")
     except Exception as e:
         print(f"\nServer error: {e}")
         import traceback
+
         traceback.print_exc()
 
 

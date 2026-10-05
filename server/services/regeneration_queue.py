@@ -23,16 +23,17 @@ from services.job_dto import job_dto
 from services.job_types import (
     ACTIVE_STATUSES,
     ERROR_CODE_DEPENDENCY_FAILED,
-    TERMINAL_STATUSES,
     STATUS_CANCELLED,
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_INTERRUPTED,
+    TERMINAL_STATUSES,
     error_code_for_status,
     parse_job_key,
 )
 from services.security import existing_file
-from services.task_registry import cancel as cancel_task, unique_archived_key
+from services.task_registry import cancel as cancel_task
+from services.task_registry import unique_archived_key
 
 STAGE_STORYBOARD = "storyboard"
 STAGE_AUDIO = "audio"
@@ -259,7 +260,9 @@ async def _run_batch(batch_id: str) -> None:
             active = [job for job in current_jobs if job.status in ACTIVE_STATUSES and job.status != "queued"]
             if not queued and not active:
                 return
-            paused = any(bool(job.queue_paused) for job in current_jobs if job.status in {"queued", "running", "cancelling"})
+            paused = any(
+                bool(job.queue_paused) for job in current_jobs if job.status in {"queued", "running", "cancelling"}
+            )
             if paused:
                 await asyncio.sleep(0.2)
                 continue
@@ -276,7 +279,10 @@ async def _run_batch(batch_id: str) -> None:
                 if missing_dependency_ids:
                     dependency_rows = db.query(BackgroundJob).filter(BackgroundJob.id.in_(missing_dependency_ids)).all()
                     dep_rows.update({item.id: item for item in dependency_rows})
-                if any(dep_rows.get(dep_id) and dep_rows[dep_id].status in {STATUS_FAILED, STATUS_CANCELLED} for dep_id in dependencies):
+                if any(
+                    dep_rows.get(dep_id) and dep_rows[dep_id].status in {STATUS_FAILED, STATUS_CANCELLED}
+                    for dep_id in dependencies
+                ):
                     job.status = STATUS_FAILED
                     job.error_code = ERROR_CODE_DEPENDENCY_FAILED
                     job.error_message = "前置阶段失败，当前镜头未执行"
@@ -284,7 +290,10 @@ async def _run_batch(batch_id: str) -> None:
                     job.finished_at = datetime.utcnow()
                     job.updated_at = datetime.utcnow()
                     continue
-                if any(dep_rows.get(dep_id) and dep_rows[dep_id].status not in {STATUS_COMPLETED} for dep_id in dependencies):
+                if any(
+                    dep_rows.get(dep_id) and dep_rows[dep_id].status not in {STATUS_COMPLETED}
+                    for dep_id in dependencies
+                ):
                     job.queue_blocked_reason = "等待前置阶段完成"
                     continue
                 if capacity <= 0:
@@ -410,7 +419,12 @@ async def _run_item(queue_job_id: str) -> None:
         active_id = None
         check = SessionLocal()
         try:
-            active = check.query(BackgroundJob).filter(BackgroundJob.idempotency_key == key).order_by(BackgroundJob.created_at.desc()).first()
+            active = (
+                check.query(BackgroundJob)
+                .filter(BackgroundJob.idempotency_key == key)
+                .order_by(BackgroundJob.created_at.desc())
+                .first()
+            )
             if active is not None:
                 active_id = active.id
                 active.queue_batch_id = batch_id
@@ -605,6 +619,16 @@ def delete(db: Session, batch_id: str) -> dict[str, Any]:
 
 
 __all__ = [
-    "STAGES", "STAGE_STORYBOARD", "STAGE_AUDIO", "STAGE_VIDEO", "QueueSubmission",
-    "submit", "batch_snapshot", "pause", "resume", "cancel", "retry", "delete",
+    "STAGES",
+    "STAGE_STORYBOARD",
+    "STAGE_AUDIO",
+    "STAGE_VIDEO",
+    "QueueSubmission",
+    "submit",
+    "batch_snapshot",
+    "pause",
+    "resume",
+    "cancel",
+    "retry",
+    "delete",
 ]

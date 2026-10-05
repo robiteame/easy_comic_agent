@@ -36,7 +36,10 @@ function createDocument() {
 }
 
 assert(DEFAULT_THEME === 'light', 'default theme should preserve the existing light UI')
-assert(THEME_OPTIONS.some((item) => item.value === 'black'), 'black theme option should be available')
+assert(
+  THEME_OPTIONS.some((item) => item.value === 'black'),
+  'black theme option should be available',
+)
 assert(resolveTheme('black') === 'black', 'black theme should resolve as black')
 assert(resolveTheme('unknown') === DEFAULT_THEME, 'unknown theme should fall back to default')
 

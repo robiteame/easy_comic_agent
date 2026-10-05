@@ -139,10 +139,7 @@ def collect_render_config(db: Session, project_id: str) -> AvRenderConfig:
         audio_dicts.append(item)
 
     subtitle_rows = (
-        db.query(SubtitleTrack)
-        .filter(SubtitleTrack.project_id == project_id)
-        .order_by(SubtitleTrack.created_at)
-        .all()
+        db.query(SubtitleTrack).filter(SubtitleTrack.project_id == project_id).order_by(SubtitleTrack.created_at).all()
     )
     track_ids = [row.id for row in subtitle_rows]
     cue_rows: list[SubtitleCue] = []
@@ -156,9 +153,7 @@ def collect_render_config(db: Session, project_id: str) -> AvRenderConfig:
     cues_by_track: dict[str, list[SubtitleCue]] = {}
     for cue in cue_rows:
         cues_by_track.setdefault(cue.track_id, []).append(cue)
-    subtitle_dicts = [
-        _serialize_subtitle_track(row, cues_by_track.get(row.id, [])) for row in subtitle_rows
-    ]
+    subtitle_dicts = [_serialize_subtitle_track(row, cues_by_track.get(row.id, [])) for row in subtitle_rows]
 
     total_ms = max((span[1] for span in shot_spans.values()), default=0)
     return AvRenderConfig(
@@ -212,20 +207,13 @@ def build_av_manifest(av_config: AvRenderConfig) -> dict:
             bool(item["bold"]),
             item["position"],
             item["safe_margin"],
-            tuple(
-                (cue["start_ms"], cue["end_ms"], cue["text"], cue["character_name"])
-                for cue in item["cues"]
-            ),
+            tuple((cue["start_ms"], cue["end_ms"], cue["text"], cue["character_name"]) for cue in item["cues"]),
         )
 
     return {
         "audio": [_track_entry(item) for item in av_config.audio_tracks],
         "subtitle": [_subtitle_entry(item) for item in av_config.subtitle_tracks],
     }
-
-
-def manifest_payload(manifest: dict) -> str:
-    return json.dumps(manifest, ensure_ascii=False, sort_keys=True, default=list)
 
 
 def manifest_payload(manifest: dict) -> str:

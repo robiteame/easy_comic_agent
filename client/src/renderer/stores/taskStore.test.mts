@@ -78,7 +78,12 @@ jobApi.cancel = (async () => {
 }) as never
 jobApi.retry = (async () => {
   recorded.push('retry')
-  return { ok: false, status: 'job_not_retryable', message: '只有失败、已取消或已中断的任务可以重试', error_code: 'job_not_retryable' }
+  return {
+    ok: false,
+    status: 'job_not_retryable',
+    message: '只有失败、已取消或已中断的任务可以重试',
+    error_code: 'job_not_retryable',
+  }
 }) as never
 jobApi.resume = (async () => {
   recorded.push('resume')
@@ -90,7 +95,10 @@ jobApi.remove = (async () => {
 }) as never
 jobApi.cleanup = (async () => {
   recorded.push('cleanup')
-  return { deleted: 2, stats: { active_count: 0, failed_count: 0, total: 0, status_counts: {}, latest_job: null, generated_at: '' } }
+  return {
+    deleted: 2,
+    stats: { active_count: 0, failed_count: 0, total: 0, status_counts: {}, latest_job: null, generated_at: '' },
+  }
 }) as never
 
 function jobPayload(overrides: Record<string, unknown> = {}) {
@@ -157,13 +165,19 @@ assert.equal(listCalls, 2, '连接成功后必须再取一次 REST 快照（重�
 
 // --- WebSocket 增量与去重 --------------------------------------------------
 
-socket.emit({ type: 'job.progress', job: jobPayload({ progress: 55, message: '正在合成', updated_at: '2025-01-01T10:01:00' }) })
+socket.emit({
+  type: 'job.progress',
+  job: jobPayload({ progress: 55, message: '正在合成', updated_at: '2025-01-01T10:01:00' }),
+})
 assert.equal(useTaskStore.getState().jobs[0].progress, 10, '进度事件应先进入缓冲区，避免每条事件都触发全量渲染')
 await sleep(200)
 assert.equal(useTaskStore.getState().jobs[0].progress, 55, '缓冲区刷新后进度应更新')
 assert.equal(useTaskStore.getState().jobs.length, 1, '同一条任务的多次事件不得产生重复条目')
 
-socket.emit({ type: 'job.progress', job: jobPayload({ progress: 5, message: '过期事件', updated_at: '2025-01-01T09:00:00' }) })
+socket.emit({
+  type: 'job.progress',
+  job: jobPayload({ progress: 5, message: '过期事件', updated_at: '2025-01-01T09:00:00' }),
+})
 await sleep(200)
 assert.equal(useTaskStore.getState().jobs[0].progress, 55, '更旧的事件必须被丢弃，不能回退状态')
 

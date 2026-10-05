@@ -59,9 +59,7 @@ class NativeAudioVideoAdapter(BaseAdapter):
         )
 
     async def generate(self, request: VideoRequest) -> VideoResult:
-        raise NotImplementedError(
-            "native-audio 协议适配器尚未接入具体厂商实现；音频路由已在调用前安全回退 tts 路径"
-        )
+        raise NotImplementedError("native-audio 协议适配器尚未接入具体厂商实现；音频路由已在调用前安全回退 tts 路径")
 
     def build_prompt(self, request: VideoRequest) -> str:
         """把对白台词编入 prompt（Veo 3 风格：台词由文本驱动）。"""
@@ -74,7 +72,7 @@ class NativeAudioVideoAdapter(BaseAdapter):
             timing = ""
             if dialogue.end_ms > dialogue.start_ms:
                 timing = f"（时间线 {int(dialogue.start_ms)}-{int(dialogue.end_ms)}ms）"
-            parts.append(f'{role}以{emotion}的语气开口说{timing}：「{str(dialogue.text).strip()}」')
+            parts.append(f"{role}以{emotion}的语气开口说{timing}：「{str(dialogue.text).strip()}」")
         if request.dialogues:
             parts.append("对白必须由画面角色原生开口说出，口型与台词同步，音频随视频一次性生成")
         return "\n".join(part for part in parts if part)

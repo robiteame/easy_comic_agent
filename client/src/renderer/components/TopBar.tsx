@@ -1,4 +1,4 @@
-import React from 'react'
+import type React from 'react'
 
 export const OPEN_SETTINGS_EVENT = 'workspace:open-settings'
 

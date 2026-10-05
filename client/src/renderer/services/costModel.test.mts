@@ -60,7 +60,11 @@ assert.equal(formatMicroAmount(2000000, 'USD'), '$2.00', '非人民币币种用�
 assert.equal(formatMicroAmount(2000000, 'XYZ'), 'XYZ 2.00', '未知币种回落到币种代码')
 
 assert.equal(formatCostValue(0, true, 'CNY'), '¥0.00')
-assert.equal(formatCostValue(0, false, 'CNY'), UNKNOWN_COST_TEXT, 'cost_known=false 时即使金额是 0 也必须显示「成本未知」')
+assert.equal(
+  formatCostValue(0, false, 'CNY'),
+  UNKNOWN_COST_TEXT,
+  'cost_known=false 时即使金额是 0 也必须显示「成本未知」',
+)
 assert.equal(formatCostValue(null, true, 'CNY'), UNKNOWN_COST_TEXT, '已知标记为真但金额缺失时同样显示「成本未知」')
 assert.equal(formatCostValue(1500000, false, 'CNY'), UNKNOWN_COST_TEXT)
 
@@ -117,7 +121,16 @@ assert.equal(
 )
 assert.equal(unknownCostReason([]), DEFAULT_UNKNOWN_PRICE_REASON)
 assert.equal(
-  unknownCostReason([{ capability: 'image', label: '图像生成', provider: 'ark-seedream', model: '', quantity: 3, reason: '未配置该 provider / 模型的单价' }]),
+  unknownCostReason([
+    {
+      capability: 'image',
+      label: '图像生成',
+      provider: 'ark-seedream',
+      model: '',
+      quantity: 3,
+      reason: '未配置该 provider / 模型的单价',
+    },
+  ]),
   '未配置该 provider / 模型的单价',
   '后端给出的未知原因应优先展示',
 )
@@ -144,7 +157,19 @@ const historyEstimate = normalizeEstimate({
   cost_known: true,
   estimated_seconds: 120,
   duration_source: 'history',
-  components: [{ capability: 'image', label: '图像生成', component_label: '待生成故事板 3 个镜头', quantity: 3, base_unit: '张', calls: 3, cost_micro: 1800000, cost_known: true, estimated_seconds: 120 }],
+  components: [
+    {
+      capability: 'image',
+      label: '图像生成',
+      component_label: '待生成故事板 3 个镜头',
+      quantity: 3,
+      base_unit: '张',
+      calls: 3,
+      cost_micro: 1800000,
+      cost_known: true,
+      estimated_seconds: 120,
+    },
+  ],
   unknown_components: [],
 })
 assert.equal(estimateCostText(historyEstimate), '¥1.80')
@@ -162,10 +187,25 @@ assert.equal(historyEstimate?.components[0] ? componentQuantityText(historyEstim
 
 // --- 4. 预算状态 -> 徽标 --------------------------------------------------
 
-assert.deepEqual(budgetLevelBadge('unlimited'), { level: 'unlimited', label: '未设置预算', tone: 'muted', color: 'var(--text-secondary)' })
+assert.deepEqual(budgetLevelBadge('unlimited'), {
+  level: 'unlimited',
+  label: '未设置预算',
+  tone: 'muted',
+  color: 'var(--text-secondary)',
+})
 assert.deepEqual(budgetLevelBadge('ok'), { level: 'ok', label: '预算正常', tone: 'success', color: 'var(--green)' })
-assert.deepEqual(budgetLevelBadge('soft_exceeded'), { level: 'soft_exceeded', label: '已超软预算', tone: 'warning', color: 'var(--amber)' })
-assert.deepEqual(budgetLevelBadge('hard_exceeded'), { level: 'hard_exceeded', label: '已超硬预算', tone: 'danger', color: 'var(--red)' })
+assert.deepEqual(budgetLevelBadge('soft_exceeded'), {
+  level: 'soft_exceeded',
+  label: '已超软预算',
+  tone: 'warning',
+  color: 'var(--amber)',
+})
+assert.deepEqual(budgetLevelBadge('hard_exceeded'), {
+  level: 'hard_exceeded',
+  label: '已超硬预算',
+  tone: 'danger',
+  color: 'var(--red)',
+})
 assert.equal(budgetLevelBadge(null).label, '预算正常', '缺状态时按正常处理，不谎报超支')
 assert.equal(budgetBadgeForState(null).level, 'unlimited')
 
@@ -200,7 +240,18 @@ const unknownJob = normalizeJob({
   id: 'job-unknown',
   status: 'failed',
   duration_seconds: 95,
-  cost: { currency: 'CNY', cost_micro: null, cost_known: false, call_count: 4, unknown_call_count: 4, failed_call_count: 1, provider_seconds: 88, has_usage: true, estimated_seconds: 120, duration_source: 'history' },
+  cost: {
+    currency: 'CNY',
+    cost_micro: null,
+    cost_known: false,
+    call_count: 4,
+    unknown_call_count: 4,
+    failed_call_count: 1,
+    provider_seconds: 88,
+    has_usage: true,
+    estimated_seconds: 120,
+    duration_source: 'history',
+  },
 })
 assert.equal(jobCostText(unknownJob?.cost), UNKNOWN_COST_TEXT)
 assert.equal(jobCostText(unknownJob?.cost).includes('¥'), false, '未知成本不能出现任何金额符号')
@@ -239,14 +290,30 @@ assert.equal(jobCostComparisonText(knownJob?.cost), '预计 ¥1.80 · 实际 ¥1
 assert.equal(knownJob?.cost.by_capability[0].capability, 'video')
 assert.equal(knownJob?.cost.provider_seconds, 80)
 assert.equal(normalizeJobCost(null).cost_micro, null, 'raw 为 null 时归一化必须安全')
-assert.equal(normalizeJobCost({ cost_micro: 12345, cost_known: false }).cost_micro, 12345, '金额保留，但 cost_known=false 时展示层会写成「成本未知」')
-assert.equal(jobCostText(normalizeJobCost({ cost_micro: 12345, cost_known: false, has_usage: true })), UNKNOWN_COST_TEXT)
+assert.equal(
+  normalizeJobCost({ cost_micro: 12345, cost_known: false }).cost_micro,
+  12345,
+  '金额保留，但 cost_known=false 时展示层会写成「成本未知」',
+)
+assert.equal(
+  jobCostText(normalizeJobCost({ cost_micro: 12345, cost_known: false, has_usage: true })),
+  UNKNOWN_COST_TEXT,
+)
 
 // --- 统计与明细响应归一化 --------------------------------------------------
 
 assert.equal(normalizeJobStatsCost(undefined).cost_known, true)
 assert.equal(normalizeJobStatsCost(undefined).cost_micro, 0)
-assert.equal(normalizeJobStatsCost({ currency: 'CNY', cost_micro: 2500000, cost_known: true, unknown_call_count: 2, call_count: 5 }).call_count, 5)
+assert.equal(
+  normalizeJobStatsCost({
+    currency: 'CNY',
+    cost_micro: 2500000,
+    cost_known: true,
+    unknown_call_count: 2,
+    call_count: 5,
+  }).call_count,
+  5,
+)
 
 const detail = normalizeJobCostDetail({
   job_id: 'job-1',
@@ -254,14 +321,33 @@ const detail = normalizeJobCostDetail({
   job_type: 'render',
   status: 'failed',
   duration_seconds: 30,
-  summary: { call_count: 2, cost_micro: 0, cost_known: false, unknown_call_count: 2, failed_call_count: 1, duration_ms: 30000, currency: 'CNY', by_capability: [] },
+  summary: {
+    call_count: 2,
+    cost_micro: 0,
+    cost_known: false,
+    unknown_call_count: 2,
+    failed_call_count: 1,
+    duration_ms: 30000,
+    currency: 'CNY',
+    by_capability: [],
+  },
   estimate: null,
-  records: { items: [{ id: 'u1', capability: 'ffmpeg', quantity: 60, cost_micro: null, cost_known: false, status: 'failed' }], total: 1, page: 1, page_size: 20, pages: 1 },
+  records: {
+    items: [{ id: 'u1', capability: 'ffmpeg', quantity: 60, cost_micro: null, cost_known: false, status: 'failed' }],
+    total: 1,
+    page: 1,
+    page_size: 20,
+    pages: 1,
+  },
 })
 assert.equal(detail?.job_id, 'job-1')
 assert.equal(detail?.summary.cost_known, false)
 assert.equal(detail?.records.items[0].cost_known, false)
-assert.equal(formatCostValue(detail?.records.items[0].cost_micro, false, 'CNY'), UNKNOWN_COST_TEXT, '失败任务的调用同样不能显示 ¥0')
+assert.equal(
+  formatCostValue(detail?.records.items[0].cost_micro, false, 'CNY'),
+  UNKNOWN_COST_TEXT,
+  '失败任务的调用同样不能显示 ¥0',
+)
 assert.equal(normalizeJobCostDetail({ job_key: 'x' }), null, '缺少 job_id 的明细必须丢弃')
 
 // --- 项目 / 剧集汇总 ------------------------------------------------------
@@ -269,10 +355,40 @@ assert.equal(normalizeJobCostDetail({ job_key: 'x' }), null, '缺少 job_id 的�
 const summary = normalizeBudgetSummary({
   project_id: 'p1',
   currency: 'CNY',
-  used: { cost_micro: 1500000, cost_known: true, unknown_call_count: 0, failed_call_count: 0, call_count: 2, seconds: 40, by_capability: [] },
+  used: {
+    cost_micro: 1500000,
+    cost_known: true,
+    unknown_call_count: 0,
+    failed_call_count: 0,
+    call_count: 2,
+    seconds: 40,
+    by_capability: [],
+  },
   reserved: { cost_micro: 500000, seconds: 10, count: 1 },
-  remaining: { currency: 'CNY', cost_micro: null, cost_known: false, partial_cost_micro: 300000, seconds: 60, components: [], unknown_components: [{ capability: 'video', label: '视频生成', provider: '', model: '', quantity: 3, reason: '未配置该能力的单价' }] },
-  budget: { scope_type: 'project', scope_id: 'p1', source: 'project', source_label: '项目预算', currency: 'CNY', soft_cost_micro: 10000000, hard_cost_micro: 20000000, soft_seconds: null, hard_seconds: null, enabled: true, note: '' },
+  remaining: {
+    currency: 'CNY',
+    cost_micro: null,
+    cost_known: false,
+    partial_cost_micro: 300000,
+    seconds: 60,
+    components: [],
+    unknown_components: [
+      { capability: 'video', label: '视频生成', provider: '', model: '', quantity: 3, reason: '未配置该能力的单价' },
+    ],
+  },
+  budget: {
+    scope_type: 'project',
+    scope_id: 'p1',
+    source: 'project',
+    source_label: '项目预算',
+    currency: 'CNY',
+    soft_cost_micro: 10000000,
+    hard_cost_micro: 20000000,
+    soft_seconds: null,
+    hard_seconds: null,
+    enabled: true,
+    note: '',
+  },
   status: { level: 'ok', currency: 'CNY', soft_cost_micro: 10000000, committed_cost_micro: 2000000 },
 })
 assert.equal(summary.used.cost_micro, 1500000)
@@ -295,7 +411,18 @@ const pricing = normalizePricingTable({
       pricing_unit: '每 100 万 tokens',
       unit_scale: 1000000,
       secondary_unit: '每 100 万输出 tokens',
-      items: [{ provider: 'mimo', model: 'mimo-v2.5', currency: 'CNY', unit_price_micro: 2000000, unit_price_secondary_micro: 8000000, resolution_multipliers: { default: 1000000 }, configured: true, note: '' }],
+      items: [
+        {
+          provider: 'mimo',
+          model: 'mimo-v2.5',
+          currency: 'CNY',
+          unit_price_micro: 2000000,
+          unit_price_secondary_micro: 8000000,
+          resolution_multipliers: { default: 1000000 },
+          configured: true,
+          note: '',
+        },
+      ],
     },
   ],
 })
@@ -339,8 +466,16 @@ assert.equal(blocked?.status, 'budget_blocked')
 assert.equal(blocked?.message, '项目硬预算 ¥20.00 已不足以启动该任务')
 assert.equal(blocked?.budget?.level, 'hard_exceeded')
 assert.equal(describeBudgetError(blockedError, '导出成片失败'), '项目硬预算 ¥20.00 已不足以启动该任务')
-assert.equal(budgetBlockedFromError({ response: { status: 500, data: { detail: '内部错误' } } }), null, '普通失败不能被误判成预算拦截')
-assert.equal(describeBudgetError({ response: { status: 400, data: { detail: '软预算不能高于硬预算' } } }), '软预算不能高于硬预算', 'PUT 价目的中文原因要原样透出')
+assert.equal(
+  budgetBlockedFromError({ response: { status: 500, data: { detail: '内部错误' } } }),
+  null,
+  '普通失败不能被误判成预算拦截',
+)
+assert.equal(
+  describeBudgetError({ response: { status: 400, data: { detail: '软预算不能高于硬预算' } } }),
+  '软预算不能高于硬预算',
+  'PUT 价目的中文原因要原样透出',
+)
 assert.equal(describeBudgetError({ response: { status: 500, data: 'boom' } }, '保存失败'), '保存失败（HTTP 500）')
 assert.equal(describeBudgetError(new Error('Network Error'), '保存失败'), '保存失败（网络不可用）')
 assert.match(describeBudgetError(new Error('boom'), '保存失败'), /保存失败/)
@@ -370,7 +505,11 @@ assert.equal(providerBlocked?.status, 'provider_not_configured')
 assert.equal(providerBlocked?.message, '以下模型端点尚未配置 API Key：视频生成模型、配音（TTS）。')
 assert.equal(providerBlocked?.missing?.length, 2, '缺 capability 的缺失项必须丢弃')
 assert.equal(providerBlocked?.missing?.[0]?.label, '视频生成模型')
-assert.equal(providerBlockedFromError({ response: { status: 500, data: { detail: '内部错误' } } }), null, '普通失败不能被误判成配置拦截')
+assert.equal(
+  providerBlockedFromError({ response: { status: 500, data: { detail: '内部错误' } } }),
+  null,
+  '普通失败不能被误判成配置拦截',
+)
 assert.equal(providerBlockedFromError(blockedError), null, '预算拦截不能被误判成配置拦截')
 
 console.log('costModel.test.mts ok')

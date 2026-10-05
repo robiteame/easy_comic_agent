@@ -22,7 +22,6 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from config import settings
 from services.providers.endpoint import get_endpoint
 
 logger = logging.getLogger(__name__)
@@ -127,9 +126,7 @@ class IdentityEmbeddingProvider:
             return SimilarityReport(status="unsupported", error=capability.reason)
         usable = [item for item in reference_paths if item.get("path")]
         if not usable:
-            return SimilarityReport(
-                status="unsupported", error="没有可用的角色参考图，无法计算身份相似度"
-            )
+            return SimilarityReport(status="unsupported", error="没有可用的角色参考图，无法计算身份相似度")
         endpoint = self._endpoint()
         inputs: list[dict] = []
         try:
@@ -161,9 +158,7 @@ class IdentityEmbeddingProvider:
                 data = response.json()
         except Exception as exc:
             logger.warning("身份 embedding 调用失败: %s", exc)
-            return SimilarityReport(
-                status="error", error=f"embedding 调用失败: {exc}", provider=capability.provider
-            )
+            return SimilarityReport(status="error", error=f"embedding 调用失败: {exc}", provider=capability.provider)
 
         embeddings: list[list[float]] = []
         try:
@@ -182,7 +177,7 @@ class IdentityEmbeddingProvider:
             )
         subject_vector = embeddings[0]
         similarities: list[dict] = []
-        for item, vector in zip(inputs[1:], embeddings[1:]):
+        for item, vector in zip(inputs[1:], embeddings[1:], strict=True):
             score = _cosine_similarity(subject_vector, vector)
             similarities.append({"label": item["label"], "score": round(score, 4)})
         min_score = min((item["score"] for item in similarities), default=None)
@@ -204,7 +199,7 @@ def _image_data_url(path: str) -> str:
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(y * y for y in b))
     if not norm_a or not norm_b:
@@ -228,6 +223,20 @@ class MediaProbe:
     silence_ratio: float | None = None
     issues: list[str] = field(default_factory=list)
     error: str = ""
+
+
+def _parse_duration(value: object) -> float | None:
+    """解析 ffprobe 的 duration 字段（字符串秒数）；缺失或非法时返回 None。
+
+    修复:该辅助函数此前被 probe_media_streams 调用但从未定义,音画同步
+    探测路径会直接 NameError。
+    """
+
+    try:
+        seconds = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
 
 
 async def _run_command(args: list[str], timeout: int = PROBE_TIMEOUT_SECONDS) -> tuple[int, str, str]:
@@ -271,9 +280,7 @@ async def probe_media_streams(path: str) -> MediaProbe:
     result.video_duration = _parse_duration(
         video_streams[0].get("duration") if video_streams else None
     ) or _parse_duration((data.get("format") or {}).get("duration"))
-    result.audio_duration = _parse_duration(
-        audio_streams[0].get("duration") if audio_streams else None
-    )
+    result.audio_duration = _parse_duration(audio_streams[0].get("duration") if audio_streams else None)
 
     if not result.has_audio:
         result.status = "skipped"
@@ -321,16 +328,11 @@ async def analyze_audio_clarity(path: str) -> MediaProbe:
 
     result.mean_volume_db = _db(r"mean_volume:\s*(-?[\d.]+)\s*dB")
     result.max_volume_db = _db(r"max_volume:\s*(-?[\d.]+)\s*dB")
-    durations = [
-        float(value)
-        for value in re.findall(r"silence_duration:\s*([\d.]+)", stderr)
-    ]
+    durations = [float(value) for value in re.findall(r"silence_duration:\s*([\d.]+)", stderr)]
     total_silence = sum(durations)
     total_match = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", stderr)
     if total_match:
-        total = (
-            int(total_match.group(1)) * 3600 + int(total_match.group(2)) * 60 + float(total_match.group(3))
-        )
+        total = int(total_match.group(1)) * 3600 + int(total_match.group(2)) * 60 + float(total_match.group(3))
         if total > 0:
             result.silence_ratio = round(min(1.0, total_silence / total), 3)
 

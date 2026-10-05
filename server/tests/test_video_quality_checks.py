@@ -17,22 +17,21 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
+from agent import graph  # noqa: E402
 from agent.contracts import (  # noqa: E402
+    STAGE_CONTRACTS,
     FailureKind,
     ShotArtifact,
     StageName,
     StageStatus,
-    STAGE_CONTRACTS,
 )
 from agent.critic import critique_videos  # noqa: E402
-from agent import graph  # noqa: E402
 from services.structural_validation import (  # noqa: E402
     probe_media_duration_sync,
     validate_video_file,
     validate_video_sync,
 )
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 MEDIA_ROOT = TEST_ROOT / "video-quality-checks"
@@ -56,8 +55,15 @@ def _make_static_video(color: str, name: str) -> Path:
     path = MEDIA_ROOT / name
     path.parent.mkdir(parents=True, exist_ok=True)
     _ffmpeg(
-        "-f", "lavfi", "-i", f"color={color}:size=540x960:rate=15:duration=4",
-        "-pix_fmt", "yuv420p", "-c:v", "libx264", str(path),
+        "-f",
+        "lavfi",
+        "-i",
+        f"color={color}:size=540x960:rate=15:duration=4",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:v",
+        "libx264",
+        str(path),
     )
     return path
 
@@ -66,9 +72,21 @@ def _make_av_mismatch_video(name: str = "av_mismatch.mp4") -> Path:
     path = MEDIA_ROOT / name
     path.parent.mkdir(parents=True, exist_ok=True)
     _ffmpeg(
-        "-f", "lavfi", "-i", "testsrc2=size=540x960:rate=15:duration=3",
-        "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
-        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-c:a", "aac", str(path),
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=540x960:rate=15:duration=3",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=6",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
+        str(path),
     )
     return path
 
@@ -206,7 +224,11 @@ class VideoValidatorCategoryTests(unittest.TestCase):
         report = asyncio.run(validate_video_file(str(self.valid), expected_aspect_ratio=16 / 9))
         codes = _codes(report, "technical_quality")
         self.assertIn("video_aspect_mismatch", codes)
-        entry = next(item for item in report["categories"]["technical_quality"]["issues"] if item["code"] == "video_aspect_mismatch")
+        entry = next(
+            item
+            for item in report["categories"]["technical_quality"]["issues"]
+            if item["code"] == "video_aspect_mismatch"
+        )
         self.assertTrue(entry["recommendation"])
 
     def test_slight_aspect_deviation_warns_without_failing(self) -> None:
@@ -287,7 +309,14 @@ class CriticVideoReportTests(unittest.TestCase):
 
     def test_valid_artifacts_pass_without_claiming_visual_quality(self) -> None:
         report = critique_videos(
-            [{"shot_id": "shot-1", "path": str(self.valid), "expected_duration_s": 4.0, "expected_aspect_ratio": 9 / 16}]
+            [
+                {
+                    "shot_id": "shot-1",
+                    "path": str(self.valid),
+                    "expected_duration_s": 4.0,
+                    "expected_aspect_ratio": 9 / 16,
+                }
+            ]
         )
         self.assertTrue(report.passed)
         names = {metric.name for metric in report.metrics}
@@ -322,7 +351,13 @@ class CriticVideoReportTests(unittest.TestCase):
 
     def test_generation_failure_kept_as_independent_issue(self) -> None:
         report = critique_videos(
-            [{"shot_id": "shot-4", "path": "", "failure": {"kind": "video_failed", "stage": "video_generation", "message": "provider down"}}]
+            [
+                {
+                    "shot_id": "shot-4",
+                    "path": "",
+                    "failure": {"kind": "video_failed", "stage": "video_generation", "message": "provider down"},
+                }
+            ]
         )
         self.assertFalse(report.passed)
         self.assertTrue(any(issue.code == "video_generation_failure" for issue in report.issues))

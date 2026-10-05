@@ -111,8 +111,7 @@ async def get_provider_capabilities():
     providers: dict[str, list[dict]] = {}
     for capability in ("image", "video"):
         providers[capability] = [
-            capability_report(capability, protocol)
-            for protocol in KNOWN_PROTOCOLS.get(capability, ())
+            capability_report(capability, protocol) for protocol in KNOWN_PROTOCOLS.get(capability, ())
         ]
     return {"matrix_version": 1, "providers": providers}
 

@@ -28,9 +28,7 @@ async def read_bounded_response(response: httpx.Response) -> bytes:
         await response.aclose()
 
 
-async def extract_image_bytes(
-    client: httpx.AsyncClient, response: httpx.Response, response_bytes: bytes
-) -> bytes:
+async def extract_image_bytes(client: httpx.AsyncClient, response: httpx.Response, response_bytes: bytes) -> bytes:
     content_type = response.headers.get("content-type", "")
     if content_type.startswith("image/"):
         if len(response_bytes) > settings.MAX_IMAGE_GENERATION_BYTES:

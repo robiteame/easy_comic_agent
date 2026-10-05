@@ -139,10 +139,7 @@ def _serialize_track(track: SubtitleTrack, cues: list[SubtitleCue]) -> dict:
 
 def _tracks_payload(db: Session, project: Project) -> dict:
     tracks = (
-        db.query(SubtitleTrack)
-        .filter(SubtitleTrack.project_id == project.id)
-        .order_by(SubtitleTrack.created_at)
-        .all()
+        db.query(SubtitleTrack).filter(SubtitleTrack.project_id == project.id).order_by(SubtitleTrack.created_at).all()
     )
     track_ids = [track.id for track in tracks]
     cues: list[SubtitleCue] = []
@@ -232,12 +229,7 @@ async def update_subtitle_track(track_id: str, data: SubtitleTrackUpdate, db: Se
         setattr(track, field, value)
     db.commit()
     await _touch(db, project)
-    cues = (
-        db.query(SubtitleCue)
-        .filter(SubtitleCue.track_id == track.id)
-        .order_by(SubtitleCue.order_index)
-        .all()
-    )
+    cues = db.query(SubtitleCue).filter(SubtitleCue.track_id == track.id).order_by(SubtitleCue.order_index).all()
     return _serialize_track(track, cues)
 
 
@@ -298,12 +290,7 @@ async def replace_subtitle_cues(track_id: str, data: SubtitleCueReplace, db: Ses
     )
     db.commit()
     await _touch(db, project)
-    cues = (
-        db.query(SubtitleCue)
-        .filter(SubtitleCue.track_id == track.id)
-        .order_by(SubtitleCue.order_index)
-        .all()
-    )
+    cues = db.query(SubtitleCue).filter(SubtitleCue.track_id == track.id).order_by(SubtitleCue.order_index).all()
     return _serialize_track(track, cues)
 
 
@@ -321,12 +308,7 @@ async def import_subtitle(track_id: str, data: SubtitleImportRequest, db: Sessio
     _replace_cues(db, track, parsed)
     db.commit()
     await _touch(db, project)
-    cues = (
-        db.query(SubtitleCue)
-        .filter(SubtitleCue.track_id == track.id)
-        .order_by(SubtitleCue.order_index)
-        .all()
-    )
+    cues = db.query(SubtitleCue).filter(SubtitleCue.track_id == track.id).order_by(SubtitleCue.order_index).all()
     return _serialize_track(track, cues)
 
 
@@ -342,12 +324,7 @@ async def export_subtitle(track_id: str, project_id: str, format: str = "srt", d
     fmt = str(format or "srt").strip().lower()
     if fmt not in {"srt", "vtt"}:
         raise HTTPException(status_code=400, detail="仅支持导出 SRT / VTT")
-    cues = (
-        db.query(SubtitleCue)
-        .filter(SubtitleCue.track_id == track.id)
-        .order_by(SubtitleCue.order_index)
-        .all()
-    )
+    cues = db.query(SubtitleCue).filter(SubtitleCue.track_id == track.id).order_by(SubtitleCue.order_index).all()
     payload = serialize_cues(
         [
             SubtitleCueData(
@@ -437,12 +414,7 @@ async def generate_subtitle_from_shots(track_id: str, data: SubtitleGenerateRequ
     _replace_cues(db, track, generated)
     db.commit()
     await _touch(db, project)
-    cues = (
-        db.query(SubtitleCue)
-        .filter(SubtitleCue.track_id == track.id)
-        .order_by(SubtitleCue.order_index)
-        .all()
-    )
+    cues = db.query(SubtitleCue).filter(SubtitleCue.track_id == track.id).order_by(SubtitleCue.order_index).all()
     result = _serialize_track(track, cues)
     result["overlaps"] = [
         {"index_a": warn.index_a, "index_b": warn.index_b, "overlap_ms": warn.overlap_ms}
@@ -454,7 +426,9 @@ async def generate_subtitle_from_shots(track_id: str, data: SubtitleGenerateRequ
 
 
 @router.get("/track/{track_id}/preview-ass")
-async def preview_track_ass(track_id: str, project_id: str, width: int = 1080, height: int = 1920, db: Session = Depends(get_db)):
+async def preview_track_ass(
+    track_id: str, project_id: str, width: int = 1080, height: int = 1920, db: Session = Depends(get_db)
+):
     """渲染出该轨当前样式的 ASS 文档（供前端预览烧录效果描述）。"""
 
     _validate_track_id(track_id)
@@ -464,12 +438,7 @@ async def preview_track_ass(track_id: str, project_id: str, width: int = 1080, h
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _project_or_404(db, project_id)
     track = _track_or_404(db, track_id, project_id)
-    cues = (
-        db.query(SubtitleCue)
-        .filter(SubtitleCue.track_id == track.id)
-        .order_by(SubtitleCue.order_index)
-        .all()
-    )
+    cues = db.query(SubtitleCue).filter(SubtitleCue.track_id == track.id).order_by(SubtitleCue.order_index).all()
     style = SubtitleStyle(
         font_family=track.font_family or "sans-serif",
         font_size=int(track.font_size or 54),

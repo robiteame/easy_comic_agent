@@ -23,9 +23,7 @@ class MemoryManager:
             "user_preferences": user_prefs,
         }
 
-    def learn_from_regeneration(
-        self, project_id: str, shot_id: str, reason: str, user_id: str = "default"
-    ):
+    def learn_from_regeneration(self, project_id: str, shot_id: str, reason: str, user_id: str = "default"):
         """从用户重生成操作中学习偏好"""
         # 记录到项目日志
         self.project.save_generation_log(

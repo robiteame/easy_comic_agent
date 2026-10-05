@@ -13,7 +13,6 @@ import shutil
 import tempfile
 from pathlib import Path
 
-
 TEST_ROOT = Path(tempfile.mkdtemp(prefix="comic-agent-tests-"))
 
 os.environ["DATABASE_URL"] = f"sqlite:///{TEST_ROOT / 'comic-agent.db'}"
@@ -26,4 +25,3 @@ os.environ["IMAGE_PROVIDER"] = "local"
 os.environ["ERROR_ANALYSIS_LLM_ENABLED"] = "false"
 
 atexit.register(shutil.rmtree, TEST_ROOT, ignore_errors=True)
-

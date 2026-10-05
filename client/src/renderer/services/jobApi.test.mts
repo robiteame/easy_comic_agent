@@ -9,14 +9,25 @@ assert.equal(forbidden.ok, false)
 assert.equal(forbidden.status, 'forbidden')
 assert.match(forbidden.message, /HTTP 403/, '无权限必须给出可读提示')
 
-const notFound = describeJobApiError({ response: { status: 404, data: { message: '任务不存在或已被清理', error_code: 'job_not_found' } } })
+const notFound = describeJobApiError({
+  response: { status: 404, data: { message: '任务不存在或已被清理', error_code: 'job_not_found' } },
+})
 assert.equal(notFound.ok, false)
 assert.equal(notFound.status, 'not_found')
 assert.equal(notFound.message, '任务不存在或已被清理', '服务端的可读消息应原样透出')
 assert.equal(notFound.error_code, 'job_not_found')
 
 const conflict = describeJobApiError({
-  response: { status: 409, data: { ok: false, status: 'scope_conflict', message: '同一项目下已有任务在运行', error_code: 'scope_conflict', job: null } },
+  response: {
+    status: 409,
+    data: {
+      ok: false,
+      status: 'scope_conflict',
+      message: '同一项目下已有任务在运行',
+      error_code: 'scope_conflict',
+      job: null,
+    },
+  },
 })
 assert.equal(conflict.status, 'scope_conflict')
 assert.equal(conflict.message, '同一项目下已有任务在运行')
@@ -38,7 +49,20 @@ api.defaults.adapter = (async (config: { method?: string; url?: string; params?:
   const method = String(config.method || 'get').toLowerCase()
   calls.push({ method, url: String(config.url), params: config.params })
   return {
-    data: method === 'get' ? { items: [], total: 0, page: 1, page_size: 100, pages: 1, active_count: 0, status_counts: {}, job_type_counts: {}, generated_at: '' } : { ok: true, status: 'cancelled', message: '已请求取消' },
+    data:
+      method === 'get'
+        ? {
+            items: [],
+            total: 0,
+            page: 1,
+            page_size: 100,
+            pages: 1,
+            active_count: 0,
+            status_counts: {},
+            job_type_counts: {},
+            generated_at: '',
+          }
+        : { ok: true, status: 'cancelled', message: '已请求取消' },
     status: 200,
     statusText: 'OK',
     headers: {},

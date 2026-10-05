@@ -15,7 +15,7 @@ services.job_actions，重新派发在 services.job_dispatch；这里不复制�
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, or_
@@ -24,8 +24,8 @@ from sqlalchemy.orm import Query, Session
 from config import settings
 from models import BackgroundJob
 from services import usage_service
-from services.job_dto import as_utc, estimate_eta_seconds, job_dto
 from services.job_debug import parse_events as parse_debug_events
+from services.job_dto import as_utc, estimate_eta_seconds, job_dto
 from services.job_types import (
     ACTIVE_STATUSES,
     DISPATCHABLE_JOB_TYPES,
@@ -47,7 +47,9 @@ _ESCAPE_CHAR = "!"
 
 
 def _escape_like(term: str) -> str:
-    return term.replace(_ESCAPE_CHAR, _ESCAPE_CHAR * 2).replace("%", f"{_ESCAPE_CHAR}%").replace("_", f"{_ESCAPE_CHAR}_")
+    return (
+        term.replace(_ESCAPE_CHAR, _ESCAPE_CHAR * 2).replace("%", f"{_ESCAPE_CHAR}%").replace("_", f"{_ESCAPE_CHAR}_")
+    )
 
 
 def _iso_utc(value: datetime | None) -> str | None:
@@ -78,7 +80,7 @@ class JobQuery:
     page: int = 1
     page_size: int = 20
 
-    def normalized(self) -> "JobQuery":
+    def normalized(self) -> JobQuery:
         page = max(1, int(self.page or 1))
         size = int(self.page_size or settings.JOB_LIST_DEFAULT_PAGE_SIZE)
         size = max(1, min(settings.JOB_LIST_MAX_PAGE_SIZE, size))
@@ -188,9 +190,7 @@ def _dto(
     )
 
 
-def _cost_maps(
-    db: Session, rows: list[BackgroundJob]
-) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+def _cost_maps(db: Session, rows: list[BackgroundJob]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """批量取本页任务的成本与估算（按幂等键聚合，避免 N+1 查询）。"""
 
     keys = [parse_job_key(str(row.idempotency_key)).canonical for row in rows]
@@ -213,10 +213,9 @@ def list_jobs(db: Session, query: JobQuery) -> dict[str, Any]:
     successors = active_successor_ids(db, [row.id for row in rows])
     samples = _eta_samples(db, {str(row.job_type) for row in rows if str(row.status) in ACTIVE_STATUSES})
     usages, estimates = _cost_maps(db, rows)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     items = [
-        _dto(row, now=now, successors=successors, samples=samples, usages=usages, estimates=estimates)
-        for row in rows
+        _dto(row, now=now, successors=successors, samples=samples, usages=usages, estimates=estimates) for row in rows
     ]
 
     active_count = (
@@ -264,7 +263,7 @@ def job_stats(db: Session, *, project_id: str = "") -> dict[str, Any]:
     }
     latest = query.order_by(*_LIST_ORDER).first()
     usages, estimates = _cost_maps(db, [latest] if latest is not None else [])
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     usage_summary = usage_service.summarize(db, project_id=project_id) if project_id else usage_service.summarize(db)
     return {
         "project_id": project_id,
@@ -294,12 +293,7 @@ def attempt_history(db: Session, job: BackgroundJob) -> list[dict[str, Any]]:
     """同一操作的历次尝试（含被归档的失败记录），按创建时间升序。"""
 
     canonical = parse_job_key(job.idempotency_key).canonical
-    rows = (
-        db.query(BackgroundJob)
-        .filter(_prefix_clause(canonical))
-        .order_by(BackgroundJob.created_at.asc())
-        .all()
-    )
+    rows = db.query(BackgroundJob).filter(_prefix_clause(canonical)).order_by(BackgroundJob.created_at.asc()).all()
     history = [
         row
         for row in rows
@@ -348,7 +342,7 @@ def job_detail(db: Session, job: BackgroundJob) -> dict[str, Any]:
     usages, estimates = _cost_maps(db, [job])
     dto = _dto(
         job,
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
         successors={str(row[0]) for row in successor_rows},
         samples=samples,
         usages=usages,
@@ -377,7 +371,7 @@ def job_debug_log(db: Session, job: BackgroundJob) -> dict[str, Any]:
         "message": str(job.message or ""),
         "debug_revision": max(0, int(job.debug_revision or 0)),
         "events": parse_debug_events(job.debug_events),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
 
 

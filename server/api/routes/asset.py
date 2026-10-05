@@ -13,10 +13,10 @@ from api.schemas import (
     JsonFieldInput,
     KeyFeatureInput,
     OptionalIdentifier,
+    ReasonText,
     ShortKey,
     ShotText,
     VisualNotes,
-    ReasonText,
 )
 from db import get_db
 from models import Character, Project, SceneAsset, Shot
@@ -106,10 +106,17 @@ async def reference_action(
         item.visual_prompt = data.visual_prompt
         item.reference_status = "stale"
         item.reference_failure_reason = "Prompt 已替换，参考素材需重新生成"
-        invalidate_asset_consumers(db, owner_id, **({"character_id": asset_id} if kind == "character" else {"scene_id": asset_id}))
+        invalidate_asset_consumers(
+            db, owner_id, **({"character_id": asset_id} if kind == "character" else {"scene_id": asset_id})
+        )
         db.commit()
         refresh_project_reference_state(db, item.project_id)
-        return {"id": asset_id, "kind": kind, "status": "stale", "report": refresh_project_reference_state(db, item.project_id)}
+        return {
+            "id": asset_id,
+            "kind": kind,
+            "status": "stale",
+            "report": refresh_project_reference_state(db, item.project_id),
+        }
 
     if data.action == "skip":
         if not data.confirm_degraded:
@@ -123,12 +130,19 @@ async def reference_action(
                 },
             )
         result = accept_degraded_reference(db, kind, asset_id, reason=data.reason or "用户明确跳过本次参考")
-        return {"id": asset_id, "kind": kind, "status": "degraded", "item": result, "report": result.get("project_report", {})}
+        return {
+            "id": asset_id,
+            "kind": kind,
+            "status": "degraded",
+            "item": result,
+            "report": result.get("project_report", {}),
+        }
 
     if data.action == "retry" and data.visual_prompt:
         item.visual_prompt = data.visual_prompt
-    mutation_requested = True
-    invalidate_asset_consumers(db, owner_id, **({"character_id": asset_id} if kind == "character" else {"scene_id": asset_id}))
+    invalidate_asset_consumers(
+        db, owner_id, **({"character_id": asset_id} if kind == "character" else {"scene_id": asset_id})
+    )
     payload = _serialize_character(item) if kind == "character" else _serialize_scene(item)
     generation_project_id = item.project_id
     style = _project_style(db, generation_project_id)
@@ -152,14 +166,32 @@ async def reference_action(
         current = db.query(model).filter(model.id == asset_id, model.project_id == owner_id).first()
         if not current:
             raise HTTPException(status_code=404, detail="参考素材不存在")
-        mark_reference_success(db, kind, current, path, capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")))
+        mark_reference_success(
+            db,
+            kind,
+            current,
+            path,
+            capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")),
+        )
         db.commit()
         report = refresh_project_reference_state(db, generation_project_id)
-        return {"id": asset_id, "kind": kind, "status": "ready", "reference_version": current.reference_version, "report": report}
+        return {
+            "id": asset_id,
+            "kind": kind,
+            "status": "ready",
+            "reference_version": current.reference_version,
+            "report": report,
+        }
     except Exception as exc:
         current = db.query(model).filter(model.id == asset_id, model.project_id == owner_id).first()
         if current:
-            mark_reference_failure(db, kind, current, exc, capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")))
+            mark_reference_failure(
+                db,
+                kind,
+                current,
+                exc,
+                capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")),
+            )
             db.commit()
         report = refresh_project_reference_state(db, generation_project_id)
         return {
@@ -181,8 +213,14 @@ async def get_asset_board(project_id: str, db: Session = Depends(get_db)):
         "asset_project_id": asset_project_id,
         "consistency_report": report,
         "consistency_status": report.get("status", "ready"),
-        "characters": [_serialize_character(item) for item in db.query(Character).filter(Character.project_id == asset_project_id).all()],
-        "scenes": [_serialize_scene(item) for item in db.query(SceneAsset).filter(SceneAsset.project_id == asset_project_id).all()],
+        "characters": [
+            _serialize_character(item)
+            for item in db.query(Character).filter(Character.project_id == asset_project_id).all()
+        ],
+        "scenes": [
+            _serialize_scene(item)
+            for item in db.query(SceneAsset).filter(SceneAsset.project_id == asset_project_id).all()
+        ],
     }
 
 
@@ -214,12 +252,12 @@ async def update_shot_assets(shot_id: str, data: ShotAssetUpdate, db: Session = 
         if not scene:
             raise HTTPException(status_code=400, detail="场景资产不属于该项目")
 
-    character_ids = list(dict.fromkeys(str(item).strip() for item in (data.character_asset_ids or []) if str(item).strip()))
+    character_ids = list(
+        dict.fromkeys(str(item).strip() for item in (data.character_asset_ids or []) if str(item).strip())
+    )
     if character_ids:
         characters = (
-            db.query(Character)
-            .filter(Character.id.in_(character_ids), Character.project_id == asset_project_id)
-            .all()
+            db.query(Character).filter(Character.id.in_(character_ids), Character.project_id == asset_project_id).all()
         )
         found = {item.id for item in characters}
         if found != set(character_ids):
@@ -276,7 +314,9 @@ async def update_character_asset(
 
     mutation_time = datetime.utcnow()
     item.updated_at = mutation_time
-    affected_scopes = invalidate_asset_consumers(db, owner_id, character_id=character_id) if mutation_requested else set()
+    affected_scopes = (
+        invalidate_asset_consumers(db, owner_id, character_id=character_id) if mutation_requested else set()
+    )
     character_payload = _serialize_character(item)
     generation_project_id = item.project_id
     generation_seed = _int_seed(item.seed, 42)
@@ -296,7 +336,15 @@ async def update_character_asset(
         except Exception as exc:
             current = db.query(Character).filter(Character.id == character_id, Character.project_id == owner_id).first()
             if current:
-                mark_reference_failure(db, "character", current, exc, capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")))
+                mark_reference_failure(
+                    db,
+                    "character",
+                    current,
+                    exc,
+                    capability_warning=str(
+                        image_service.last_generation_metadata.get("reference_capability_warning", "")
+                    ),
+                )
                 db.commit()
                 refresh_project_reference_state(db, generation_project_id)
                 return _serialize_character(current)
@@ -305,7 +353,13 @@ async def update_character_asset(
         if not current:
             raise HTTPException(status_code=404, detail="角色资产不存在")
         if current.updated_at == mutation_time:
-            mark_reference_success(db, "character", current, ref_path, capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")))
+            mark_reference_success(
+                db,
+                "character",
+                current,
+                ref_path,
+                capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")),
+            )
             current.updated_at = datetime.utcnow()
             db.commit()
             refresh_project_reference_state(db, generation_project_id)
@@ -356,7 +410,15 @@ async def update_scene_asset(
         except Exception as exc:
             current = db.query(SceneAsset).filter(SceneAsset.id == scene_id, SceneAsset.project_id == owner_id).first()
             if current:
-                mark_reference_failure(db, "scene", current, exc, capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")))
+                mark_reference_failure(
+                    db,
+                    "scene",
+                    current,
+                    exc,
+                    capability_warning=str(
+                        image_service.last_generation_metadata.get("reference_capability_warning", "")
+                    ),
+                )
                 db.commit()
                 refresh_project_reference_state(db, generation_project_id)
                 return _serialize_scene(current)
@@ -365,7 +427,13 @@ async def update_scene_asset(
         if not current:
             raise HTTPException(status_code=404, detail="场景资产不存在")
         if current.updated_at == mutation_time:
-            mark_reference_success(db, "scene", current, ref_path, capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")))
+            mark_reference_success(
+                db,
+                "scene",
+                current,
+                ref_path,
+                capability_warning=str(image_service.last_generation_metadata.get("reference_capability_warning", "")),
+            )
             current.updated_at = datetime.utcnow()
             db.commit()
             refresh_project_reference_state(db, generation_project_id)

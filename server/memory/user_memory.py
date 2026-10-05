@@ -1,5 +1,5 @@
 import json
-from pathlib import Path
+
 from config import settings
 
 
@@ -27,15 +27,18 @@ class UserMemory:
     def get_preferences(self, user_id: str = "default") -> dict:
         """获取用户偏好"""
         data = self._load()
-        return data.get(user_id, {
-            "preferred_style": "anime",
-            "preferred_shot_types": {"close-up": 0.3, "medium": 0.5, "wide": 0.2},
-            "preferred_transition": "fade",
-            "emotion_intensity": "moderate",
-            "preferred_resolution": "1080p",
-            "preferred_format": "9:16",
-            "common_corrections": [],
-        })
+        return data.get(
+            user_id,
+            {
+                "preferred_style": "anime",
+                "preferred_shot_types": {"close-up": 0.3, "medium": 0.5, "wide": 0.2},
+                "preferred_transition": "fade",
+                "emotion_intensity": "moderate",
+                "preferred_resolution": "1080p",
+                "preferred_format": "9:16",
+                "common_corrections": [],
+            },
+        )
 
     def update_preferences(self, user_id: str = "default", updates: dict = None):
         """更新用户偏好"""

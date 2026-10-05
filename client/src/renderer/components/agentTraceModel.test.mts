@@ -175,14 +175,27 @@ function makeSummary(overrides: Partial<AgentTraceSummary> = {}): AgentTraceSumm
           score: 0.88,
           rationale: '切换 Provider',
           prompt_patches: [
-            { field: 'provider', op: 'set', value: 'qwen-image', shot_id: 's2', target_stage: 'image_generation', reason: '当前 Provider 失败' },
+            {
+              field: 'provider',
+              op: 'set',
+              value: 'qwen-image',
+              shot_id: 's2',
+              target_stage: 'image_generation',
+              reason: '当前 Provider 失败',
+            },
           ],
         },
         candidates: [],
         considered_rejected: [{ strategy: 'human_review', score: 0.1, reason: '自动模式禁止选择 human_review' }],
         budget: { level: 'project', remaining_cost_micro: 50000, remaining_seconds: 600 },
         provider_profiles: [
-          { capability: 'image', provider: 'qwen-image', model: 'qwen-image-edit', available: true, supports_reference_images: true },
+          {
+            capability: 'image',
+            provider: 'qwen-image',
+            model: 'qwen-image-edit',
+            available: true,
+            supports_reference_images: true,
+          },
         ],
         selected_video_candidate_id: '',
         candidate_selection: null,
@@ -293,7 +306,24 @@ test('预计/实际耗时对比来自决策候选与镜头产物', () => {
 
 test('空汇总判定与运行状态标签', () => {
   assert.equal(traceHasContent(null), false)
-  assert.equal(traceHasContent(makeSummary({ stages: [], shots: [], decisions: [], degradations: [], counters: { checkpoint_records: 0, stage_checkpoints: 0, decisions: 0, recoveries: 0, invalidated_checkpoints: 0 } })), false)
+  assert.equal(
+    traceHasContent(
+      makeSummary({
+        stages: [],
+        shots: [],
+        decisions: [],
+        degradations: [],
+        counters: {
+          checkpoint_records: 0,
+          stage_checkpoints: 0,
+          decisions: 0,
+          recoveries: 0,
+          invalidated_checkpoints: 0,
+        },
+      }),
+    ),
+    false,
+  )
   assert.equal(runStatusLabel('degraded'), '降级发布')
   assert.equal(strategyLabel('split_shot'), '拆分镜头')
 })

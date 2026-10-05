@@ -17,15 +17,16 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from services import provider_readiness  # noqa: E402
 from services.image_service import ImageService  # noqa: E402
 from services.providers.base import ImageCapabilities  # noqa: E402
 from services.providers.endpoint import EndpointConfig  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
-def _video_endpoint(*, api_key: str = "ark-key", model: str = "doubao-seedance-1-5-pro-251215", protocol: str = "ark-seedance") -> EndpointConfig:
+def _video_endpoint(
+    *, api_key: str = "ark-key", model: str = "doubao-seedance-1-5-pro-251215", protocol: str = "ark-seedance"
+) -> EndpointConfig:
     return EndpointConfig(
         protocol=protocol,
         base_url="https://ark.cn-beijing.volces.com/api/v3",
@@ -95,7 +96,9 @@ class _RefAdapter(_NoRefAdapter):
 class ImageReferenceGuardTests(unittest.TestCase):
     def test_provider_without_reference_support_blocks_generation(self) -> None:
         service = ImageService()
-        endpoint = EndpointConfig(protocol="qwen-image", base_url="https://x.test", api_key="sk", model="qwen-image-2.0")
+        endpoint = EndpointConfig(
+            protocol="qwen-image", base_url="https://x.test", api_key="sk", model="qwen-image-2.0"
+        )
         with (
             patch("services.image_service.get_endpoint", return_value=endpoint),
             patch("services.image_service.get_adapter", return_value=_NoRefAdapter),
@@ -185,10 +188,14 @@ class ReferenceProviderPreferenceTests(unittest.TestCase):
     """需要参考图时优先用「已配置且声明支持参考图」的图像 Provider。"""
 
     def _primary(self) -> EndpointConfig:
-        return EndpointConfig(protocol="qwen-image", base_url="https://dashscope.test", api_key="sk", model="qwen-image-2.0")
+        return EndpointConfig(
+            protocol="qwen-image", base_url="https://dashscope.test", api_key="sk", model="qwen-image-2.0"
+        )
 
     def _alternate(self) -> EndpointConfig:
-        return EndpointConfig(protocol="ark-seedream", base_url="https://ark.test", api_key="ark-key", model="doubao-seedream-5.0-lite")
+        return EndpointConfig(
+            protocol="ark-seedream", base_url="https://ark.test", api_key="ark-key", model="doubao-seedream-5.0-lite"
+        )
 
     def _shot(self) -> dict:
         return {

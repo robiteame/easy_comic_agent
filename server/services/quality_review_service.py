@@ -63,33 +63,82 @@ DIMENSIONS: dict[str, DimensionSpec] = {
     spec.key: spec
     for spec in (
         # --- 故事板（图片）阶段 ---
-        DimensionSpec("scene_match", "场景还原（scene_description）", STAGE_STORYBOARD, 1.2, 0.6,
-                      "画面必须严格呈现场景：{scene_description}"),
-        DimensionSpec("action_match", "动作还原（character_action）", STAGE_STORYBOARD, 1.0, 0.6,
-                      "人物动作必须符合：{character_action}"),
-        DimensionSpec("shot_type_match", "景别（shot_type）", STAGE_STORYBOARD, 0.8, 0.6,
-                      "景别必须是「{shot_type_label}」，不得改变取景范围"),
-        DimensionSpec("camera_angle_match", "机位角度（camera_angle）", STAGE_STORYBOARD, 0.8, 0.6,
-                      "拍摄角度必须是「{camera_angle}」视角"),
-        DimensionSpec("character_identity", "角色身份一致性", STAGE_STORYBOARD, 1.5, 0.7,
-                      "角色{character_names}的脸型五官必须与角色参考图完全一致，严禁改变身份特征"),
-        DimensionSpec("appearance_consistency", "服装发型一致性", STAGE_STORYBOARD, 1.2, 0.65,
-                      "角色服装与发型必须与角色参考图设定完全一致，不得漂移"),
-        DimensionSpec("composition", "构图与主体", STAGE_STORYBOARD, 1.0, 0.6,
-                      "主体完整、构图清晰，关键角色与道具不得被裁切或移出画面"),
-        DimensionSpec("artifacts", "伪影与画面缺陷", STAGE_STORYBOARD, 1.5, 0.7,
-                      "避免肢体畸形、手部错误、文字乱码、重复元素、边缘截断等伪影"),
+        DimensionSpec(
+            "scene_match",
+            "场景还原（scene_description）",
+            STAGE_STORYBOARD,
+            1.2,
+            0.6,
+            "画面必须严格呈现场景：{scene_description}",
+        ),
+        DimensionSpec(
+            "action_match",
+            "动作还原（character_action）",
+            STAGE_STORYBOARD,
+            1.0,
+            0.6,
+            "人物动作必须符合：{character_action}",
+        ),
+        DimensionSpec(
+            "shot_type_match",
+            "景别（shot_type）",
+            STAGE_STORYBOARD,
+            0.8,
+            0.6,
+            "景别必须是「{shot_type_label}」，不得改变取景范围",
+        ),
+        DimensionSpec(
+            "camera_angle_match",
+            "机位角度（camera_angle）",
+            STAGE_STORYBOARD,
+            0.8,
+            0.6,
+            "拍摄角度必须是「{camera_angle}」视角",
+        ),
+        DimensionSpec(
+            "character_identity",
+            "角色身份一致性",
+            STAGE_STORYBOARD,
+            1.5,
+            0.7,
+            "角色{character_names}的脸型五官必须与角色参考图完全一致，严禁改变身份特征",
+        ),
+        DimensionSpec(
+            "appearance_consistency",
+            "服装发型一致性",
+            STAGE_STORYBOARD,
+            1.2,
+            0.65,
+            "角色服装与发型必须与角色参考图设定完全一致，不得漂移",
+        ),
+        DimensionSpec(
+            "composition",
+            "构图与主体",
+            STAGE_STORYBOARD,
+            1.0,
+            0.6,
+            "主体完整、构图清晰，关键角色与道具不得被裁切或移出画面",
+        ),
+        DimensionSpec(
+            "artifacts",
+            "伪影与画面缺陷",
+            STAGE_STORYBOARD,
+            1.5,
+            0.7,
+            "避免肢体畸形、手部错误、文字乱码、重复元素、边缘截断等伪影",
+        ),
         # --- 视频阶段 ---
-        DimensionSpec("motion_coherence", "运动连贯性", STAGE_VIDEO, 1.2, 0.6,
-                      "动作连贯流畅，避免瞬移、抖动与画面闪烁"),
-        DimensionSpec("shot_continuity", "镜头间衔接", STAGE_VIDEO, 1.0, 0.6,
-                      "与上一镜头保持场景与角色状态连续，避免突兀跳变"),
-        DimensionSpec("lip_sync", "对白与口型", STAGE_VIDEO, 0.8, 0.6,
-                      "角色口型必须与台词「{dialogue}」匹配"),
-        DimensionSpec("audio_video_sync", "音画同步", STAGE_VIDEO, 0.8, 0.6,
-                      "配音必须与画面对齐，音画时长一致"),
-        DimensionSpec("audio_clarity", "音频清晰度", STAGE_VIDEO, 1.0, 0.6,
-                      "配音清晰可辨，避免长时间静音、音量过低或破音"),
+        DimensionSpec(
+            "motion_coherence", "运动连贯性", STAGE_VIDEO, 1.2, 0.6, "动作连贯流畅，避免瞬移、抖动与画面闪烁"
+        ),
+        DimensionSpec(
+            "shot_continuity", "镜头间衔接", STAGE_VIDEO, 1.0, 0.6, "与上一镜头保持场景与角色状态连续，避免突兀跳变"
+        ),
+        DimensionSpec("lip_sync", "对白与口型", STAGE_VIDEO, 0.8, 0.6, "角色口型必须与台词「{dialogue}」匹配"),
+        DimensionSpec("audio_video_sync", "音画同步", STAGE_VIDEO, 0.8, 0.6, "配音必须与画面对齐，音画时长一致"),
+        DimensionSpec(
+            "audio_clarity", "音频清晰度", STAGE_VIDEO, 1.0, 0.6, "配音清晰可辨，避免长时间静音、音量过低或破音"
+        ),
     )
 }
 
@@ -317,8 +366,13 @@ class QualityReviewService:
                 if not has_characters:
                     dimensions.append(
                         DimensionResult(
-                            key, spec.label, "skipped", weight=spec.weight,
-                            issues=[], evidence={"reason": "无角色出镜，不适用"}, provider="-",
+                            key,
+                            spec.label,
+                            "skipped",
+                            weight=spec.weight,
+                            issues=[],
+                            evidence={"reason": "无角色出镜，不适用"},
+                            provider="-",
                         )
                     )
                     continue
@@ -326,16 +380,17 @@ class QualityReviewService:
                     # 没有参考图时任何一方都无法核验身份/服装，如实标记未检测。
                     dimensions.append(
                         DimensionResult(
-                            key, spec.label, "unsupported", weight=spec.weight,
+                            key,
+                            spec.label,
+                            "unsupported",
+                            weight=spec.weight,
                             issues=["缺少角色参考图，无法核验角色一致性（unsupported）"],
                             evidence={"reason": "角色参考图缺失"},
                             provider="-",
                         )
                     )
                     continue
-            dimensions.append(
-                self._vlm_dimension(key, spec, vlm_capability, vlm_result, vlm_error)
-            )
+            dimensions.append(self._vlm_dimension(key, spec, vlm_capability, vlm_result, vlm_error))
 
         # 身份维度叠加 embedding 相似度证据（未配置时如实标注 unsupported 证据）。
         if has_characters and has_refs:
@@ -399,8 +454,13 @@ class QualityReviewService:
             if key == "lip_sync" and not (shot_fields["dialogue"] or "").strip():
                 dimensions.append(
                     DimensionResult(
-                        spec.key, spec.label, "skipped", weight=spec.weight,
-                        issues=[], evidence={"reason": "该镜头无台词，不适用"}, provider="-",
+                        spec.key,
+                        spec.label,
+                        "skipped",
+                        weight=spec.weight,
+                        issues=[],
+                        evidence={"reason": "该镜头无台词，不适用"},
+                        provider="-",
                     )
                 )
                 continue
@@ -425,34 +485,50 @@ class QualityReviewService:
     ) -> DimensionResult:
         if not vlm_capability.supported:
             return DimensionResult(
-                key, spec.label, "unsupported", weight=spec.weight,
+                key,
+                spec.label,
+                "unsupported",
+                weight=spec.weight,
                 issues=[f"{vlm_capability.reason}（unsupported）"],
-                evidence={"reason": vlm_capability.reason}, provider="-",
+                evidence={"reason": vlm_capability.reason},
+                provider="-",
             )
         if vlm_error or vlm_result is None:
             return DimensionResult(
-                key, spec.label, "error", weight=spec.weight,
+                key,
+                spec.label,
+                "error",
+                weight=spec.weight,
                 issues=[f"VLM 评审调用失败: {vlm_error[:200]}"],
-                evidence={"error": vlm_error[:500]}, provider=vlm_capability.provider,
+                evidence={"error": vlm_error[:500]},
+                provider=vlm_capability.provider,
             )
         entry = (vlm_result.get("dimensions") or {}).get(key)
         if not isinstance(entry, dict) or _parse_number(entry.get("score")) is None:
             return DimensionResult(
-                key, spec.label, "error", weight=spec.weight,
+                key,
+                spec.label,
+                "error",
+                weight=spec.weight,
                 issues=["VLM 未返回该维度的有效评分（fail-closed）"],
-                evidence={"returned": entry}, provider=vlm_capability.provider,
+                evidence={"returned": entry},
+                provider=vlm_capability.provider,
             )
         score = _clamp01(_parse_number(entry.get("score")) / 10.0)
         issues = [str(item) for item in (entry.get("issues") or []) if str(item).strip()]
         evidence = [str(item) for item in (entry.get("evidence") or []) if str(item).strip()]
         return DimensionResult(
-            key, spec.label, "scored", score=score, weight=spec.weight,
-            issues=issues, evidence={"vlm": evidence}, provider=vlm_capability.provider,
+            key,
+            spec.label,
+            "scored",
+            score=score,
+            weight=spec.weight,
+            issues=issues,
+            evidence={"vlm": evidence},
+            provider=vlm_capability.provider,
         )
 
-    def _merge_identity_embedding_report(
-        self, dimensions: list[DimensionResult], report
-    ) -> None:
+    def _merge_identity_embedding_report(self, dimensions: list[DimensionResult], report) -> None:
         identity = next((d for d in dimensions if d.key == "character_identity"), None)
         if identity is None:
             return
@@ -479,16 +555,10 @@ class QualityReviewService:
             "provider": report.provider,
         }
         if report.min_score is not None and report.min_score < threshold:
-            identity.issues.append(
-                f"与角色参考图的 embedding 相似度 {report.min_score:.2f} 低于阈值 {threshold}"
-            )
-        embedding_score = (
-            _clamp01(report.min_score / threshold) if report.min_score is not None else None
-        )
+            identity.issues.append(f"与角色参考图的 embedding 相似度 {report.min_score:.2f} 低于阈值 {threshold}")
+        embedding_score = _clamp01(report.min_score / threshold) if report.min_score is not None else None
         if embedding_score is not None:
-            identity.score = (
-                min(identity.score, embedding_score) if identity.score is not None else embedding_score
-            )
+            identity.score = min(identity.score, embedding_score) if identity.score is not None else embedding_score
             providers = [p for p in (identity.provider, report.provider) if p and p != "-"]
             identity.provider = " + ".join(providers)
 
@@ -496,23 +566,41 @@ class QualityReviewService:
         spec = DIMENSIONS["audio_video_sync"]
         if probe.status == "unsupported":
             return DimensionResult(
-                spec.key, spec.label, "unsupported", weight=spec.weight,
-                issues=[probe.error], evidence={"reason": probe.error}, provider="-",
+                spec.key,
+                spec.label,
+                "unsupported",
+                weight=spec.weight,
+                issues=[probe.error],
+                evidence={"reason": probe.error},
+                provider="-",
             )
         if probe.status == "error":
             return DimensionResult(
-                spec.key, spec.label, "error", weight=spec.weight,
-                issues=[probe.error], evidence={"error": probe.error}, provider="ffprobe",
+                spec.key,
+                spec.label,
+                "error",
+                weight=spec.weight,
+                issues=[probe.error],
+                evidence={"error": probe.error},
+                provider="ffprobe",
             )
         if probe.status == "skipped":
             return DimensionResult(
-                spec.key, spec.label, "skipped", weight=spec.weight,
-                issues=probe.issues, evidence={"reason": probe.issues[0] if probe.issues else "不适用"},
+                spec.key,
+                spec.label,
+                "skipped",
+                weight=spec.weight,
+                issues=probe.issues,
+                evidence={"reason": probe.issues[0] if probe.issues else "不适用"},
                 provider="-",
             )
         score = 1.0 if not probe.issues else 0.3
         return DimensionResult(
-            spec.key, spec.label, "scored", score=score, weight=spec.weight,
+            spec.key,
+            spec.label,
+            "scored",
+            score=score,
+            weight=spec.weight,
             issues=probe.issues,
             evidence={
                 "video_duration": probe.video_duration,
@@ -527,29 +615,52 @@ class QualityReviewService:
             reason = probe.issues[0] if probe.issues else probe.error or "不适用"
             status = "skipped" if probe.status == "skipped" else "unsupported"
             return DimensionResult(
-                spec.key, spec.label, status, weight=spec.weight,
+                spec.key,
+                spec.label,
+                status,
+                weight=spec.weight,
                 issues=[] if status == "skipped" else [reason],
-                evidence={"reason": reason}, provider="-",
+                evidence={"reason": reason},
+                provider="-",
             )
         if probe.status == "error":
             return DimensionResult(
-                spec.key, spec.label, "error", weight=spec.weight,
-                issues=[probe.error], evidence={"error": probe.error}, provider="ffmpeg",
+                spec.key,
+                spec.label,
+                "error",
+                weight=spec.weight,
+                issues=[probe.error],
+                evidence={"error": probe.error},
+                provider="ffmpeg",
             )
         clarity = await analyze_audio_clarity(target)
         if clarity.status == "unsupported":
             return DimensionResult(
-                spec.key, spec.label, "unsupported", weight=spec.weight,
-                issues=[clarity.error], evidence={"reason": clarity.error}, provider="-",
+                spec.key,
+                spec.label,
+                "unsupported",
+                weight=spec.weight,
+                issues=[clarity.error],
+                evidence={"reason": clarity.error},
+                provider="-",
             )
         if clarity.status == "error":
             return DimensionResult(
-                spec.key, spec.label, "error", weight=spec.weight,
-                issues=[clarity.error], evidence={"error": clarity.error}, provider="ffmpeg",
+                spec.key,
+                spec.label,
+                "error",
+                weight=spec.weight,
+                issues=[clarity.error],
+                evidence={"error": clarity.error},
+                provider="ffmpeg",
             )
         score = _clamp01(1.0 - 0.4 * len(clarity.issues))
         return DimensionResult(
-            spec.key, spec.label, "scored", score=score, weight=spec.weight,
+            spec.key,
+            spec.label,
+            "scored",
+            score=score,
+            weight=spec.weight,
             issues=clarity.issues,
             evidence={
                 "mean_volume_db": clarity.mean_volume_db,
@@ -587,27 +698,19 @@ class QualityReviewService:
             review.passed = False
         else:
             total_weight = sum(d.weight for d in scored)
-            review.overall_score = (
-                sum(d.score * d.weight for d in scored) / total_weight if total_weight else 0.0
-            )
+            review.overall_score = sum(d.score * d.weight for d in scored) / total_weight if total_weight else 0.0
             bar_ok = review.overall_score >= threshold
-            floors_ok = all(
-                d.score >= DIMENSIONS[d.key].min_score for d in scored
-            )
+            floors_ok = all(d.score >= DIMENSIONS[d.key].min_score for d in scored)
             if unsupported and policy == "strict":
                 # Keep actionable semantic failures as ``failed`` so the
                 # retry loop can apply fixes from scored dimensions. If no
                 # dimension was actually judged below its floor, the result
                 # remains ``unsupported`` and goes directly to human review.
-                scored_failures = [
-                    d for d in scored
-                    if d.score is not None and d.score < DIMENSIONS[d.key].min_score
-                ]
+                scored_failures = [d for d in scored if d.score is not None and d.score < DIMENSIONS[d.key].min_score]
                 review.verdict = "failed" if scored_failures else "unsupported"
                 review.passed = False
                 review.issues.extend(
-                    f"[门禁] 以下维度未检测，strict 策略不允许降级通过: "
-                    + "、".join(d.label for d in unsupported)
+                    "[门禁] 以下维度未检测，strict 策略不允许降级通过: " + "、".join(d.label for d in unsupported)
                 )
             else:
                 if unsupported:
@@ -669,7 +772,9 @@ class QualityReviewService:
         if review.degraded:
             logger.warning(
                 "质量审核存在降级放行: shot=%s stage=%s 未检测维度=[%s]（已在界面如实标注）",
-                review.shot_id, review.stage, missing,
+                review.shot_id,
+                review.stage,
+                missing,
             )
 
     # --- 持久化与通知 ------------------------------------------------------
@@ -718,9 +823,7 @@ class QualityReviewService:
             db.close()
         await _send_quality_review_event(review)
 
-    async def record_unsupported_reviews(
-        self, project_id: str, shot_ids: list[str], stage: str, reason: str
-    ) -> None:
+    async def record_unsupported_reviews(self, project_id: str, shot_ids: list[str], stage: str, reason: str) -> None:
         """能力未配置时为每个镜头落一条 unsupported 审核，界面可见原因。"""
         reviews: list[ShotReview] = []
         db = SessionLocal()
@@ -733,14 +836,20 @@ class QualityReviewService:
                     stage=stage,
                     attempt=self._next_attempt(shot.id, stage),
                     shot_version=shot.version or 1,
-                    target_path=(shot.video_path if stage == STAGE_VIDEO else (shot.storyboard_path or shot.image_path)) or "",
+                    target_path=(shot.video_path if stage == STAGE_VIDEO else (shot.storyboard_path or shot.image_path))
+                    or "",
                     verdict="unsupported",
                     gate_policy=f"threshold={settings.QUALITY_REVIEW_PASS_SCORE} policy={settings.QUALITY_DEGRADATION_POLICY}",
                 )
                 review.dimensions = [
                     DimensionResult(
-                        spec.key, spec.label, "unsupported", weight=spec.weight,
-                        issues=[reason], evidence={"reason": reason}, provider="-",
+                        spec.key,
+                        spec.label,
+                        "unsupported",
+                        weight=spec.weight,
+                        issues=[reason],
+                        evidence={"reason": reason},
+                        provider="-",
                     )
                     for spec in DIMENSIONS.values()
                     if spec.stage == stage
@@ -759,9 +868,7 @@ class QualityReviewService:
                     passed=False,
                     dimensions=json.dumps([d.to_dict() for d in review.dimensions], ensure_ascii=False),
                     issues=json.dumps(review.issues, ensure_ascii=False),
-                    unsupported_dimensions=json.dumps(
-                        [d.label for d in review.dimensions], ensure_ascii=False
-                    ),
+                    unsupported_dimensions=json.dumps([d.label for d in review.dimensions], ensure_ascii=False),
                     suggestion="",
                     prompt_fix=json.dumps(review.fix, ensure_ascii=False),
                     gate_policy=review.gate_policy,
@@ -896,12 +1003,14 @@ class QualityReviewService:
                 # 视觉模型缺失（unsupported）与真正的质量失败必须区分：前者在自动
                 # 模式下按结构门禁降级放行，后者继续拦截。
                 if allow_visual_pending and str(row.get("verdict") or "") == "unsupported":
-                    degraded.append({
-                        "shot_id": shot.id,
-                        "stage": stage,
-                        "verdict": "unsupported",
-                        "reason": "视觉质量未评估（pending）：无视觉模型，按结构门禁降级放行",
-                    })
+                    degraded.append(
+                        {
+                            "shot_id": shot.id,
+                            "stage": stage,
+                            "verdict": "unsupported",
+                            "reason": "视觉质量未评估（pending）：无视觉模型，按结构门禁降级放行",
+                        }
+                    )
                 else:
                     failed.append({"shot_id": shot.id, "reason": f"最新审核未通过（{row['verdict']}）"})
             elif stage == STAGE_STORYBOARD and not shot.confirmed:
@@ -949,11 +1058,7 @@ def _character_references(db, shot: Shot) -> list[dict]:
     names = [str(name) for name in _json_list(shot.characters_in_scene)]
     if not names:
         return []
-    rows = (
-        db.query(Character)
-        .filter(Character.project_id == shot.project_id, Character.name.in_(names))
-        .all()
-    )
+    rows = db.query(Character).filter(Character.project_id == shot.project_id, Character.name.in_(names)).all()
     references: list[dict] = []
     for row in rows:
         for path in _json_list(row.reference_images)[:1]:
@@ -976,7 +1081,9 @@ def _storyboard_user_prompt(shot_fields: dict, character_refs: list[dict]) -> st
     ]
     if character_refs:
         ref_names = "、".join(ref["label"] for ref in character_refs)
-        lines.append(f"【角色参考图】其后 {len(character_refs)} 张为出镜角色（{ref_names}）的设定参考图，身份/服装维度必须对照它们评分。")
+        lines.append(
+            f"【角色参考图】其后 {len(character_refs)} 张为出镜角色（{ref_names}）的设定参考图，身份/服装维度必须对照它们评分。"
+        )
     lines += [
         "镜头参数：",
         f"- 景别: {shot_fields['shot_type_label']}（{shot_fields['shot_type']}）",

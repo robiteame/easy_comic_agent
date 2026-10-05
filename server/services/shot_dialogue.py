@@ -23,8 +23,9 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, replace
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,11 @@ def _line_from_item(item: Any, *, fallback_speaker: str, default_emotion: str) -
         return replace(item)
     if isinstance(item, str):
         text = item.strip()
-        return DialogueLine(speaker=fallback_speaker, line=text[:MAX_LINE_CHARS], emotion=default_emotion) if text else None
+        return (
+            DialogueLine(speaker=fallback_speaker, line=text[:MAX_LINE_CHARS], emotion=default_emotion)
+            if text
+            else None
+        )
     if not isinstance(item, dict):
         return None
     text = _clean_text(_pick(item, _LINE_KEYS), MAX_LINE_CHARS)
@@ -164,7 +169,9 @@ def parse_shot_dialogue(
         line = DialogueLine(speaker=fallback_speaker, line=text[:MAX_LINE_CHARS], emotion=default_emotion)
         return [line]
     else:
-        return parse_shot_dialogue([raw], fallback_speaker=fallback_speaker, default_emotion=default_emotion, warn_key=warn_key)
+        return parse_shot_dialogue(
+            [raw], fallback_speaker=fallback_speaker, default_emotion=default_emotion, warn_key=warn_key
+        )
 
     lines: list[DialogueLine] = []
     for item in items:
@@ -260,7 +267,9 @@ def normalize_character_names(characters: Iterable[dict[str, Any]]) -> list[str]
     return [str(item.get("name") or "").strip() for item in characters or [] if str(item.get("name") or "").strip()]
 
 
-def warn_unknown_speakers(lines: Sequence[DialogueLine], characters: Iterable[dict[str, Any]], *, context: str) -> list[str]:
+def warn_unknown_speakers(
+    lines: Sequence[DialogueLine], characters: Iterable[dict[str, Any]], *, context: str
+) -> list[str]:
     """说话人校验：返回不在角色列表中的说话人（去重），并记录可追踪 warning。"""
 
     known = set(normalize_character_names(characters))

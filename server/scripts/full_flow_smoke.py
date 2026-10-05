@@ -15,15 +15,14 @@ Usage:
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
 
-from PIL import Image
 import requests
-
+from PIL import Image
 
 API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8011").rstrip("/")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -94,9 +93,15 @@ def assert_media_streams(video_path: Path) -> None:
     stream_types = {stream.get("codec_type") for stream in streams}
     assert "video" in stream_types, f"video stream missing: {stream_types}"
     assert "audio" in stream_types, f"audio stream missing: {stream_types}"
-    video_duration = max(float(stream.get("duration") or 0) for stream in streams if stream.get("codec_type") == "video")
-    audio_duration = max(float(stream.get("duration") or 0) for stream in streams if stream.get("codec_type") == "audio")
-    assert audio_duration >= video_duration - 0.5, f"audio is shorter than video: audio={audio_duration}, video={video_duration}"
+    video_duration = max(
+        float(stream.get("duration") or 0) for stream in streams if stream.get("codec_type") == "video"
+    )
+    audio_duration = max(
+        float(stream.get("duration") or 0) for stream in streams if stream.get("codec_type") == "audio"
+    )
+    assert audio_duration >= video_duration - 0.5, (
+        f"audio is shorter than video: audio={audio_duration}, video={video_duration}"
+    )
 
 
 def main() -> None:
@@ -208,7 +213,7 @@ def main() -> None:
         video_result = post(f"/api/shot/{shot['id']}/generate-video", {"force": False})
         assert video_result["status"] == "video_generating", video_result
 
-        def shot_video_ready():
+        def shot_video_ready(shot=shot):
             next_shots = get(f"/api/shot/{project_id}/shots")
             current = next((item for item in next_shots if item["id"] == shot["id"]), None)
             if current and current.get("status") == "failed":

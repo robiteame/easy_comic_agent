@@ -23,12 +23,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-
 _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
-
-from test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402
 
 from fastapi import HTTPException  # noqa: E402
 from sqlalchemy import event, text  # noqa: E402
@@ -38,18 +35,21 @@ from api.routes import character as character_route  # noqa: E402
 from api.routes import project as project_route  # noqa: E402
 from api.routes import render as render_route  # noqa: E402
 from api.routes import script as script_route  # noqa: E402
-from services import dialogue_audio  # noqa: E402
 from api.routes import shot as shot_route  # noqa: E402
 from api.routes.shot import _can_reuse_existing_video  # noqa: E402
 from config import settings  # noqa: E402
 from db import SessionLocal, engine, init_db  # noqa: E402
+from main import app  # noqa: E402
 from models import BackgroundJob, Character, Project, SceneAsset, Shot  # noqa: E402
 from rag.rag_service import RAGService  # noqa: E402
-from services import task_registry  # noqa: E402
-from services.task_registry import claim, finish, recover_interrupted  # noqa: E402
-from main import app  # noqa: E402
+from services import (
+    dialogue_audio,  # noqa: E402
+    task_registry,  # noqa: E402
+)
 from services.security import validate_script_upload, validate_video_upload  # noqa: E402
 from services.storage_service import StorageQuotaExceeded, StorageService  # noqa: E402
+from services.task_registry import claim, finish, recover_interrupted  # noqa: E402
+from test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402
 
 
 class DatabaseTestCase(unittest.TestCase):
@@ -76,9 +76,7 @@ class DatabaseTestCase(unittest.TestCase):
 class RagRegressionTests(unittest.TestCase):
     def test_scene_markers_do_not_create_none_parts(self) -> None:
         service = RAGService()
-        chunks = service._chunk_script(
-            "[场景 1]\n小明说你好。\n\n[场景 2]\n小红说再见。"
-        )
+        chunks = service._chunk_script("[场景 1]\n小明说你好。\n\n[场景 2]\n小红说再见。")
 
         self.assertEqual(len(chunks), 2)
         self.assertTrue(all(isinstance(chunk, dict) for chunk in chunks))
@@ -475,7 +473,13 @@ class MediaAndProjectRegressionTests(DatabaseTestCase):
     def test_project_list_batches_parent_title_lookup(self) -> None:
         series = Project(id="series-list", title="Series", project_type="series")
         episodes = [
-            Project(id=f"episode-list-{index}", title=f"Episode {index}", parent_project_id=series.id, project_type="episode", episode_number=index)
+            Project(
+                id=f"episode-list-{index}",
+                title=f"Episode {index}",
+                parent_project_id=series.id,
+                project_type="episode",
+                episode_number=index,
+            )
             for index in range(1, 4)
         ]
         self.db.add_all([series, *episodes])
@@ -494,7 +498,9 @@ class MediaAndProjectRegressionTests(DatabaseTestCase):
 
         self.assertEqual(len(result), 4)
         self.assertLessEqual(len(statements), 2)
-        self.assertEqual(next(item for item in result if item["id"] == episodes[0].id)["parent_project_title"], "Series")
+        self.assertEqual(
+            next(item for item in result if item["id"] == episodes[0].id)["parent_project_title"], "Series"
+        )
 
     def test_missing_or_tiny_video_is_not_reused(self) -> None:
         missing = SimpleNamespace(video_path=str(settings.OUTPUT_DIR / "missing.mp4"), status="video_done")
@@ -1038,7 +1044,9 @@ class BackgroundJobRegressionTests(DatabaseTestCase):
             lock = shot_route._shot_generation_locks.setdefault(shot.id, asyncio.Lock())
             await lock.acquire()
             try:
-                task = task_registry.start(key, shot_route._regenerate_single_shot(shot.id, expected_version=shot.version))
+                task = task_registry.start(
+                    key, shot_route._regenerate_single_shot(shot.id, expected_version=shot.version)
+                )
                 with self.assertRaisesRegex(RuntimeError, "已在运行"):
                     await task
                 await asyncio.sleep(0)
@@ -1296,14 +1304,13 @@ class BackgroundJobRegressionTests(DatabaseTestCase):
         final_path.write_bytes(b"old-final" * 200)
         staged = final_path.parent / ".render-candidate.mp4"
         staged.write_bytes(b"new-final" * 200)
-        manifest = {
-            shot.id: (shot.version or 1, bool(shot.confirmed), shot.video_path or "", shot.audio_path or "")
-        }
+        manifest = {shot.id: (shot.version or 1, bool(shot.confirmed), shot.video_path or "", shot.audio_path or "")}
         project_manifest = (project.style, project.output_format, project.resolution)
         publish_db = SessionLocal()
         try:
-            with patch.object(publish_db, "commit", side_effect=RuntimeError("database commit failed")), patch.object(
-                render_route, "SessionLocal", return_value=publish_db
+            with (
+                patch.object(publish_db, "commit", side_effect=RuntimeError("database commit failed")),
+                patch.object(render_route, "SessionLocal", return_value=publish_db),
             ):
                 with self.assertRaisesRegex(RuntimeError, "database commit failed"):
                     render_route._publish_render(project.id, staged, manifest, project_manifest)

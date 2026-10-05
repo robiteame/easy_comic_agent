@@ -24,8 +24,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -36,6 +34,7 @@ from models import Project, Shot  # noqa: E402
 from services import audio_routing, provider_readiness  # noqa: E402
 from services.job_types import parse_job_key  # noqa: E402
 from services.providers.endpoint import EndpointConfig  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _endpoint(capability: str, *, api_key: str = "", protocol: str = "") -> EndpointConfig:
@@ -61,9 +60,7 @@ def _native_adapter_class():
         "_ReadyNativeAdapter",
         (),
         {
-            "capabilities": VideoCapabilities(
-                reference_image=False, native_audio=True, dialogue_in_prompt=True
-            ),
+            "capabilities": VideoCapabilities(reference_image=False, native_audio=True, dialogue_in_prompt=True),
             "production_ready": True,
         },
     )
@@ -147,9 +144,7 @@ class ShotVideoReadinessTests(unittest.TestCase):
     def test_shot_level_native_override_skips_voice(self) -> None:
         with _patch_endpoints(video="b", voice=""):
             self.assertEqual(
-                provider_readiness.missing_providers(
-                    "shot_video", has_dialogue=True, audio_mode_override="native"
-                ),
+                provider_readiness.missing_providers("shot_video", has_dialogue=True, audio_mode_override="native"),
                 [],
             )
 
@@ -158,9 +153,7 @@ class ShotVideoReadinessTests(unittest.TestCase):
             _patch_endpoints(video="b", voice=""),
             patch.object(audio_routing, "get_adapter", return_value=_native_adapter_class()),
         ):
-            missing = provider_readiness.missing_providers(
-                "shot_video", has_dialogue=True, audio_mode_override="tts"
-            )
+            missing = provider_readiness.missing_providers("shot_video", has_dialogue=True, audio_mode_override="tts")
         self.assertEqual([item["capability"] for item in missing], ["voice"])
 
     def test_voice_configured_passes(self) -> None:
@@ -324,7 +317,6 @@ class JobRetryReadinessTests(unittest.TestCase):
 
     def test_retry_shot_video_blocked_without_voice_config(self) -> None:
         from services import job_actions
-        from services.job_types import parse_job_key
 
         project_id = f"proj-{uuid.uuid4().hex[:10]}"
         shot_id = f"shot-{uuid.uuid4().hex[:10]}"
@@ -342,7 +334,6 @@ class JobRetryReadinessTests(unittest.TestCase):
 
     def test_retry_pipeline_blocked_without_llm_config(self) -> None:
         from services import job_actions
-        from services.job_types import parse_job_key
 
         project_id = f"proj-{uuid.uuid4().hex[:10]}"
         self.db.add(Project(id=project_id, title="重试预检项目"))

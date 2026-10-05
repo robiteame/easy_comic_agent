@@ -3,8 +3,9 @@ import os
 import re
 import shutil
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 from config import settings
@@ -89,7 +90,10 @@ class StorageService:
                 continue
             is_work_dir = path.is_dir() and path.name.startswith(".render-")
             is_temp_file = path.is_file() and (
-                path.name.endswith(".tmp") or path.name.endswith(".upload") or path.name.endswith(".download") or path.name.endswith(".candidate")
+                path.name.endswith(".tmp")
+                or path.name.endswith(".upload")
+                or path.name.endswith(".download")
+                or path.name.endswith(".candidate")
             )
             if ttl and age < ttl:
                 continue
@@ -106,7 +110,9 @@ class StorageService:
                 continue
             match = re.fullmatch(r"(.+)_v(\d+)(\.[^.]+)", path.name)
             if match:
-                versions.setdefault((path.parent, match.group(1), match.group(3)), []).append((int(match.group(2)), path))
+                versions.setdefault((path.parent, match.group(1), match.group(3)), []).append(
+                    (int(match.group(2)), path)
+                )
         retain = max(1, int(settings.PROJECT_VERSION_RETENTION_COUNT))
         protected_paths = self._protected_project_paths(project_dir)
         if protected_paths is None:
@@ -126,7 +132,9 @@ class StorageService:
                     continue
         return removed
 
-    def ensure_project_capacity(self, project_id: str, incoming_bytes: int = 0, *, replacing: str | Path | None = None) -> int:
+    def ensure_project_capacity(
+        self, project_id: str, incoming_bytes: int = 0, *, replacing: str | Path | None = None
+    ) -> int:
         """Reclaim safe garbage, then reserve capacity for an imminent write."""
 
         if incoming_bytes < 0:

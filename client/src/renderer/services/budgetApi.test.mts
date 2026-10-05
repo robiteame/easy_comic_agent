@@ -17,7 +17,21 @@ await budgetApi.pricing()
 assert.equal(calls[0].method, 'get')
 assert.equal(calls[0].url, '/api/budget/pricing')
 
-await budgetApi.savePricing({ currency: 'CNY', items: [{ capability: 'image', provider: 'ark-seedream', model: '', unit_price_micro: 70000, unit_price_secondary_micro: null, resolution_multipliers: {}, configured: true, note: '' }] })
+await budgetApi.savePricing({
+  currency: 'CNY',
+  items: [
+    {
+      capability: 'image',
+      provider: 'ark-seedream',
+      model: '',
+      unit_price_micro: 70000,
+      unit_price_secondary_micro: null,
+      resolution_multipliers: {},
+      configured: true,
+      note: '',
+    },
+  ],
+})
 assert.equal(calls[1].method, 'put')
 assert.equal(calls[1].url, '/api/budget/pricing')
 // axios 在进入 adapter 之前已经把请求体序列化成 JSON 字符串。
@@ -30,7 +44,16 @@ assert.deepEqual(calls[2].params, { project_id: 'p1' })
 await budgetApi.config()
 assert.equal(calls[3].params, undefined, '不带项目时查询全局配置')
 
-await budgetApi.saveConfig({ scope_type: 'project', scope_id: 'p1', soft_cost_micro: 50000000, hard_cost_micro: 80000000, soft_seconds: null, hard_seconds: null, enabled: true, note: '' })
+await budgetApi.saveConfig({
+  scope_type: 'project',
+  scope_id: 'p1',
+  soft_cost_micro: 50000000,
+  hard_cost_micro: 80000000,
+  soft_seconds: null,
+  hard_seconds: null,
+  enabled: true,
+  note: '',
+})
 assert.equal(calls[4].method, 'put')
 assert.equal(calls[4].url, '/api/budget/config')
 
@@ -41,7 +64,11 @@ assert.deepEqual(calls[5].params, { project_id: 'p1' })
 await budgetApi.estimate({ job_type: 'storyboard', project_id: 'p1', shot_ids: ['s1', 's2'] })
 assert.equal(calls[6].method, 'post')
 assert.equal(calls[6].url, '/api/budget/estimate')
-assert.deepEqual(JSON.parse(String(calls[6].data)), { job_type: 'storyboard', project_id: 'p1', shot_ids: ['s1', 's2'] })
+assert.deepEqual(JSON.parse(String(calls[6].data)), {
+  job_type: 'storyboard',
+  project_id: 'p1',
+  shot_ids: ['s1', 's2'],
+})
 
 await budgetApi.summary({ project_id: 'p1' })
 assert.equal(calls[7].url, '/api/budget/summary')

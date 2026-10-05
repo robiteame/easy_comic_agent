@@ -24,8 +24,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from PIL import Image  # noqa: E402
 
 from agent import graph  # noqa: E402
@@ -41,6 +39,7 @@ from services.quality_review_service import (  # noqa: E402
     merge_quality_fix_notes,
     quality_review_service,
 )
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _noise_image(path: Path, size: tuple[int, int] = (512, 512)) -> str:
@@ -57,8 +56,13 @@ def _noise_image(path: Path, size: tuple[int, int] = (512, 512)) -> str:
 class StubVLM:
     """可控评分的 VLM 桩：scores 是 {维度key: 0~1}，缺省维度给默认分。"""
 
-    def __init__(self, default_score: float = 0.95, scores: dict | None = None,
-                 issues: dict | None = None, supported: bool = True):
+    def __init__(
+        self,
+        default_score: float = 0.95,
+        scores: dict | None = None,
+        issues: dict | None = None,
+        supported: bool = True,
+    ):
         self.default_score = default_score
         self.scores = scores or {}
         self.issues = issues or {}
@@ -100,7 +104,9 @@ class StubIdentityEmbedding:
             return SimilarityReport(status=self.status, error="stub 状态")
         similarities = [{"label": ref["label"], "score": self.min_score} for ref in reference_paths]
         return SimilarityReport(
-            status="scored", similarities=similarities, min_score=self.min_score,
+            status="scored",
+            similarities=similarities,
+            min_score=self.min_score,
             provider="identity-embedding:stub",
         )
 
@@ -116,16 +122,14 @@ def _provider_patches(vlm: StubVLM | None, identity: StubIdentityEmbedding | Non
 
 def passing_review_patch():
     """结构合格之外，质量审核全通过（供旧工作流测试复用）。"""
-    return ExitStackWith(_provider_patches(
-        StubVLM(default_score=0.95), StubIdentityEmbedding(status="scored", min_score=0.95)
-    ))
+    return ExitStackWith(
+        _provider_patches(StubVLM(default_score=0.95), StubIdentityEmbedding(status="scored", min_score=0.95))
+    )
 
 
 def video_gate_passing_patch():
     """跳过视频节点的门禁预检（只测视频生成重试本身，供旧测试复用）。"""
-    return patch.object(
-        quality_review_service, "storyboard_gate_status", lambda pid: {"ok": True, "failed": []}
-    )
+    return patch.object(quality_review_service, "storyboard_gate_status", lambda pid: {"ok": True, "failed": []})
 
 
 class ExitStackWith(ExitStack):
@@ -166,8 +170,9 @@ class QualityGateTestCase(unittest.TestCase):
         self.db.commit()
         self.db.close()
 
-    def _seed(self, name: str, sequences=(1,), *, with_characters: bool = True,
-              dialogue: str = "", visual_notes: str = "") -> str:
+    def _seed(
+        self, name: str, sequences=(1,), *, with_characters: bool = True, dialogue: str = "", visual_notes: str = ""
+    ) -> str:
         project_id = f"{self.prefix}_{name}"
         self.project_ids.append(project_id)
         self.db.add(Project(id=project_id, title=name, style="realistic", project_type="series"))
@@ -387,10 +392,12 @@ class IdentityDriftTests(QualityGateTestCase):
     def test_identity_score_capped_by_similarity(self) -> None:
         """身份维度得分 = min(VLM 分, 相似度折算分)，漂移时不得高于折算分。"""
         project_id = self._seed("identity_cap")
-        with ExitStackWith(_provider_patches(
-            StubVLM(default_score=0.95),
-            StubIdentityEmbedding(status="scored", min_score=0.5),
-        )):
+        with ExitStackWith(
+            _provider_patches(
+                StubVLM(default_score=0.95),
+                StubIdentityEmbedding(status="scored", min_score=0.5),
+            )
+        ):
             review = asyncio.run(quality_review_service.review_storyboard_shot(f"{project_id}_shot_1"))
         identity = next(d for d in review.dimensions if d.key == "character_identity")
         threshold = float(app_settings.QUALITY_IDENTITY_SIMILARITY_THRESHOLD)
@@ -405,9 +412,12 @@ class IdentityDriftTests(QualityGateTestCase):
 class PassAndDegradeTests(QualityGateTestCase):
     def test_passing_review_approves_storyboard(self) -> None:
         project_id = self._seed("all_pass")
-        with ExitStackWith(_provider_patches(
-            StubVLM(default_score=0.95), StubIdentityEmbedding(status="scored", min_score=0.95),
-        )):
+        with ExitStackWith(
+            _provider_patches(
+                StubVLM(default_score=0.95),
+                StubIdentityEmbedding(status="scored", min_score=0.95),
+            )
+        ):
             result = asyncio.run(graph._auto_approve_storyboard({"project_id": project_id}))
         self.assertNotIn("errors", result)
         for shot in self._shots(project_id):
@@ -439,7 +449,9 @@ class PassAndDegradeTests(QualityGateTestCase):
         self.db.commit()
         with (
             patch.object(app_settings, "QUALITY_DEGRADATION_POLICY", "lenient"),
-            ExitStackWith(_provider_patches(StubVLM(default_score=0.95), StubIdentityEmbedding(status="scored", min_score=0.95))),
+            ExitStackWith(
+                _provider_patches(StubVLM(default_score=0.95), StubIdentityEmbedding(status="scored", min_score=0.95))
+            ),
         ):
             result = asyncio.run(graph._auto_approve_storyboard({"project_id": project_id2}))
         self.assertNotIn("errors", result)
@@ -451,8 +463,7 @@ class PassAndDegradeTests(QualityGateTestCase):
     def test_dimension_floor_blocks_even_if_average_passes(self) -> None:
         """均分过阈值但单维度击穿下限（如伪影）时不得通过。"""
         project_id = self._seed("artifact_floor")
-        vlm = StubVLM(default_score=0.95, scores={"artifacts": 0.65},
-                      issues={"artifacts": ["手指数量错误"]})
+        vlm = StubVLM(default_score=0.95, scores={"artifacts": 0.65}, issues={"artifacts": ["手指数量错误"]})
         with ExitStackWith(_provider_patches(vlm, StubIdentityEmbedding(status="scored", min_score=0.95))):
             review = asyncio.run(quality_review_service.review_storyboard_shot(f"{project_id}_shot_1"))
         self.assertEqual(review.verdict, "failed")
@@ -500,8 +511,11 @@ class _FakeVideoReview:
 
         self.calls.append(shot_id)
         review = ShotReview(
-            shot_id=shot_id, project_id=self.project_id, stage="video",
-            verdict=self.verdict, passed=self.passed,
+            shot_id=shot_id,
+            project_id=self.project_id,
+            stage="video",
+            verdict=self.verdict,
+            passed=self.passed,
             overall_score=0.95 if self.passed else 0.3,
         )
         review.fix = {"directives": ["动作连贯流畅，避免瞬移、抖动与画面闪烁"], "summary": "..."}
@@ -577,16 +591,25 @@ class VideoDimensionTests(unittest.TestCase):
         self.assertIsNone(dimension.score)
 
     def test_sync_drift_scores_low(self):
-        probe = MediaProbe(status="scored", has_audio=True, video_duration=5.0, audio_duration=3.8,
-                           issues=["音画时长差 1.20s（视频 5.00s / 音频 3.80s）"])
+        probe = MediaProbe(
+            status="scored",
+            has_audio=True,
+            video_duration=5.0,
+            audio_duration=3.8,
+            issues=["音画时长差 1.20s（视频 5.00s / 音频 3.80s）"],
+        )
         dimension = self.service._audio_sync_dimension(probe)
         self.assertEqual(dimension.status, "scored")
         self.assertLessEqual(dimension.score, 0.3)
 
     def test_clarity_issues_reduce_score(self):
         async def fake_clarity(path):  # noqa: ANN001
-            return MediaProbe(status="scored", mean_volume_db=-50.0, silence_ratio=0.8,
-                              issues=["平均音量过低（-50.0 dB）", "大部分时间是无声（静音占比 80%）"])
+            return MediaProbe(
+                status="scored",
+                mean_volume_db=-50.0,
+                silence_ratio=0.8,
+                issues=["平均音量过低（-50.0 dB）", "大部分时间是无声（静音占比 80%）"],
+            )
 
         probe = MediaProbe(status="scored", has_audio=True, video_duration=5.0, audio_duration=5.0)
         with patch("services.quality_review_service.analyze_audio_clarity", fake_clarity):

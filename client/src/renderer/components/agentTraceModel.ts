@@ -180,18 +180,21 @@ export interface AgentTraceVideoCandidate {
 
 export interface AgentTraceShot {
   shot_id: string
-  stages: Record<string, {
-    status: string
-    provider: string
-    model: string
-    score?: number | null
-    cost_micro?: number | null
-    duration_ms: number
-    path: string
-    failure_kind: string
-    failure_message: string
-    shot_version: number
-  }>
+  stages: Record<
+    string,
+    {
+      status: string
+      provider: string
+      model: string
+      score?: number | null
+      cost_micro?: number | null
+      duration_ms: number
+      path: string
+      failure_kind: string
+      failure_message: string
+      shot_version: number
+    }
+  >
   cost_micro: number
   duration_ms: number
   video_candidates: AgentTraceVideoCandidate[]
@@ -271,7 +274,8 @@ export function resolveStageStates(summary: AgentTraceSummary | null | undefined
   for (const stage of AGENT_STAGE_ORDER) {
     const row = rows.get(stage)
     if (!row) {
-      result[stage] = currentIndex >= 0 && AGENT_STAGE_ORDER.indexOf(stage as AgentStageName) < currentIndex ? 'done' : 'pending'
+      result[stage] =
+        currentIndex >= 0 && AGENT_STAGE_ORDER.indexOf(stage as AgentStageName) < currentIndex ? 'done' : 'pending'
       continue
     }
     if (!row.valid || row.status === 'invalidated') {
@@ -350,7 +354,7 @@ export function shotStatusRows(summary: AgentTraceSummary | null | undefined): A
     let latest = { stage: '', status: '', provider: '', model: '', failureKind: '' }
     for (const stage of orderedStages) {
       const row = shot.stages[stage]
-      if (!row || !row.status) continue
+      if (!row?.status) continue
       if (stage === latest.stage) continue
       latest = {
         stage,
@@ -530,10 +534,11 @@ export function referenceRows(summary: AgentTraceSummary | null | undefined): Re
         stage,
         stageLabel: stageLabel(stage),
         count: manifest.length,
-        names: manifest
-          .map((entry) => String(entry.name || entry.asset_id || entry.kind || entry.path || '参考图'))
-          .slice(0, 4)
-          .join('、') + (manifest.length > 4 ? ` 等 ${manifest.length} 张` : ''),
+        names:
+          manifest
+            .map((entry) => String(entry.name || entry.asset_id || entry.kind || entry.path || '参考图'))
+            .slice(0, 4)
+            .join('、') + (manifest.length > 4 ? ` 等 ${manifest.length} 张` : ''),
       })
     }
   }

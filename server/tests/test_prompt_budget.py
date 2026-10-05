@@ -15,8 +15,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from services.image_service import ImageService  # noqa: E402
 from services.prompt_budget import (  # noqa: E402
     assemble_prompt,
@@ -26,6 +24,7 @@ from services.prompt_budget import (  # noqa: E402
 )
 from services.style_templates import style_prompt_params  # noqa: E402
 from services.video_service import VideoService  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class AssemblePromptTests(unittest.TestCase):

@@ -19,9 +19,10 @@ FFmpeg 运行前确定。渲染器只消费该计划，避免 `scene_group_id` �
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from services.shot_dialogue import parse_shot_dialogue
 from services.story_timing import ShotExecutionPlan, load_shot_execution_plan
@@ -247,7 +248,6 @@ def _resolve_boundary(
 ) -> TransitionSpec:
     relation = _scene_relation(previous, current)
     previous_profile = (previous or {}).get("continuity_profile") or {}
-    current_profile = current.get("continuity_profile") or {}
     if relation == "start":
         return TransitionSpec(
             boundary_id=f"boundary-{boundary_index:04d}",
@@ -296,9 +296,7 @@ def _resolve_boundary(
     fallback_reason = ""
     if not supported:
         fallback_reason = f"unsupported_transition:{requested or 'empty'}"
-        warnings.append(
-            f"边界 {boundary_index} 的转场 {requested or '空'} 不受当前 FFmpeg/Provider 支持，已降级为 cut"
-        )
+        warnings.append(f"边界 {boundary_index} 的转场 {requested or '空'} 不受当前 FFmpeg/Provider 支持，已降级为 cut")
     return TransitionSpec(
         boundary_id=f"boundary-{boundary_index:04d}",
         from_shot_id=str((previous or {}).get("shot_id") or (previous or {}).get("id") or ""),
@@ -374,7 +372,9 @@ def _clamp_subtitles(
                 (
                     shot
                     for shot in shot_entries
-                    if nominal_spans.get(shot.shot_id, (0, 0))[0] <= original_start < nominal_spans.get(shot.shot_id, (0, 0))[1]
+                    if nominal_spans.get(shot.shot_id, (0, 0))[0]
+                    <= original_start
+                    < nominal_spans.get(shot.shot_id, (0, 0))[1]
                 ),
                 shot_entries[-1] if shot_entries else None,
             )
@@ -417,10 +417,13 @@ def build_post_production_plan(
     warnings: list[str] = []
     normalized_shots = [dict(shot) for shot in shots]
     windows = [_execution_window(shot) for shot in normalized_shots]
-    durations = [window[1] if window is not None else _normal_duration_ms(shot) for shot, window in zip(normalized_shots, windows)]
+    durations = [
+        window[1] if window is not None else _normal_duration_ms(shot)
+        for shot, window in zip(normalized_shots, windows, strict=True)
+    ]
     nominal_spans: dict[str, tuple[int, int]] = {}
     cursor = 0
-    for shot, duration in zip(normalized_shots, durations):
+    for shot, duration in zip(normalized_shots, durations, strict=True):
         nominal_spans[_normal_shot_id(shot)] = (cursor, cursor + duration)
         cursor += duration
 

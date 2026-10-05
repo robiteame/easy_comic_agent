@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import type React from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { InfoCircleOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
 import Alert from 'antd/es/alert'
 import Button from 'antd/es/button'
@@ -110,11 +111,7 @@ const PricingConfigPanel: React.FC = () => {
     const previews: Record<string, string> = {}
     for (const draft of Object.values(drafts)) {
       const micro = amountTextToMicro(draft.priceText)
-      previews[draft.key] = draft.priceText.trim()
-        ? micro === null
-          ? '单价非法'
-          : micro + ' micro'
-        : '未配置'
+      previews[draft.key] = draft.priceText.trim() ? (micro === null ? '单价非法' : micro + ' micro') : '未配置'
     }
     return previews
   }, [drafts])
@@ -190,8 +187,8 @@ const PricingConfigPanel: React.FC = () => {
         <strong>{capability.label}</strong>
         <Tag color="blue">{capability.pricing_unit}</Tag>
         <span className="pricing-capability-note">
-          基础数量单位：{capability.base_unit || '单位'}（1 个计价单位 = {capability.unit_scale} {capability.base_unit || '单位'}）
-          {capability.secondary_unit ? ` · 次级：${capability.secondary_unit}` : ''}
+          基础数量单位：{capability.base_unit || '单位'}（1 个计价单位 = {capability.unit_scale}{' '}
+          {capability.base_unit || '单位'}）{capability.secondary_unit ? ` · 次级：${capability.secondary_unit}` : ''}
         </span>
       </header>
 
@@ -346,13 +343,21 @@ const PricingConfigPanel: React.FC = () => {
         }
       />
 
-      {error && <div className="pricing-error" role="alert">{error}</div>}
+      {error && (
+        <div className="pricing-error" role="alert">
+          {error}
+        </div>
+      )}
       {loading && !table && (
         <div className="pricing-status" role="status">
           <Spin size="small" /> 正在加载模型价格…
         </div>
       )}
-      {dirty && <div className="pricing-dirty" role="status">有未保存的修改，点击「保存模型价格」后生效</div>}
+      {dirty && (
+        <div className="pricing-dirty" role="status">
+          有未保存的修改，点击「保存模型价格」后生效
+        </div>
+      )}
 
       {table?.capabilities.map(renderCapability)}
     </div>

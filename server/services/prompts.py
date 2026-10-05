@@ -17,8 +17,7 @@ SCRIPT_GENERATION_SYSTEM_PROMPT = (
     "你是漫剧编剧。请输出完整中文漫剧剧本，包含标题、人物、场景、动作、对白和情绪，不要输出解释。"
 )
 SCRIPT_PARSE_SYSTEM_PROMPT = (
-    "你是资深漫剧编导。请把用户输入解析成角色、场景、对白和情绪，"
-    "输出严格 JSON，不要输出 Markdown。"
+    "你是资深漫剧编导。请把用户输入解析成角色、场景、对白和情绪，输出严格 JSON，不要输出 Markdown。"
 )
 STORYBOARD_SYSTEM_PROMPT = (
     "你是专业漫剧分镜师。根据剧本场景输出可执行分镜 JSON，不要输出 Markdown。"

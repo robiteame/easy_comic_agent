@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Button from 'antd/es/button'
 import Drawer from 'antd/es/drawer'
 import message from 'antd/es/message'
@@ -7,10 +8,7 @@ import Tag from 'antd/es/tag'
 import Tooltip from 'antd/es/tooltip'
 import { HistoryOutlined, ReloadOutlined, UndoOutlined } from '@ant-design/icons'
 import { describeShotVersionError, shotApi, toOutputUrl } from '../services/api'
-import type {
-  ShotVersionCompareResponse,
-  ShotVersionSummary,
-} from '../services/shotVersionTypes'
+import type { ShotVersionCompareResponse, ShotVersionSummary } from '../services/shotVersionTypes'
 import type { Shot } from '../stores/shotStore'
 import {
   canCompare,
@@ -72,8 +70,7 @@ const ShotVersionHistory: React.FC<ShotVersionHistoryProps> = ({ open, shot, onC
     }
   }, [])
 
-  const isCurrentShotContext = (shotId: string) =>
-    mountedRef.current && shotIdRef.current === shotId && open
+  const isCurrentShotContext = (shotId: string) => mountedRef.current && shotIdRef.current === shotId && open
 
   const loadVersions = async (shotId: string, keepSelection = false) => {
     const requestId = ++listRequestRef.current
@@ -191,7 +188,9 @@ const ShotVersionHistory: React.FC<ShotVersionHistoryProps> = ({ open, shot, onC
     return (
       <div className="version-media-pane">
         <div className="version-media-head">
-          <strong>{side} · v{detail.number}</strong>
+          <strong>
+            {side} · v{detail.number}
+          </strong>
           <span>{sourceLabel(detail.source)}</span>
         </div>
         <div className="version-media-body">
@@ -240,11 +239,13 @@ const ShotVersionHistory: React.FC<ShotVersionHistoryProps> = ({ open, shot, onC
 
       {shot && (
         <div className="version-history-body">
-          {shot.confirmed && (
-            <div className="locked-shot-note">该镜头已审核锁定：可查看与对比版本，但不能恢复。</div>
-          )}
+          {shot.confirmed && <div className="locked-shot-note">该镜头已审核锁定：可查看与对比版本，但不能恢复。</div>}
 
-          {listError && <div className="version-list-error" role="alert">{listError}</div>}
+          {listError && (
+            <div className="version-list-error" role="alert">
+              {listError}
+            </div>
+          )}
 
           {listLoading && !versions.length && <div className="version-empty-hint">正在加载版本记录…</div>}
 
@@ -335,13 +336,13 @@ const ShotVersionHistory: React.FC<ShotVersionHistoryProps> = ({ open, shot, onC
                 )}
               </div>
 
-              {!canCompare(selection) && (
-                <div className="version-empty-hint">再选择一个不同的版本即可开始对比。</div>
-              )}
+              {!canCompare(selection) && <div className="version-empty-hint">再选择一个不同的版本即可开始对比。</div>}
 
               {canCompare(selection) && compareLoading && <div className="version-empty-hint">正在对比两个版本…</div>}
               {canCompare(selection) && !compareLoading && compareError && (
-                <div className="version-list-error" role="alert">{compareError}</div>
+                <div className="version-list-error" role="alert">
+                  {compareError}
+                </div>
               )}
 
               {compare && !compareLoading && (
@@ -368,7 +369,9 @@ const ShotVersionHistory: React.FC<ShotVersionHistoryProps> = ({ open, shot, onC
                       ))}
                       {!diffRows.length && (
                         <tr>
-                          <td colSpan={3} className="version-diff-same">两个版本内容完全一致</td>
+                          <td colSpan={3} className="version-diff-same">
+                            两个版本内容完全一致
+                          </td>
                         </tr>
                       )}
                     </tbody>

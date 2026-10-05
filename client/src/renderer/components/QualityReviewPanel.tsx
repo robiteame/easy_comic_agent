@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Button from 'antd/es/button'
 import message from 'antd/es/message'
 import Tooltip from 'antd/es/tooltip'
@@ -97,10 +97,10 @@ function QualityReviewPanel({ shot }: QualityReviewPanelProps) {
   return (
     <div className="quality-panel panel-enter" role="region" aria-label="镜头质量审核">
       <div className="quality-panel-header">
-        <strong><SafetyCertificateOutlined /> 质量审核</strong>
-        <span className="quality-panel-sub">
-          {capability ? gateLine(capability.gate) : '门禁配置读取中…'}
-        </span>
+        <strong>
+          <SafetyCertificateOutlined /> 质量审核
+        </strong>
+        <span className="quality-panel-sub">{capability ? gateLine(capability.gate) : '门禁配置读取中…'}</span>
         <div className="quality-panel-actions">
           <Button
             size="small"
@@ -166,8 +166,8 @@ function QualityReviewPanel({ shot }: QualityReviewPanelProps) {
             <div className="quality-degraded" role="alert">
               <ExclamationCircleOutlined />
               <span>
-                存在未检测维度（{current.unsupported_dimensions.join('、') || '部分维度'}
-                ）{current.degraded ? '，本次按降级策略放行——未检测不代表通过' : '，按当前策略不得放行'}。
+                存在未检测维度（{current.unsupported_dimensions.join('、') || '部分维度'}）
+                {current.degraded ? '，本次按降级策略放行——未检测不代表通过' : '，按当前策略不得放行'}。
               </span>
             </div>
           )}
@@ -203,7 +203,11 @@ function QualityReviewPanel({ shot }: QualityReviewPanelProps) {
                       <li key={index}>{issue}</li>
                     ))}
                     {dimension.issues.length === 0 && dimension.status === 'skipped' && (
-                      <li className="quality-dim-note">{Array.isArray(dimension.evidence?.reason) ? '' : String(dimension.evidence?.reason || '该镜头不适用')}</li>
+                      <li className="quality-dim-note">
+                        {Array.isArray(dimension.evidence?.reason)
+                          ? ''
+                          : String(dimension.evidence?.reason || '该镜头不适用')}
+                      </li>
                     )}
                     {dimension.issues.length === 0 && dimension.status === 'unsupported' && (
                       <li className="quality-dim-note">能力未配置，未参与评分（绝不计为通过）</li>
@@ -217,7 +221,9 @@ function QualityReviewPanel({ shot }: QualityReviewPanelProps) {
                       依据：{(dimension.evidence.vlm as string[]).slice(0, 3).join('；')}
                     </div>
                   )}
-                {Boolean(dimension.evidence && typeof dimension.evidence === 'object' && dimension.evidence.identity_embedding) && (
+                {Boolean(
+                  dimension.evidence && typeof dimension.evidence === 'object' && dimension.evidence.identity_embedding,
+                ) && (
                   <div className="quality-dim-evidence">
                     身份相似度：
                     {(() => {
@@ -227,7 +233,11 @@ function QualityReviewPanel({ shot }: QualityReviewPanelProps) {
                         : []
                       return items.length
                         ? `${items.map((item) => `${item.label || '?'} ${formatScore(item.score ?? null)}分`).join('、')}（阈值 ${formatScore(Number(embedding.threshold) || null)} 分）`
-                        : String((embedding as { reason?: string; status?: string }).reason || (embedding as { status?: string }).status || '未执行')
+                        : String(
+                            (embedding as { reason?: string; status?: string }).reason ||
+                              (embedding as { status?: string }).status ||
+                              '未执行',
+                          )
                     })()}
                   </div>
                 )}
@@ -257,7 +267,9 @@ function QualityReviewPanel({ shot }: QualityReviewPanelProps) {
                 <span className="quality-history-verdict">{verdictMeta(entry.verdict).label}</span>
                 <span>{entry.score} 分</span>
                 {entry.degraded && <span className="quality-history-degraded">降级放行</span>}
-                <span className="quality-history-time">{entry.created_at ? entry.created_at.slice(5, 16).replace('T', ' ') : ''}</span>
+                <span className="quality-history-time">
+                  {entry.created_at ? entry.created_at.slice(5, 16).replace('T', ' ') : ''}
+                </span>
               </div>
             ))}
           </div>

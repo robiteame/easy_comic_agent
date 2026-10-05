@@ -46,7 +46,9 @@ def _audio_modes(protocol: str, item: dict[str, Any]) -> list[str]:
     if isinstance(metadata, dict):
         explicit = metadata.get("audio_modes") or metadata.get("audioModes")
         if isinstance(explicit, list):
-            modes = [str(value).strip().lower() for value in explicit if str(value).strip().lower() in {"native", "silent"}]
+            modes = [
+                str(value).strip().lower() for value in explicit if str(value).strip().lower() in {"native", "silent"}
+            ]
             if modes:
                 return list(dict.fromkeys(modes))
         if metadata.get("native_audio") is True or metadata.get("audio") is True:

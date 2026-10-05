@@ -29,23 +29,28 @@ export function formatDialogueForEditor(value: EditableDialogue | null | undefin
     .join('\n')
 }
 
-export function parseDialogueFromEditor(value: string, fallbackSpeaker = ''): EditableDialogue {
+export function parseDialogueFromEditor(value: string, _fallbackSpeaker = ''): EditableDialogue {
   const text = value.trim()
   if (!text) return []
-  const rows = text.split(/\r?\n/).map((row) => row.trim()).filter(Boolean)
+  const rows = text
+    .split(/\r?\n/)
+    .map((row) => row.trim())
+    .filter(Boolean)
   const structured = rows.every((row) => row.includes('|'))
   if (!structured) return value
 
-  return rows.map((row) => {
-    const [speaker = '', emotion = '', timing = '', ...lineParts] = row.split('|')
-    const line = lineParts.join('|').trim()
-    const match = timing.trim().match(/^(\d+|auto)\s*-\s*(\d+|auto)$/)
-    return {
-      speaker: speaker.trim(),
-      line,
-      emotion: EMOTIONS.has(emotion.trim()) ? emotion.trim() : 'neutral',
-      start_ms: match ? numberOrNull(match[1]) : null,
-      end_ms: match ? numberOrNull(match[2]) : null,
-    }
-  }).filter((item) => item.line)
+  return rows
+    .map((row) => {
+      const [speaker = '', emotion = '', timing = '', ...lineParts] = row.split('|')
+      const line = lineParts.join('|').trim()
+      const match = timing.trim().match(/^(\d+|auto)\s*-\s*(\d+|auto)$/)
+      return {
+        speaker: speaker.trim(),
+        line,
+        emotion: EMOTIONS.has(emotion.trim()) ? emotion.trim() : 'neutral',
+        start_ms: match ? numberOrNull(match[1]) : null,
+        end_ms: match ? numberOrNull(match[2]) : null,
+      }
+    })
+    .filter((item) => item.line)
 }

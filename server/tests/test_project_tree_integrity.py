@@ -11,15 +11,13 @@
 from __future__ import annotations
 
 import asyncio
-import unittest
 import sys
+import unittest
 from pathlib import Path
 
 _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
-
-from test_environment import TEST_ROOT  # noqa: F401,E402
 
 from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -29,8 +27,9 @@ from sqlalchemy.exc import IntegrityError  # noqa: E402
 from api.routes import project as project_route  # noqa: E402
 from db import SessionLocal, engine, init_db  # noqa: E402
 from db.database import _repair_project_tree  # noqa: E402
-from models import BackgroundJob, Character, Project, SceneAsset, Shot  # noqa: E402
 from main import app  # noqa: E402
+from models import BackgroundJob, Character, Project, SceneAsset, Shot  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _orphan_episode_count(db) -> int:
@@ -422,7 +421,9 @@ class ProjectTreeRepairTests(ProjectTreeTestCase):
             with engine.connect() as connection:
                 triggers = {
                     row[0]
-                    for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='trigger'")).fetchall()
+                    for row in connection.execute(
+                        text("SELECT name FROM sqlite_master WHERE type='trigger'")
+                    ).fetchall()
                 }
             self.assertIn("trg_projects_insert_tree", triggers)
             self.assertIn("trg_projects_update_tree", triggers)

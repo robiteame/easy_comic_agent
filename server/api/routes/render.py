@@ -9,14 +9,19 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from api import schemas
+from api.claim_guard import budget_notice, claim_or_block
 from api.websocket import ws_manager
 from config import settings
 from db import SessionLocal, get_db
-from models import Project, Shot as ShotModel
+from models import Project
+from models import Shot as ShotModel
 from services.av_config_service import build_av_manifest, collect_render_config
+from services.error_reporter import ERROR_RENDER, error_payload, log_failure
+from services.ffmpeg_service import FFmpegService
 from services.post_production_plan import CAMERA_MOVEMENT_PROMPTS, SUPPORTED_TRANSITIONS, build_post_production_plan
 from services.providers.endpoint import get_endpoint
 from services.providers.registry import UnknownProtocolError, get_adapter
+from services.security import existing_file, validate_identifier
 from services.shot_dialogue import dialogue_lines_payload, parse_shot_dialogue
 from services.story_timing import (
     StoryTimingError,
@@ -24,11 +29,9 @@ from services.story_timing import (
     estimate_action_beats,
     provider_duration_capability,
 )
-from services.error_reporter import ERROR_RENDER, error_payload, log_failure
-from services.ffmpeg_service import FFmpegService
-from services.security import existing_file, validate_identifier
-from api.claim_guard import budget_notice, claim_or_block
-from services.task_registry import claim as claim_task, snapshot as task_snapshot, start as start_task, update_progress as update_job_progress
+from services.task_registry import snapshot as task_snapshot
+from services.task_registry import start as start_task
+from services.task_registry import update_progress as update_job_progress
 
 router = APIRouter(prefix="/api/render", tags=["render"])
 ffmpeg_service = FFmpegService()
@@ -78,7 +81,9 @@ async def get_render_capabilities():
     try:
         endpoint = get_endpoint("video")
         adapter_cls = get_adapter("video", endpoint.protocol)
-        provider_caps = getattr(adapter_cls, "effective_capabilities", lambda _model="": adapter_cls.capabilities)(endpoint.model or "")
+        provider_caps = getattr(adapter_cls, "effective_capabilities", lambda _model="": adapter_cls.capabilities)(
+            endpoint.model or ""
+        )
     except (UnknownProtocolError, RuntimeError, ValueError):
         endpoint = None
         provider_caps = None
@@ -88,7 +93,9 @@ async def get_render_capabilities():
         {
             "value": value,
             "supported": value in supported_movements and movement_prompt,
-            "reason": "" if value in supported_movements and movement_prompt else "provider_camera_movement_unsupported",
+            "reason": ""
+            if value in supported_movements and movement_prompt
+            else "provider_camera_movement_unsupported",
             "prompt_strategy": prompt,
         }
         for value, prompt in CAMERA_MOVEMENT_PROMPTS.items()
@@ -96,12 +103,14 @@ async def get_render_capabilities():
     transition_items = []
     for value in SUPPORTED_TRANSITIONS:
         supported = value in ffmpeg_caps.get("supported_transitions", [])
-        transition_items.append({
-            "value": value,
-            "supported": supported,
-            "reason": "" if supported else "ffmpeg_transition_filter_unsupported",
-            "fallback": "cut" if not supported else "",
-        })
+        transition_items.append(
+            {
+                "value": value,
+                "supported": supported,
+                "reason": "" if supported else "ffmpeg_transition_filter_unsupported",
+                "fallback": "cut" if not supported else "",
+            }
+        )
     return {
         "provider": {
             "protocol": str(getattr(endpoint, "protocol", "") or ""),
@@ -256,8 +265,7 @@ async def _render_task(project_id: str, output_format: str, resolution: str):
                     },
                 }
             manifest = {
-                s.id: (s.version or 1, bool(s.confirmed), s.video_path or "", s.audio_path or "")
-                for s in db_shots
+                s.id: (s.version or 1, bool(s.confirmed), s.video_path or "", s.audio_path or "") for s in db_shots
             }
             # 字幕/音频工作台：渲染采用当时的全部轨道与字幕配置；发布前重读比对，
             # 期间任何修改（av_config_version 亦会推进）都使本批成片作废。
@@ -292,11 +300,7 @@ async def _render_task(project_id: str, output_format: str, resolution: str):
             provider=duration_capability,
             shot_count=len(shots),
             planned_total_duration_s=planned_total_s,
-            action_beats=[
-                beat
-                for item in shots
-                for beat in estimate_action_beats(item.get("character_action"))
-            ],
+            action_beats=[beat for item in shots for beat in estimate_action_beats(item.get("character_action"))],
         )
         timing_issues = timing_plan.validate_timeline(
             shots,
@@ -314,10 +318,7 @@ async def _render_task(project_id: str, output_format: str, resolution: str):
             issue
             for issue in timing_issues
             if issue.code not in {"provider_duration_invalid", "target_duration_mismatch"}
-            and not (
-                issue.code == "video_shorter_than_timeline"
-                and set(issue.shot_ids).issubset(zero_media_shot_ids)
-            )
+            and not (issue.code == "video_shorter_than_timeline" and set(issue.shot_ids).issubset(zero_media_shot_ids))
         ]
         if blocking_timing_issues:
             raise StoryTimingError(blocking_timing_issues)
@@ -342,13 +343,13 @@ async def _render_task(project_id: str, output_format: str, resolution: str):
 
         staged_video = Path(
             await ffmpeg_service.compose_video(
-            shots=shots,
-            output_format=output_format,
-            resolution=resolution,
-            project_id=project_id,
-            publish=False,
-            av_config=av_config_payload,
-            plan=timeline_plan.to_dict(),
+                shots=shots,
+                output_format=output_format,
+                resolution=resolution,
+                project_id=project_id,
+                publish=False,
+                av_config=av_config_payload,
+                plan=timeline_plan.to_dict(),
             )
         )
         final_file = existing_file(staged_video, minimum_size=1024, allowed_roots=media_roots)
@@ -413,7 +414,9 @@ async def _render_task(project_id: str, output_format: str, resolution: str):
 async def _progress(project_id: str, step: str, progress: int, message: str):
     _render_status[project_id] = {"status": "rendering", "progress": progress, "message": message}
     update_job_progress(f"project:{project_id}:render", progress, current_step=step, message=message)
-    await ws_manager.send_to_project(project_id, {"type": "progress", "step": step, "progress": progress, "message": message})
+    await ws_manager.send_to_project(
+        project_id, {"type": "progress", "step": step, "progress": progress, "message": message}
+    )
 
 
 async def _probe_media_durations(paths: set[str]) -> dict[str, int]:
@@ -421,7 +424,9 @@ async def _probe_media_durations(paths: set[str]) -> dict[str, int]:
 
     durations: dict[str, int] = {}
     for raw_path in sorted(paths):
-        path = existing_file(raw_path, minimum_size=1, allowed_roots=(settings.OUTPUT_DIR, settings.ASSETS_DIR, settings.DATA_DIR))
+        path = existing_file(
+            raw_path, minimum_size=1, allowed_roots=(settings.OUTPUT_DIR, settings.ASSETS_DIR, settings.DATA_DIR)
+        )
         if path is None:
             continue
         try:
@@ -446,8 +451,7 @@ def project_timing_target(project_id: str) -> float:
             if planned_target > 0:
                 return planned_target
         return sum(
-            float(row[0] or 0)
-            for row in db.query(ShotModel.duration).filter(ShotModel.project_id == project_id).all()
+            float(row[0] or 0) for row in db.query(ShotModel.duration).filter(ShotModel.project_id == project_id).all()
         )
     finally:
         db.close()
@@ -518,7 +522,9 @@ def _publish_render(
             for shot in current
         }
         current_project_manifest = _project_manifest_tuple(project)
-        current_av_manifest = build_av_manifest(collect_render_config(db, project_id)) if av_manifest is not None else None
+        current_av_manifest = (
+            build_av_manifest(collect_render_config(db, project_id)) if av_manifest is not None else None
+        )
         if (
             not project
             or current_manifest != manifest
@@ -570,7 +576,9 @@ def _apply_post_profiles(shots: list[dict]) -> None:
         shot["post_profile"] = {
             "scene_group_id": scene_group,
             "transition_in": profile.get("cross_scene_transition") if cross_in else "hard cut",
-            "transition_out": profile.get("cross_scene_transition") if cross_out else profile.get("same_scene_transition", "hard cut or 0.2s fade only"),
+            "transition_out": profile.get("cross_scene_transition")
+            if cross_out
+            else profile.get("same_scene_transition", "hard cut or 0.2s fade only"),
             "same_scene_fade_seconds": 0.2,
             "cross_scene_flash_seconds": 0.35,
             "cross_scene_in": cross_in,

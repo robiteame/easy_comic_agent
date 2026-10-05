@@ -19,8 +19,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from services.providers.endpoint import (  # noqa: E402
     EndpointConfig,
     normalize_protocol,
@@ -32,6 +30,7 @@ from services.providers.tts_dashscope import (  # noqa: E402
     normalize_dashscope_voice,
 )
 from services.providers.usage import CAPABILITY_TTS  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class _FakeResponse:
@@ -234,13 +233,7 @@ class DashscopeTTSAdapterTests(unittest.TestCase):
     def test_synthesize_rejects_non_aliyun_audio_url(self) -> None:
         from services.providers.base import TTSRequest
 
-        client = _FakeAsyncClient(
-            [
-                _FakeResponse(
-                    {"output": {"audio": {"url": "https://evil.example.com/audio.wav"}}}
-                )
-            ]
-        )
+        client = _FakeAsyncClient([_FakeResponse({"output": {"audio": {"url": "https://evil.example.com/audio.wav"}}})])
         with patch("services.providers.tts_dashscope.httpx.AsyncClient", return_value=client):
             with self.assertRaisesRegex(RuntimeError, "阿里云域名"):
                 asyncio.run(self.adapter.synthesize(TTSRequest(text="你好")))

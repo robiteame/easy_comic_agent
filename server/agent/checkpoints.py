@@ -11,16 +11,26 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from collections.abc import Iterable
+from datetime import UTC
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from config import settings
 from services.atomic_json import atomic_write_json, read_json_file
-from .contracts import STAGE_ORDER, CheckpointRecord, ShotArtifact, VideoCandidateRecord, VideoCandidateStatus, stage_contract
+
+from .contracts import (
+    STAGE_ORDER,
+    CheckpointRecord,
+    ShotArtifact,
+    VideoCandidateRecord,
+    VideoCandidateStatus,
+    stage_contract,
+)
 
 _SCHEMA_VERSION = 1
 _STORE_LOCK = threading.RLock()
-_STORES: dict[tuple[str, str], "CheckpointStore"] = {}
+_STORES: dict[tuple[str, str], CheckpointStore] = {}
 _STAGE_ORDER = tuple(stage.value for stage in STAGE_ORDER)
 _REUSABLE_STATUSES = {"succeeded", "degraded", "skipped"}
 
@@ -35,7 +45,9 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
     if isinstance(value, set):
-        return sorted((_jsonable(item) for item in value), key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False))
+        return sorted(
+            (_jsonable(item) for item in value), key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False)
+        )
     if isinstance(value, Path):
         return str(value)
     return value
@@ -70,7 +82,7 @@ class CheckpointStore:
         self.data: dict[str, Any] = self._read()
 
     @classmethod
-    def get(cls, project_id: str, run_id: str = "auto", *, root: Path | None = None) -> "CheckpointStore":
+    def get(cls, project_id: str, run_id: str = "auto", *, root: Path | None = None) -> CheckpointStore:
         key = (str(project_id), str(run_id or "auto"))
         with _STORE_LOCK:
             store = _STORES.get(key)
@@ -511,7 +523,9 @@ class CheckpointStore:
             raise RuntimeError(f"checkpoint version conflict: expected {shot_version}, got {actual}")
         return row
 
-    def invalidate_shots(self, shot_ids: Iterable[str], *, from_stage: str = "image_generation", reason: str = "user_changed") -> list[str]:
+    def invalidate_shots(
+        self, shot_ids: Iterable[str], *, from_stage: str = "image_generation", reason: str = "user_changed"
+    ) -> list[str]:
         try:
             start = _STAGE_ORDER.index(str(from_stage))
         except ValueError:
@@ -632,7 +646,9 @@ class CheckpointStore:
             try:
                 shot_versions = {
                     str(shot_id): int(version or 1)
-                    for shot_id, version in db.query(Shot.id, Shot.version).filter(Shot.project_id == self.project_id).all()
+                    for shot_id, version in db.query(Shot.id, Shot.version)
+                    .filter(Shot.project_id == self.project_id)
+                    .all()
                 }
                 av_version = db.query(Project.av_config_version).filter(Project.id == self.project_id).scalar()
                 snapshot = {"__av_config_version__": int(av_version or 0)}
@@ -647,7 +663,8 @@ class CheckpointStore:
         current_snapshot = dict(current if current is not None else self.version_snapshot())
         previous = dict(self.data.get("version_snapshot", {}))
         changed_shots = sorted(
-            key for key in set(previous) | set(current_snapshot)
+            key
+            for key in set(previous) | set(current_snapshot)
             if key != "__av_config_version__" and previous.get(key) != current_snapshot.get(key)
         )
         av_changed = previous.get("__av_config_version__") != current_snapshot.get("__av_config_version__")
@@ -663,9 +680,9 @@ class CheckpointStore:
 
 
 def _now() -> str:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _safe_name(value: str) -> str:
@@ -737,9 +754,13 @@ def _trim_video_candidate(row: Any) -> dict[str, Any]:
         "structural_passed": item.get("structural_passed"),
         "selected": bool(item.get("selected")),
         "selection_reason": str(item.get("selection_reason") or ""),
-        "failure_kind": str((item.get("failure") or {}).get("kind") or "") if isinstance(item.get("failure"), dict) else "",
+        "failure_kind": str((item.get("failure") or {}).get("kind") or "")
+        if isinstance(item.get("failure"), dict)
+        else "",
         # 实际发送给 Provider 的参考图清单（角色/场景/上一镜尾帧）。
-        "reference_manifest": [dict(entry) for entry in item.get("reference_manifest") or [] if isinstance(entry, dict)],
+        "reference_manifest": [
+            dict(entry) for entry in item.get("reference_manifest") or [] if isinstance(entry, dict)
+        ],
     }
 
 
@@ -784,18 +805,24 @@ def summarize_trace(snapshot: dict[str, Any]) -> dict[str, Any]:
 
     stages: list[dict[str, Any]] = []
     for stage, row in sorted(stage_rows.items()):
-        stages.append({
-            "stage": stage,
-            "status": str(row.get("status") or "pending"),
-            "valid": bool(row.get("valid", True)),
-            "invalidated_reason": str(row.get("invalidated_reason") or ""),
-            "quality": _trim_critique(row.get("critique")),
-            "failure_kind": str((row.get("failure") or {}).get("kind") or "") if isinstance(row.get("failure"), dict) else "",
-            "failure_message": str((row.get("failure") or {}).get("message") or "") if isinstance(row.get("failure"), dict) else "",
-            "actual_duration_ms": _duration_ms(row.get("created_at"), row.get("saved_at")),
-            "created_at": str(row.get("created_at") or ""),
-            "saved_at": str(row.get("saved_at") or ""),
-        })
+        stages.append(
+            {
+                "stage": stage,
+                "status": str(row.get("status") or "pending"),
+                "valid": bool(row.get("valid", True)),
+                "invalidated_reason": str(row.get("invalidated_reason") or ""),
+                "quality": _trim_critique(row.get("critique")),
+                "failure_kind": str((row.get("failure") or {}).get("kind") or "")
+                if isinstance(row.get("failure"), dict)
+                else "",
+                "failure_message": str((row.get("failure") or {}).get("message") or "")
+                if isinstance(row.get("failure"), dict)
+                else "",
+                "actual_duration_ms": _duration_ms(row.get("created_at"), row.get("saved_at")),
+                "created_at": str(row.get("created_at") or ""),
+                "saved_at": str(row.get("saved_at") or ""),
+            }
+        )
 
     shots: list[dict[str, Any]] = []
     total_cost_micro = 0
@@ -822,8 +849,12 @@ def summarize_trace(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "cost_micro": cost_value,
                 "duration_ms": duration,
                 "path": str(row.get("path") or ""),
-                "failure_kind": str((row.get("failure") or {}).get("kind") or "") if isinstance(row.get("failure"), dict) else "",
-                "failure_message": str((row.get("failure") or {}).get("message") or "") if isinstance(row.get("failure"), dict) else "",
+                "failure_kind": str((row.get("failure") or {}).get("kind") or "")
+                if isinstance(row.get("failure"), dict)
+                else "",
+                "failure_message": str((row.get("failure") or {}).get("message") or "")
+                if isinstance(row.get("failure"), dict)
+                else "",
                 "shot_version": int(row.get("shot_version") or 0),
                 "selected_video_candidate_id": str(row.get("selected_video_candidate_id") or ""),
                 "candidate_selection": row.get("candidate_selection") or None,
@@ -838,15 +869,17 @@ def summarize_trace(snapshot: dict[str, Any]) -> dict[str, Any]:
                 selected_video_candidate_id = str(entry["selected_video_candidate_id"])
             if candidate_selection is None and entry.get("candidate_selection"):
                 candidate_selection = entry.get("candidate_selection")
-        shots.append({
-            "shot_id": str(shot_id),
-            "stages": stage_entries,
-            "cost_micro": shot_cost,
-            "duration_ms": shot_duration,
-            "video_candidates": [_trim_video_candidate(row) for row in video_candidates],
-            "selected_video_candidate_id": selected_video_candidate_id,
-            "candidate_selection": candidate_selection,
-        })
+        shots.append(
+            {
+                "shot_id": str(shot_id),
+                "stages": stage_entries,
+                "cost_micro": shot_cost,
+                "duration_ms": shot_duration,
+                "video_candidates": [_trim_video_candidate(row) for row in video_candidates],
+                "selected_video_candidate_id": selected_video_candidate_id,
+                "candidate_selection": candidate_selection,
+            }
+        )
         total_cost_micro += shot_cost
 
     decisions: list[dict[str, Any]] = []
@@ -860,18 +893,30 @@ def summarize_trace(snapshot: dict[str, Any]) -> dict[str, Any]:
             "stage": str(row.get("stage") or ""),
             "mode": str(row.get("mode") or ""),
             "shot_id": str(row.get("shot_id") or ""),
-            "failure_kind": str((row.get("failure") or {}).get("kind") or "") if isinstance(row.get("failure"), dict) else "",
-            "failure_message": str((row.get("failure") or {}).get("message") or "") if isinstance(row.get("failure"), dict) else "",
+            "failure_kind": str((row.get("failure") or {}).get("kind") or "")
+            if isinstance(row.get("failure"), dict)
+            else "",
+            "failure_message": str((row.get("failure") or {}).get("message") or "")
+            if isinstance(row.get("failure"), dict)
+            else "",
             "quality_score": row.get("quality_score"),
             "retries_remaining": row.get("retries_remaining"),
             "reason": str(row.get("reason") or ""),
             "selected": _trim_candidate(selected) if selected else None,
             "candidates": [_trim_candidate(item) for item in row.get("candidates") or [] if isinstance(item, dict)],
-            "considered_rejected": [dict(item) for item in row.get("considered_rejected") or [] if isinstance(item, dict)],
+            "considered_rejected": [
+                dict(item) for item in row.get("considered_rejected") or [] if isinstance(item, dict)
+            ],
             "budget": {
-                "level": (row.get("budget_snapshot") or {}).get("level") if isinstance(row.get("budget_snapshot"), dict) else None,
-                "remaining_cost_micro": (row.get("budget_snapshot") or {}).get("remaining_cost_micro") if isinstance(row.get("budget_snapshot"), dict) else None,
-                "remaining_seconds": (row.get("budget_snapshot") or {}).get("remaining_seconds") if isinstance(row.get("budget_snapshot"), dict) else None,
+                "level": (row.get("budget_snapshot") or {}).get("level")
+                if isinstance(row.get("budget_snapshot"), dict)
+                else None,
+                "remaining_cost_micro": (row.get("budget_snapshot") or {}).get("remaining_cost_micro")
+                if isinstance(row.get("budget_snapshot"), dict)
+                else None,
+                "remaining_seconds": (row.get("budget_snapshot") or {}).get("remaining_seconds")
+                if isinstance(row.get("budget_snapshot"), dict)
+                else None,
             },
             "provider_profiles": [
                 {
@@ -893,12 +938,14 @@ def summarize_trace(snapshot: dict[str, Any]) -> dict[str, Any]:
             selected_shot_id = str(row.get("shot_id") or "")
             for patch in selected.get("prompt_patches") or []:
                 if isinstance(patch, dict):
-                    prompt_changes.append({
-                        "trace_id": str(row.get("trace_id") or ""),
-                        "stage": str(row.get("stage") or ""),
-                        "shot_id": str(patch.get("shot_id") or selected_shot_id),
-                        **{key: patch.get(key) for key in ("field", "op", "value", "target_stage", "reason")},
-                    })
+                    prompt_changes.append(
+                        {
+                            "trace_id": str(row.get("trace_id") or ""),
+                            "stage": str(row.get("stage") or ""),
+                            "shot_id": str(patch.get("shot_id") or selected_shot_id),
+                            **{key: patch.get(key) for key in ("field", "op", "value", "target_stage", "reason")},
+                        }
+                    )
 
     recoveries = [item for item in events if str(item.get("event") or "").startswith("recovery")]
     degradations: list[dict[str, Any]] = [
@@ -913,12 +960,15 @@ def summarize_trace(snapshot: dict[str, Any]) -> dict[str, Any]:
         or str(item.get("strategy") or "") in {"degraded_publish", "lower_resolution"}
     ]
     if str(data.get("status") or "") in {"degraded", "failed"} and str(data.get("status_reason") or ""):
-        degradations.insert(0, {
-            "at": str(data.get("updated_at") or ""),
-            "stage": current_stage,
-            "reason": f"运行{ '降级' if data.get('status') == 'degraded' else '终止' }: {data.get('status_reason')}",
-            "shot_ids": [],
-        })
+        degradations.insert(
+            0,
+            {
+                "at": str(data.get("updated_at") or ""),
+                "stage": current_stage,
+                "reason": f"运行{'降级' if data.get('status') == 'degraded' else '终止'}: {data.get('status_reason')}",
+                "shot_ids": [],
+            },
+        )
 
     checkpoint_records = sum(
         1

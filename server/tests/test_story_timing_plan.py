@@ -10,14 +10,13 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from services.story_timing import (  # noqa: E402
     ProviderDurationCapability,
     StoryTimingError,
     StoryTimingPlan,
     estimate_speech_ms,
 )
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class StoryTimingPlanTests(unittest.TestCase):
@@ -30,7 +29,13 @@ class StoryTimingPlanTests(unittest.TestCase):
             duration_step=5,
         )
         shots = [
-            {"shot_id": f"shot_{index}", "scene_number": index, "duration": 1.0, "character_action": "缓慢看向门口", "dialogue": []}
+            {
+                "shot_id": f"shot_{index}",
+                "scene_number": index,
+                "duration": 1.0,
+                "character_action": "缓慢看向门口",
+                "dialogue": [],
+            }
             for index in range(8)
         ]
 
@@ -143,7 +148,9 @@ class StoryTimingPlanTests(unittest.TestCase):
             max_duration=3,
             duration_step=1,
         )
-        dialogue = [{"speaker": "主角", "line": "这是一段无论如何都无法在三秒内完整说出的长对白，必须被明确提示而不是裁掉。"}]
+        dialogue = [
+            {"speaker": "主角", "line": "这是一段无论如何都无法在三秒内完整说出的长对白，必须被明确提示而不是裁掉。"}
+        ]
         shot = {
             "shot_id": "speech_001",
             "scene_number": 1,

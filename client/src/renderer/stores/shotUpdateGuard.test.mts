@@ -75,7 +75,14 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
 
 // 当前也没有素材时维持空串（首次生成前的空更新）。
 {
-  const current = makeShot({ version: 1, image_path: '', storyboard_path: '', video_path: '', audio_path: '', last_frame_path: '' })
+  const current = makeShot({
+    version: 1,
+    image_path: '',
+    storyboard_path: '',
+    video_path: '',
+    audio_path: '',
+    last_frame_path: '',
+  })
   const patch = mergeShotServerUpdate(current, { shot_id: 'shot-1', version: 2, image_path: '', storyboard_path: '' })
   assert.equal(patch!.image_path, '')
 }
@@ -133,8 +140,13 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     consistency_status: 'degraded',
     quality_review: {
       storyboard: {
-        verdict: 'passed', passed: true, overall_score: 0.91, attempt: 1,
-        degraded: false, issues_count: 0, unsupported: [],
+        verdict: 'passed',
+        passed: true,
+        overall_score: 0.91,
+        attempt: 1,
+        degraded: false,
+        issues_count: 0,
+        unsupported: [],
       },
       video: null,
     },
@@ -152,13 +164,16 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
 }
 
 // 媒体字段清单完整性：守卫覆盖全部会被清空的路径字段。
-assert.deepEqual([...SHOT_MEDIA_PATH_FIELDS], [
-  'image_path',
-  'storyboard_path',
-  'video_path',
-  'audio_path',
-  'last_frame_path',
-  'continuity_reference_path',
-  'pose_reference_path',
-  'depth_reference_path',
-])
+assert.deepEqual(
+  [...SHOT_MEDIA_PATH_FIELDS],
+  [
+    'image_path',
+    'storyboard_path',
+    'video_path',
+    'audio_path',
+    'last_frame_path',
+    'continuity_reference_path',
+    'pose_reference_path',
+    'depth_reference_path',
+  ],
+)

@@ -1,0 +1,92 @@
+import type { Shot } from '../stores/shotStore.ts'
+import type { JobCostDto } from '../services/costTypes.ts'
+import type { JobDto } from '../services/jobTypes.ts'
+
+/** 完整字段的镜头测试夹具；用 overrides 覆盖关注字段。 */
+export function makeShot(overrides: Partial<Shot> = {}): Shot {
+  return {
+    id: 'shot-1',
+    project_id: 'proj-1',
+    sequence: 1,
+    shot_type: 'normal',
+    scene_description: '城市夜景，霓虹灯闪烁',
+    character_action: '主角走在街上',
+    dialogue: '今晚的月色真美',
+    camera_angle: 'wide',
+    camera_movement: 'static',
+    duration: 4.5,
+    emotion: 'calm',
+    transition: 'cut',
+    visual_notes: '',
+    image_path: '/output/images/shot-1.png',
+    storyboard_path: '/output/storyboards/shot-1.png',
+    video_path: '/output/videos/shot-1.mp4',
+    audio_path: '/output/audio/shot-1.mp3',
+    status: 'done',
+    storyboard_status: 'approved',
+    version: 3,
+    confirmed: true,
+    characters_in_scene: [],
+    scene_asset_id: '',
+    character_asset_ids: [],
+    ...overrides,
+  }
+}
+
+/** 后台任务测试夹具。 */
+export function makeJob(overrides: Partial<JobDto> = {}): JobDto {
+  const cost: JobCostDto = {
+    currency: 'CNY',
+    cost_micro: 1250000,
+    cost_known: true,
+    call_count: 3,
+    unknown_call_count: 0,
+    failed_call_count: 0,
+    provider_seconds: 12.5,
+    by_capability: [],
+    estimated_cost_micro: null,
+    estimated_cost_known: false,
+    estimated_seconds: null,
+    duration_source: '',
+    has_usage: true,
+  }
+  return {
+    id: 'job-1',
+    scope: 'project',
+    project_id: 'proj-1',
+    job_type: 'generate_storyboard' as never,
+    job_type_label: '生成分镜',
+    display_name: '生成分镜 · 未命名项目',
+    status: 'running' as never,
+    status_label: '运行中',
+    progress: 42,
+    current_step: 'generate_storyboard',
+    message: '正在生成分镜',
+    error_code: '',
+    error_code_label: '',
+    error_message: '',
+    error_detail: null,
+    report: null,
+    attempt: 1,
+    retry_of: null,
+    version: 1,
+    created_at: '2025-01-01T00:00:00',
+    started_at: '2025-01-01T00:00:01',
+    updated_at: '2025-01-01T00:00:30',
+    finished_at: null,
+    cancel_requested_at: null,
+    duration_seconds: 29,
+    cost,
+    eta_seconds: 120,
+    is_active: true,
+    is_terminal: false,
+    has_active_successor: false,
+    can_cancel: true,
+    can_retry: false,
+    can_resume: false,
+    can_delete: true,
+    retry_blocked_reason: '',
+    resume_blocked_reason: '',
+    ...overrides,
+  }
+}

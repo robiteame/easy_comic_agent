@@ -31,6 +31,7 @@ class CapabilityDowngradeRequiredError(RuntimeError):
         super().__init__(message)
         self.report = report or {}
 
+
 FEATURE_ORDER = (
     "multiple_reference_images",
     "reference_weights",
@@ -211,7 +212,9 @@ def capability_report(
             SUPPORTED if scene_param else PARTIAL if multiple else UNSUPPORTED,
             parameter=scene_param or role_parameter or None,
         ),
-        "first_frame": feature(SUPPORTED if first_frame else UNSUPPORTED, parameter="reference_image" if first_frame else None),
+        "first_frame": feature(
+            SUPPORTED if first_frame else UNSUPPORTED, parameter="reference_image" if first_frame else None
+        ),
         "last_frame": feature(SUPPORTED if last_frame else UNSUPPORTED, parameter="last_frame" if last_frame else None),
         "first_last_frame_interpolation": feature(SUPPORTED if interpolation else UNSUPPORTED),
         "pose_control": feature(SUPPORTED if _value(caps, "openpose", False) else UNSUPPORTED),
@@ -220,7 +223,9 @@ def capability_report(
         "ip_adapter": feature(SUPPORTED if _value(caps, "ip_adapter", False) else UNSUPPORTED),
         "native_audio": feature(SUPPORTED if _value(caps, "native_audio", False) and ready else UNSUPPORTED),
         "voice_consistent": feature(SUPPORTED if _value(caps, "voice_consistent", False) and ready else UNSUPPORTED),
-        "dialogue_in_prompt": feature(SUPPORTED if _value(caps, "dialogue_in_prompt", False) and ready else UNSUPPORTED),
+        "dialogue_in_prompt": feature(
+            SUPPORTED if _value(caps, "dialogue_in_prompt", False) and ready else UNSUPPORTED
+        ),
     }
 
     return {

@@ -24,14 +24,13 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from fastapi import HTTPException  # noqa: E402
 
+from agent.nodes import script_parser, storyboard_gen  # noqa: E402
+from agent.output_schemas import parse_script_output, parse_storyboard_output  # noqa: E402
 from api.routes import script as script_route  # noqa: E402
 from api.routes import settings as settings_route  # noqa: E402
 from api.routes.settings import SkillTemplateSave  # noqa: E402
-from agent.nodes import script_parser, storyboard_gen  # noqa: E402
-from agent.output_schemas import parse_script_output, parse_storyboard_output  # noqa: E402
-from fastapi import HTTPException  # noqa: E402
 from services.prompts import (  # noqa: E402
     MAX_SYSTEM_PROMPT_LENGTH,
     SCRIPT_GENERATION_SYSTEM_PROMPT,
@@ -50,12 +49,15 @@ from services.skill_config_service import (  # noqa: E402
     resolve_skill_config,
     save_skill_template,
 )
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 # 历史硬编码的原文（逐字节），用于断言默认行为不变。
 LEGACY_SCRIPT_GENERATION_PROMPT = (
     "你是漫剧编剧。请输出完整中文漫剧剧本，包含标题、人物、场景、动作、对白和情绪，不要输出解释。"
 )
-LEGACY_SCRIPT_PARSE_PROMPT = "你是资深漫剧编导。请把用户输入解析成角色、场景、对白和情绪，输出严格 JSON，不要输出 Markdown。"
+LEGACY_SCRIPT_PARSE_PROMPT = (
+    "你是资深漫剧编导。请把用户输入解析成角色、场景、对白和情绪，输出严格 JSON，不要输出 Markdown。"
+)
 LEGACY_STORYBOARD_PROMPT = (
     "你是专业漫剧分镜师。根据剧本场景输出可执行分镜 JSON，不要输出 Markdown。"
     "每个镜头的对白是结构化数组，每句台词都必须写明说话人 speaker。"
@@ -307,7 +309,9 @@ class CustomPromptTests(unittest.TestCase):
             ],
         }
         stub = _RecordingLLM([segment_payload] * 3)
-        _run_parser(stub, {"user_input": long_script, "skill_config": _skill_config(script_prompt=CUSTOM_SCRIPT_PROMPT)})
+        _run_parser(
+            stub, {"user_input": long_script, "skill_config": _skill_config(script_prompt=CUSTOM_SCRIPT_PROMPT)}
+        )
         self.assertEqual(len(stub.calls), 3, "长剧本按场次分段解析")
         for call in stub.calls:
             self.assertEqual(call["system"], stub.calls[0]["system"], "整段与分段必须使用同一个已解析 Prompt")
@@ -320,7 +324,9 @@ class CustomPromptTests(unittest.TestCase):
         parsed = _run_parser(stub, {"skill_config": _skill_config(script_prompt="输出所有字段为英文也必须遵守结构。")})
         reparsed = parse_script_output(
             {
-                "characters": [{"name": item["name"], "appearance": item["appearance"]} for item in parsed["characters"]],
+                "characters": [
+                    {"name": item["name"], "appearance": item["appearance"]} for item in parsed["characters"]
+                ],
                 "script_scenes": parsed["script_scenes"],
             },
             fallback_style="anime",

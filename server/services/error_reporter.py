@@ -17,7 +17,8 @@ import logging
 import re
 import secrets
 import traceback
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -169,8 +170,7 @@ class SecretRedactingFilter(logging.Filter):
             record.args = tuple(redact_secrets(item) if isinstance(item, str) else item for item in record.args)
         elif isinstance(record.args, dict):
             record.args = {
-                key: redact_secrets(value) if isinstance(value, str) else value
-                for key, value in record.args.items()
+                key: redact_secrets(value) if isinstance(value, str) else value for key, value in record.args.items()
             }
         return True
 

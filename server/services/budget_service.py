@@ -44,13 +44,13 @@ from services.job_types import (
 )
 from services.providers.endpoint import get_endpoint
 from services.providers.usage import (
+    CAPABILITY_BASE_UNITS,
     CAPABILITY_FFMPEG,
     CAPABILITY_IMAGE,
-    CAPABILITY_LLM,
     CAPABILITY_LABELS,
+    CAPABILITY_LLM,
     CAPABILITY_TTS,
     CAPABILITY_VIDEO,
-    CAPABILITY_BASE_UNITS,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,8 +99,6 @@ def _dialogue_chars(shot) -> int:
 
 
 @dataclass(frozen=True)
-
-
 class WorkloadComponent:
     """任务在某一能力上的预计工作量。"""
 
@@ -224,9 +222,7 @@ def save_budget(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("软时长预算不能高于硬时长预算")
 
     row = (
-        db.query(BudgetConfig)
-        .filter(BudgetConfig.scope_type == scope_type, BudgetConfig.scope_id == scope_id)
-        .first()
+        db.query(BudgetConfig).filter(BudgetConfig.scope_type == scope_type, BudgetConfig.scope_id == scope_id).first()
     )
     if row is None:
         row = BudgetConfig(id=uuid.uuid4().hex, scope_type=scope_type, scope_id=scope_id)
@@ -613,10 +609,7 @@ def project_elapsed_seconds(db: Session, *, project_id: str = "", series_id: str
     if project_id:
         query = query.filter(BackgroundJob.project_id == project_id)
     elif series_id:
-        episode_ids = [
-            str(row[0])
-            for row in db.query(Project.id).filter(Project.parent_project_id == series_id).all()
-        ]
+        episode_ids = [str(row[0]) for row in db.query(Project.id).filter(Project.parent_project_id == series_id).all()]
         query = query.filter(BackgroundJob.project_id.in_([series_id, *episode_ids]))
     else:
         return 0
@@ -639,9 +632,7 @@ def _active_reservations(db: Session, *, project_id: str = "", series_id: str = 
     if project_id:
         query = query.filter(BudgetReservation.project_id == project_id)
     elif series_id:
-        episode_ids = [
-            str(row[0]) for row in db.query(Project.id).filter(Project.parent_project_id == series_id).all()
-        ]
+        episode_ids = [str(row[0]) for row in db.query(Project.id).filter(Project.parent_project_id == series_id).all()]
         query = query.filter(BudgetReservation.project_id.in_([series_id, *episode_ids]))
     return query.all()
 
@@ -1085,11 +1076,15 @@ def project_summary(db: Session, *, project_id: str = "", series_id: str = "") -
     resolved_series = series_id or _series_id_of(db, project_id)
     is_episode = bool(project_id) and resolved_series != project_id
 
-    used = usage_service.summarize(db, project_id=project_id) if project_id else usage_service.summarize(
-        db, series_id=resolved_series
+    used = (
+        usage_service.summarize(db, project_id=project_id)
+        if project_id
+        else usage_service.summarize(db, series_id=resolved_series)
     )
-    elapsed_seconds = project_elapsed_seconds(db, project_id=project_id) if project_id else project_elapsed_seconds(
-        db, series_id=resolved_series
+    elapsed_seconds = (
+        project_elapsed_seconds(db, project_id=project_id)
+        if project_id
+        else project_elapsed_seconds(db, series_id=resolved_series)
     )
     reservations = (
         _active_reservations(db, project_id=project_id)

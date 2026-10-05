@@ -583,11 +583,7 @@ export function errorSummary(job: JobDto): string {
   return label ? label + '：' + job.error_message : job.error_message
 }
 
-export function queryFromFilters(
-  filters: JobFilters,
-  page = 1,
-  pageSize = 50,
-): JobQueryParams {
+export function queryFromFilters(filters: JobFilters, page = 1, pageSize = 50): JobQueryParams {
   const params: JobQueryParams = { page, page_size: pageSize }
   if (filters.projectId) params.project_id = filters.projectId
   if (filters.statuses.length > 0) params.status = filters.statuses.slice()
@@ -608,7 +604,7 @@ export function nextReconnectDelay(
   maxMs: number = RECONNECT_MAX_MS,
 ): number {
   const safeAttempt = Math.max(0, Math.floor(attempt))
-  return Math.min(maxMs, baseMs * Math.pow(2, safeAttempt))
+  return Math.min(maxMs, baseMs * 2 ** safeAttempt)
 }
 
 export function connectionLabel(state: string): string {

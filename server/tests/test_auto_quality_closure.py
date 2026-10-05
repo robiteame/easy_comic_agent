@@ -25,8 +25,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from PIL import Image  # noqa: E402
 
 from agent import graph  # noqa: E402
@@ -37,7 +35,8 @@ from db import SessionLocal, init_db  # noqa: E402
 from models import Character, Project, QualityReview, SceneAsset, Shot  # noqa: E402
 from services import structural_validation as sv  # noqa: E402
 from services.quality_review_providers import VLMCapability  # noqa: E402
-from services.quality_review_service import STAGE_STORYBOARD, STAGE_VIDEO, quality_review_service  # noqa: E402
+from services.quality_review_service import STAGE_STORYBOARD, quality_review_service  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 MEDIA_ROOT = TEST_ROOT / "auto-quality-closure"
@@ -55,7 +54,9 @@ def _ffmpeg(*args: str) -> None:
     subprocess.run(["ffmpeg", "-y", "-v", "error", *args], check=True, capture_output=True)
 
 
-def _make_video(name: str, *, source: str = "testsrc2", duration: int = 3, color: str = "", audio: bool = False) -> Path:
+def _make_video(
+    name: str, *, source: str = "testsrc2", duration: int = 3, color: str = "", audio: bool = False
+) -> Path:
     """生成测试视频。
 
     纯色视频会被 x264 压到 MIN_VIDEO_BYTES 以下，先触发「文件过小」而不是帧内容
@@ -64,7 +65,11 @@ def _make_video(name: str, *, source: str = "testsrc2", duration: int = 3, color
 
     path = MEDIA_ROOT / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    spec = f"color={color}:size=540x960:rate=15:duration={duration}" if color else f"{source}=size=540x960:rate=15:duration={duration}"
+    spec = (
+        f"color={color}:size=540x960:rate=15:duration={duration}"
+        if color
+        else f"{source}=size=540x960:rate=15:duration={duration}"
+    )
     cmd = ["-f", "lavfi", "-i", spec]
     if audio:
         cmd += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}", "-shortest", "-c:a", "aac"]
@@ -166,7 +171,9 @@ class StructuralValidationCategoryTests(unittest.TestCase):
         report = self._report(tiny)
         technical = report["categories"]["technical_quality"]
         self.assertIn("video_output_too_small", {item["code"] for item in technical["issues"]})
-        self.assertIn("video_file_too_small", {item["code"] for item in report["categories"]["structural_validity"]["issues"]})
+        self.assertIn(
+            "video_file_too_small", {item["code"] for item in report["categories"]["structural_validity"]["issues"]}
+        )
 
     def test_audio_track_checked_only_when_expected(self) -> None:
         silent = _make_video("silent.mp4", audio=False)
@@ -261,38 +268,42 @@ class FinalReportClosureTests(unittest.TestCase):
             "degraded_published": True,
             "degraded_reason": "视觉质量未评估",
             "visual_quality_pending": True,
-            "critiques": [{
-                "stage": StageName.VIDEO_REVIEW.value,
-                "passed": True,
-                "score": 1.0,
-                "metrics": [{"name": "visual_quality_pending", "passed": None, "detail": "未接入视觉模型"}],
-                "issues": [
-                    {
-                        "code": "visual_pending:motion_stability",
-                        "severity": "info",
-                        "message": "镜头 s3 运动稳定度待审",
-                        "shot_id": "s3",
-                        "details": {"dimension": "motion_stability", "stage": StageName.VIDEO_GENERATION.value},
-                    },
-                    {
-                        "code": "visual_quality_pending",
-                        "severity": "info",
-                        "message": "视觉质量待审",
-                        "details": {
-                            "stage": StageName.VIDEO_REVIEW.value,
-                            "shot_ids": ["s3"],
-                            "dimensions": list(VISUAL_KEYS),
+            "critiques": [
+                {
+                    "stage": StageName.VIDEO_REVIEW.value,
+                    "passed": True,
+                    "score": 1.0,
+                    "metrics": [{"name": "visual_quality_pending", "passed": None, "detail": "未接入视觉模型"}],
+                    "issues": [
+                        {
+                            "code": "visual_pending:motion_stability",
+                            "severity": "info",
+                            "message": "镜头 s3 运动稳定度待审",
+                            "shot_id": "s3",
+                            "details": {"dimension": "motion_stability", "stage": StageName.VIDEO_GENERATION.value},
                         },
-                    },
-                ],
-            }],
-            "shot_artifacts": [{
-                "shot_id": "s3",
-                "stage": StageName.VIDEO_GENERATION.value,
-                "status": "succeeded",
-                "path": "/tmp/s3.mp4",
-                "structural_passed": True,
-            }],
+                        {
+                            "code": "visual_quality_pending",
+                            "severity": "info",
+                            "message": "视觉质量待审",
+                            "details": {
+                                "stage": StageName.VIDEO_REVIEW.value,
+                                "shot_ids": ["s3"],
+                                "dimensions": list(VISUAL_KEYS),
+                            },
+                        },
+                    ],
+                }
+            ],
+            "shot_artifacts": [
+                {
+                    "shot_id": "s3",
+                    "stage": StageName.VIDEO_GENERATION.value,
+                    "status": "succeeded",
+                    "path": "/tmp/s3.mp4",
+                    "structural_passed": True,
+                }
+            ],
         }
         report = critique_final(state)
         final = next(item["report"] for item in report.evidence if item["kind"] == "final_report")
@@ -312,32 +323,38 @@ class FinalReportClosureTests(unittest.TestCase):
             "project_id": "final-report-trace",
             "run_id": "auto",
             "quality_threshold": 0.72,
-            "decision_traces": [{
-                "trace_id": "t1",
-                "stage": StageName.VIDEO_GENERATION.value,
-                "reason": "视频黑帧",
-                "selected": {
+            "decision_traces": [
+                {
+                    "trace_id": "t1",
+                    "stage": StageName.VIDEO_GENERATION.value,
+                    "reason": "视频黑帧",
+                    "selected": {
+                        "strategy": "change_seed",
+                        "target_stage": StageName.VIDEO_GENERATION.value,
+                        "shot_ids": ["s1"],
+                        "seed": 4321,
+                    },
+                    "failure": {"kind": "video_failed", "message": "黑帧", "shot_id": "s1"},
+                    "critique": {"score": 0.2, "affected_shot_ids": ["s1"]},
+                }
+            ],
+            "recovery_history": [
+                {
+                    "stage": StageName.VIDEO_GENERATION.value,
                     "strategy": "change_seed",
-                    "target_stage": StageName.VIDEO_GENERATION.value,
+                    "trace_id": "t1",
                     "shot_ids": ["s1"],
-                    "seed": 4321,
-                },
-                "failure": {"kind": "video_failed", "message": "黑帧", "shot_id": "s1"},
-                "critique": {"score": 0.2, "affected_shot_ids": ["s1"]},
-            }],
-            "recovery_history": [{
-                "stage": StageName.VIDEO_GENERATION.value,
-                "strategy": "change_seed",
-                "trace_id": "t1",
-                "shot_ids": ["s1"],
-            }],
-            "shot_artifacts": [{
-                "shot_id": "s1",
-                "stage": StageName.VIDEO_GENERATION.value,
-                "status": "succeeded",
-                "path": "/tmp/s1.mp4",
-                "structural_passed": True,
-            }],
+                }
+            ],
+            "shot_artifacts": [
+                {
+                    "shot_id": "s1",
+                    "stage": StageName.VIDEO_GENERATION.value,
+                    "status": "succeeded",
+                    "path": "/tmp/s1.mp4",
+                    "structural_passed": True,
+                }
+            ],
         }
         final = build_final_report(state)
         self.assertTrue(final["automatic_repairs"])
@@ -521,9 +538,7 @@ class AutoClosureGraphTests(unittest.TestCase):
         for state in ({"mode": "auto"}, {"mode": "auto", "human_gate_policy": "manual"}):
             self.assertFalse(graph._human_allowed(state))
             self.assertFalse(graph._legacy_human_allowed(state))
-        update = graph._visual_pending_update(
-            {"mode": "auto"}, stage=StageName.QUALITY_REVIEW, reason="unsupported"
-        )
+        update = graph._visual_pending_update({"mode": "auto"}, stage=StageName.QUALITY_REVIEW, reason="unsupported")
         self.assertFalse(update.get("needs_human_review", False))
 
 
@@ -641,7 +656,7 @@ class AutoLoopClosesWithoutVisionModelTests(unittest.TestCase):
 
         self.project_ids.append(project_id)
         self.db.add(Project(id=project_id, title=project_id))
-        for index, (storyboard, video) in enumerate(zip(storyboards, videos), start=1):
+        for index, (storyboard, video) in enumerate(zip(storyboards, videos, strict=False), start=1):
             self.db.add(
                 Shot(
                     id=f"shot-{index}",
@@ -679,7 +694,9 @@ class AutoLoopClosesWithoutVisionModelTests(unittest.TestCase):
 
         async def image_worker(shot_id: str, version: int, **kwargs) -> dict:
             return {
-                "shot_id": shot_id, "shot_version": version, "status": "succeeded",
+                "shot_id": shot_id,
+                "shot_version": version,
+                "status": "succeeded",
                 "path": images[0] if shot_id == "shot-1" else images[1],
                 "provider": "mock-image",
             }
@@ -687,8 +704,13 @@ class AutoLoopClosesWithoutVisionModelTests(unittest.TestCase):
         async def video_worker(shot_id: str, version: int, **kwargs) -> dict:
             path = str(videos[0] if shot_id == "shot-1" else videos[1])
             return {
-                "shot_id": shot_id, "shot_version": version, "status": "succeeded",
-                "path": path, "video_path": path, "provider": "mock-video", "model": "mock-video-v1",
+                "shot_id": shot_id,
+                "shot_version": version,
+                "status": "succeeded",
+                "path": path,
+                "video_path": path,
+                "provider": "mock-video",
+                "model": "mock-video-v1",
             }
 
         initial = _base_state(project_id, run_id="auto", output_format="9:16", resolution="720p")
@@ -702,11 +724,17 @@ class AutoLoopClosesWithoutVisionModelTests(unittest.TestCase):
             patch.object(graph, "refresh_project_reference_state_for_graph", return_value={"blocking": False}),
             patch.object(graph, "_reference_gate", return_value={}),
             patch.object(graph, "_reference_gate_for_state", return_value={}),
-            patch.object(graph, "provider_profiles", lambda *a, **k: [types.SimpleNamespace(supports_reference_images=True, available=True)]),
+            patch.object(
+                graph,
+                "provider_profiles",
+                lambda *a, **k: [types.SimpleNamespace(supports_reference_images=True, available=True)],
+            ),
             patch.object(graph, "generate_storyboard_shot", side_effect=image_worker),
             patch.object(graph, "generate_video_shot", side_effect=video_worker),
             patch.object(render_route, "_render_task", new=AsyncMock()),
-            patch.object(render_route, "_render_status", {project_id: {"status": "completed", "video_path": str(videos[0])}}),
+            patch.object(
+                render_route, "_render_status", {project_id: {"status": "completed", "video_path": str(videos[0])}}
+            ),
             # 关键：不 patch 质量门禁与 _review_shot_videos，只让能力如实报告 unsupported。
             patch.object(quality_review_service, "_vlm", _unsupported_vlm()),
             patch.object(quality_review_service, "_identity", None),

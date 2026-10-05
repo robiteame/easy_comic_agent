@@ -27,7 +27,6 @@ from services.ffmpeg_service import FFmpegService
 from services.image_service import ImageService
 from services.video_service import SeedanceVideoService
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TMP_ROOT = PROJECT_ROOT / "tmp_sop_payload_smoke"
 
@@ -58,8 +57,8 @@ def _stale_shot(**overrides):
         "continuity_reference_path": "prev.png",
         "pose_reference_path": "pose.png",
         "depth_reference_path": "depth.png",
-        "continuity_profile": "{\"previous_reference_path\":\"prev.png\"}",
-        "reference_weights": "{\"environment\":0.45}",
+        "continuity_profile": '{"previous_reference_path":"prev.png"}',
+        "reference_weights": '{"environment":0.45}',
         "consistency_context": "old context",
     }
     data.update(overrides)
@@ -117,8 +116,17 @@ def main() -> None:
         char_ref_b = _png(TMP_ROOT / "char_ref_b.png", "charB", (80, 90, 190))
 
         consistency = ConsistencyService()
-        scene = consistency.enrich_scene({"location": "classroom", "time_of_day": "morning", "actions": "morning desk"}, 0)
-        scene.update({"id": "scene1", "name": "classroom-morning", "baseline_image_path": str(scene_ref), "reference_images": [str(scene_ref)]})
+        scene = consistency.enrich_scene(
+            {"location": "classroom", "time_of_day": "morning", "actions": "morning desk"}, 0
+        )
+        scene.update(
+            {
+                "id": "scene1",
+                "name": "classroom-morning",
+                "baseline_image_path": str(scene_ref),
+                "reference_images": [str(scene_ref)],
+            }
+        )
         character = consistency.enrich_character(
             {"name": "Xia", "appearance": {"default_outfit": "uniform"}, "reference_images": [str(char_ref)]},
             0,
@@ -168,7 +176,9 @@ def main() -> None:
         assert "locked character blocking" in image_prompt
         assert "left-to-right order Xia, Bo" in image_prompt
         image_refs = image_service._reference_images_for_request(shot)
-        seedream_payload = image_service._seedream_payload("doubao-seedream-5-0-lite", "prompt", "negative", 42, "2K", image_refs)
+        seedream_payload = image_service._seedream_payload(
+            "doubao-seedream-5-0-lite", "prompt", "negative", 42, "2K", image_refs
+        )
         assert image_refs and all(item.startswith("data:image/") for item in image_refs), len(image_refs)
         assert seedream_payload.get("image") == image_refs[:8]
 
@@ -187,12 +197,20 @@ def main() -> None:
         assert video_service._reference_payload_mode(video_content) == "first_frame_reference"
         assert all("asset_type" not in item and "weight" not in item for item in image_content)
         loaded_types = {item["type"] for item in reference_manifest}
-        assert {"approved_storyboard_first_frame", "scene_baseline", "character_three_view", "continuity_frame"}.issubset(loaded_types)
+        assert {
+            "approved_storyboard_first_frame",
+            "scene_baseline",
+            "character_three_view",
+            "continuity_frame",
+        }.issubset(loaded_types)
 
         post_shots = [
             {"scene_group_id": "classroom-morning", "continuity_profile": shot["continuity_profile"]},
             {"scene_group_id": "classroom-morning", "continuity_profile": shot["continuity_profile"]},
-            {"scene_group_id": "street-night", "continuity_profile": {**shot["continuity_profile"], "lut": "project_scene_lut_02_night"}},
+            {
+                "scene_group_id": "street-night",
+                "continuity_profile": {**shot["continuity_profile"], "lut": "project_scene_lut_02_night"},
+            },
         ]
         _apply_post_profiles(post_shots)
         assert post_shots[0]["post_profile"]["transition_out"] == "hard cut or 0.2s fade only"
@@ -221,8 +239,8 @@ def main() -> None:
         assert stale.last_frame_path == "last.png"
         assert stale.pose_reference_path == "pose.png"
         assert stale.depth_reference_path == "depth.png"
-        assert stale.continuity_profile == "{\"previous_reference_path\":\"prev.png\"}"
-        assert stale.reference_weights == "{\"environment\":0.45}"
+        assert stale.continuity_profile == '{"previous_reference_path":"prev.png"}'
+        assert stale.reference_weights == '{"environment":0.45}'
         assert stale.consistency_context == "old context"
 
         valid_video = TMP_ROOT / "video.mp4"
@@ -260,7 +278,9 @@ def main() -> None:
         _invalidate_storyboard_outputs(base_regen)
         later_same_group = _stale_shot(sequence=2, scene_group_id="classroom-morning", scene_asset_id="scene1")
         later_same_group.version = 5
-        _invalidate_downstream_media(_FakeDB([later_same_group]), base_regen, {base_previous_key, base_regen.scene_asset_id})
+        _invalidate_downstream_media(
+            _FakeDB([later_same_group]), base_regen, {base_previous_key, base_regen.scene_asset_id}
+        )
         assert later_same_group.video_path == "video.mp4"
         assert later_same_group.media_stale is True
         assert later_same_group.version == 6
@@ -275,7 +295,10 @@ def main() -> None:
         )
         current_same_group = _stale_shot(sequence=2, scene_group_id="classroom-morning", scene_asset_id="scene_asset_b")
         assert _previous_reference_for_shot(_FakeDB([previous_same_group]), current_same_group) == "previous_story.png"
-        assert _previous_reference_for_shot(_FakeDB([previous_same_group]), current_same_group, prefer_last_frame=True) == "previous_last.png"
+        assert (
+            _previous_reference_for_shot(_FakeDB([previous_same_group]), current_same_group, prefer_last_frame=True)
+            == "previous_last.png"
+        )
         current_other_group = _stale_shot(sequence=2, scene_group_id="street-night", scene_asset_id="scene_asset_b")
         assert _previous_reference_for_shot(_FakeDB([previous_same_group]), current_other_group) == ""
 

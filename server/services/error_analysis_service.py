@@ -23,8 +23,8 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from db import SessionLocal
 from config import settings
+from db import SessionLocal
 from models import BackgroundJob
 from services.error_reporter import redact
 from services.job_dto import job_dto
@@ -34,13 +34,13 @@ from services.job_types import (
     ERROR_CODE_BUDGET_SOFT_EXCEEDED,
     ERROR_CODE_CONFIG,
     ERROR_CODE_DEPENDENCY_FAILED,
+    ERROR_CODE_INVALID_REQUEST,
     ERROR_CODE_JOB_CANCELLED,
     ERROR_CODE_JOB_FAILED,
     ERROR_CODE_JOB_INTERRUPTED,
     ERROR_CODE_PROVIDER,
     ERROR_CODE_QUOTA_EXCEEDED,
     ERROR_CODE_RATE_LIMITED,
-    ERROR_CODE_INVALID_REQUEST,
     ERROR_CODE_SERVER_RESTART,
     ERROR_CODE_STORAGE,
     ERROR_CODE_TIMEOUT,
@@ -141,7 +141,7 @@ async def analyze_job_failure(job_id: str) -> None:
     _in_flight.add(job_id)
     try:
         await asyncio.wait_for(_analyze(job_id), timeout=_ANALYSIS_TIMEOUT_SECONDS)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("失败原因分析超时: job_id=%s", job_id)
     except Exception:  # noqa: BLE001 - 分析失败绝不影响任务状态
         logger.warning("失败原因分析失败: job_id=%s", job_id, exc_info=True)
@@ -280,7 +280,7 @@ def _validate_llm_result(raw: Any) -> dict[str, Any] | None:
 
 
 def _fingerprint(rule_code: str, error_text: str) -> str:
-    return hashlib.sha1(f"{rule_code}|{error_text[:_ERROR_INPUT_CHARS]}".encode("utf-8")).hexdigest()
+    return hashlib.sha1(f"{rule_code}|{error_text[:_ERROR_INPUT_CHARS]}".encode()).hexdigest()
 
 
 def _remember(key: str, value: dict[str, Any]) -> None:

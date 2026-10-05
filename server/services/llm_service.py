@@ -12,6 +12,8 @@ import re
 import time
 
 from config import settings
+from services import usage_service
+from services.job_debug import record_api_request, record_api_result
 from services.providers.base import BaseAdapter
 from services.providers.endpoint import EndpointConfig, endpoint_identity, get_endpoint
 from services.providers.registry import get_adapter
@@ -21,8 +23,6 @@ from services.providers.usage import (
     adapter_usage_for_request,
     adapter_usage_from_response,
 )
-from services import usage_service
-from services.job_debug import record_api_request, record_api_result
 
 
 class LLMOutputTruncatedError(RuntimeError):
@@ -62,10 +62,7 @@ class LLMOutputTruncatedError(RuntimeError):
             f"，输入 {prompt_tokens if prompt_tokens is not None else '未知'} tokens"
             f"，provider={self.provider or 'unknown'}，model={self.model or 'unknown'}"
         )
-        super().__init__(
-            f"{head}（{self.diagnostics}）；请增加输出额度或按场次分段解析，"
-            "不要用相同配置重试"
-        )
+        super().__init__(f"{head}（{self.diagnostics}）；请增加输出额度或按场次分段解析，不要用相同配置重试")
 
     def detail(self) -> dict:
         return {
@@ -115,9 +112,7 @@ class LLMService:
         """把一次成功调用的 token 用量入账（供应商未回报 usage 时记为「成本未知」）。"""
 
         duration_ms = int((time.monotonic() - started) * 1000)
-        metadata = adapter_usage_from_response(
-            adapter, CAPABILITY_LLM, response, model=model, duration_ms=duration_ms
-        )
+        metadata = adapter_usage_from_response(adapter, CAPABILITY_LLM, response, model=model, duration_ms=duration_ms)
         usage_service.record_metadata(
             metadata,
             duration_ms=duration_ms,
@@ -348,7 +343,9 @@ class LLMService:
         )
         return response
 
-    async def _completion_with_fallback(self, create_completion, allow_fallback: bool = True, prefer_fallback: bool = False):
+    async def _completion_with_fallback(
+        self, create_completion, allow_fallback: bool = True, prefer_fallback: bool = False
+    ):
         self._sync_config()
         primary_adapter = self._adapter_for(self._endpoint)
         fallback = self._fallback_endpoint
@@ -510,9 +507,7 @@ class LLMService:
             with open(image_path, "rb") as f:
                 image_data = base64.b64encode(f.read()).decode()
             mime_type = mimetypes.guess_type(image_path)[0] or "image/png"
-            parts.append(
-                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_data}"}}
-            )
+            parts.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_data}"}})
 
         adapter = self._adapter_for(self._endpoint)
         debug_request_id = record_api_request(

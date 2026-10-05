@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const clientRoot = path.resolve(__dirname, '..')
-const repoRoot = path.resolve(clientRoot, '..')
+const _repoRoot = path.resolve(clientRoot, '..')
 
 const args = process.argv.slice(2)
 const reportIndex = args.indexOf('--report')
@@ -123,7 +123,9 @@ async function checkFfmpeg(pinned) {
       pinned: pinned.ffmpeg,
       latest: entry?.latest ?? String(newestCycle),
       status: 'out-of-support',
-      note: entry?.eol ? `上游分支 ${pinnedMajor}.x 已于 ${entry.eol} 结束维护` : `上游无 ${pinnedMajor}.x 的维护数据，当前最新分支为 ${newestCycle}.x`,
+      note: entry?.eol
+        ? `上游分支 ${pinnedMajor}.x 已于 ${entry.eol} 结束维护`
+        : `上游无 ${pinnedMajor}.x 的维护数据，当前最新分支为 ${newestCycle}.x`,
     })
   } else if (entry.latest !== pinned.ffmpeg) {
     record({
@@ -142,7 +144,13 @@ async function checkPbs(pinned) {
   const release = await fetchJson('https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest')
   const latest = release.tag_name
   if (!pinned.pbsTag) {
-    record({ name: 'Python runtime (PBS)', pinned: '?', latest: latest ?? '?', status: 'unknown', note: '无法解析钉定 tag' })
+    record({
+      name: 'Python runtime (PBS)',
+      pinned: '?',
+      latest: latest ?? '?',
+      status: 'unknown',
+      note: '无法解析钉定 tag',
+    })
     return
   }
   if (pinned.pbsTag === latest) {
@@ -176,7 +184,7 @@ for (const [label, run] of [
 }
 
 const breaking = checks.filter((item) => item.status === 'out-of-support')
-const available = checks.filter((item) => item.status === 'update-available')
+const _available = checks.filter((item) => item.status === 'update-available')
 
 const statusLabel = { ok: '✅', info: 'ℹ️', 'update-available': '⬆️', 'out-of-support': '❌', unknown: '⚠️' }
 const lines = [
@@ -186,7 +194,10 @@ const lines = [
   '',
   '| 组件 | 当前钉定 | 上游最新 | 状态 | 说明 |',
   '| --- | --- | --- | --- | --- |',
-  ...checks.map((item) => `| ${item.name} | ${item.pinned} | ${item.latest} | ${statusLabel[item.status]} ${item.status} | ${item.note} |`),
+  ...checks.map(
+    (item) =>
+      `| ${item.name} | ${item.pinned} | ${item.latest} | ${statusLabel[item.status]} ${item.status} | ${item.note} |`,
+  ),
   '',
 ]
 

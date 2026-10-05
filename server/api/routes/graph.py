@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 
 from agent.checkpoints import CheckpointStore, summarize_trace
@@ -117,6 +119,14 @@ def _attach_shot_reference_rows(shots: list[dict]) -> list[dict]:
             db.close()
     except Exception:
         return shots
+
+    def manifest(row: Any, field: str) -> list[dict]:
+        try:
+            value = _json.loads(getattr(row, field, "") or "[]")
+            return [entry for entry in value if isinstance(entry, dict)]
+        except Exception:
+            return []
+
     for item in shots:
         row = rows.get(str(item.get("shot_id")))
         if row is None:
@@ -124,17 +134,9 @@ def _attach_shot_reference_rows(shots: list[dict]) -> list[dict]:
         item["db_status"] = str(row.status or "")
         item["db_shot_version"] = int(row.version or 1)
         item["confirmed"] = bool(row.confirmed)
-
-        def manifest(field: str) -> list[dict]:
-            try:
-                value = _json.loads(getattr(row, field, "") or "[]")
-                return [entry for entry in value if isinstance(entry, dict)]
-            except Exception:
-                return []
-
         item["references_sent"] = {
-            "image_generation": manifest("storyboard_reference_manifest"),
-            "video_generation": manifest("video_reference_manifest"),
+            "image_generation": manifest(row, "storyboard_reference_manifest"),
+            "video_generation": manifest(row, "video_reference_manifest"),
         }
     return shots
 
@@ -164,7 +166,7 @@ def _mermaid(snapshot: dict) -> str:
         state = str(item.get("status") or "pending")
         label = GRAPH_NODE_META.get(stage, {}).get("label", stage)
         node_id = "".join(char if char.isalnum() else "_" for char in stage)
-        lines.append(f"  {node_id}[\"{label}: {state}\"]")
+        lines.append(f'  {node_id}["{label}: {state}"]')
         lines.append(f"  {previous} --> {node_id}")
         previous = node_id
     for trace in snapshot.get("decisions", []):
@@ -172,6 +174,6 @@ def _mermaid(snapshot: dict) -> str:
         selected = trace.get("selected") or {}
         strategy = selected.get("strategy", "human_review")
         reason = str(trace.get("reason") or "").replace('"', "'")[:80]
-        lines.append(f"  {trace_id}(\"选择 {strategy}<br/>{reason}\")")
+        lines.append(f'  {trace_id}("选择 {strategy}<br/>{reason}")')
         lines.append(f"  {previous} -.-> {trace_id}")
     return "\n".join(lines)

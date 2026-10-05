@@ -12,11 +12,11 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from db import SessionLocal, init_db  # noqa: E402
-from models import Project, Shot  # noqa: E402
-from agent.checkpoints import CheckpointStore, summarize_trace  # noqa: E402
+from agent.checkpoints import CheckpointStore  # noqa: E402
 from agent.contracts import StageName  # noqa: E402
 from api.routes import graph as graph_route  # noqa: E402
+from db import SessionLocal, init_db  # noqa: E402
+from models import Project, Shot  # noqa: E402
 
 
 def _seed_trace_data(store: CheckpointStore) -> None:
@@ -26,48 +26,135 @@ def _seed_trace_data(store: CheckpointStore) -> None:
         status="degraded",
         input_fingerprint="fp-1",
         critique={
-            "stage": StageName.IMAGE_GENERATION.value, "passed": False, "score": 0.42,
-            "issues": [{"code": "image_invalid", "severity": "error", "message": "镜头 s2 图片结构不合格", "shot_id": "s2", "recommendation": "只重生成该镜头"}],
+            "stage": StageName.IMAGE_GENERATION.value,
+            "passed": False,
+            "score": 0.42,
+            "issues": [
+                {
+                    "code": "image_invalid",
+                    "severity": "error",
+                    "message": "镜头 s2 图片结构不合格",
+                    "shot_id": "s2",
+                    "recommendation": "只重生成该镜头",
+                }
+            ],
             "proposed_changes": ["收紧 Prompt"],
         },
     )
     store.save_shot_artifact(
-        "s1", StageName.IMAGE_GENERATION.value, shot_version=1, status="succeeded",
-        path="s1.png", provider="mock-image", cost_micro=100, duration_ms=1200, score=0.9,
+        "s1",
+        StageName.IMAGE_GENERATION.value,
+        shot_version=1,
+        status="succeeded",
+        path="s1.png",
+        provider="mock-image",
+        cost_micro=100,
+        duration_ms=1200,
+        score=0.9,
         input_fingerprint="fp-1",
         extra={
             "selected_video_candidate_id": "s1-c1",
             "candidate_selection": {"candidate_id": "s1-c1", "reason": "structural_pass_highest_score"},
-            "video_candidates": [{
-                "candidate_id": "s1-c1", "shot_id": "s1", "shot_version": 1, "status": "succeeded",
-                "path": "s1.mp4", "provider": "mock-video", "model": "mock-video-v1", "score": 0.88,
-                "generation_duration_ms": 8000, "structural_passed": True, "selected": True,
-                "selection_reason": "structural_pass_highest_score",
-                "reference_manifest": [{"kind": "character", "name": "主角三视图", "path": "ref.png"}],
-            }],
+            "video_candidates": [
+                {
+                    "candidate_id": "s1-c1",
+                    "shot_id": "s1",
+                    "shot_version": 1,
+                    "status": "succeeded",
+                    "path": "s1.mp4",
+                    "provider": "mock-video",
+                    "model": "mock-video-v1",
+                    "score": 0.88,
+                    "generation_duration_ms": 8000,
+                    "structural_passed": True,
+                    "selected": True,
+                    "selection_reason": "structural_pass_highest_score",
+                    "reference_manifest": [{"kind": "character", "name": "主角三视图", "path": "ref.png"}],
+                }
+            ],
         },
     )
     store.save_shot_artifact(
-        "s2", StageName.IMAGE_GENERATION.value, shot_version=1, status="failed",
-        path="", provider="mock-image", cost_micro=30, duration_ms=400,
+        "s2",
+        StageName.IMAGE_GENERATION.value,
+        shot_version=1,
+        status="failed",
+        path="",
+        provider="mock-image",
+        cost_micro=30,
+        duration_ms=400,
         input_fingerprint="fp-1",
-        failure={"kind": "image_failed", "stage": StageName.IMAGE_GENERATION.value, "shot_id": "s2", "message": "provider failed"},
-    )
-    store.add_decision({
-        "trace_id": "trace-1", "stage": StageName.IMAGE_GENERATION.value, "mode": "auto", "shot_id": "s2",
-        "failure": {"kind": "image_failed", "message": "provider failed"},
-        "quality_score": 0.42, "retries_remaining": 1, "reason": "自动恢复：优先策略=revise_prompt",
-        "selected": {
-            "strategy": "revise_prompt", "provider": "", "target_stage": StageName.IMAGE_GENERATION.value,
-            "shot_ids": ["s2"], "estimated_cost_micro": 13000, "estimated_seconds": 6, "score": 0.71,
-            "prompt_patches": [{"field": "visual_prompt", "op": "replace", "value": {"rule": "close-up"}, "shot_id": "s2", "target_stage": StageName.IMAGE_GENERATION.value, "reason": "结果不合格，收紧描述"}],
+        failure={
+            "kind": "image_failed",
+            "stage": StageName.IMAGE_GENERATION.value,
+            "shot_id": "s2",
+            "message": "provider failed",
         },
-        "candidates": [{"strategy": "switch_provider", "provider": "mock-b", "score": 0.66, "estimated_cost_micro": 20000, "estimated_seconds": 8}],
-        "considered_rejected": [{"strategy": "switch_provider", "score": 0.66, "reason": "综合排序低于选中策略（选中=revise_prompt，rank=[0, 0.66, 0.95]）"}],
-        "budget_snapshot": {"level": "project", "remaining_cost_micro": 50000, "remaining_seconds": 600},
-        "provider_profiles": [{"capability": "image", "provider": "mock-image", "model": "mock-image-v2", "available": True, "supports_reference_images": True}],
-    })
-    store.add_event("recovery_selected", stage=StageName.IMAGE_GENERATION.value, shot_ids=["s2"], strategy="revise_prompt", trace_id="trace-1")
+    )
+    store.add_decision(
+        {
+            "trace_id": "trace-1",
+            "stage": StageName.IMAGE_GENERATION.value,
+            "mode": "auto",
+            "shot_id": "s2",
+            "failure": {"kind": "image_failed", "message": "provider failed"},
+            "quality_score": 0.42,
+            "retries_remaining": 1,
+            "reason": "自动恢复：优先策略=revise_prompt",
+            "selected": {
+                "strategy": "revise_prompt",
+                "provider": "",
+                "target_stage": StageName.IMAGE_GENERATION.value,
+                "shot_ids": ["s2"],
+                "estimated_cost_micro": 13000,
+                "estimated_seconds": 6,
+                "score": 0.71,
+                "prompt_patches": [
+                    {
+                        "field": "visual_prompt",
+                        "op": "replace",
+                        "value": {"rule": "close-up"},
+                        "shot_id": "s2",
+                        "target_stage": StageName.IMAGE_GENERATION.value,
+                        "reason": "结果不合格，收紧描述",
+                    }
+                ],
+            },
+            "candidates": [
+                {
+                    "strategy": "switch_provider",
+                    "provider": "mock-b",
+                    "score": 0.66,
+                    "estimated_cost_micro": 20000,
+                    "estimated_seconds": 8,
+                }
+            ],
+            "considered_rejected": [
+                {
+                    "strategy": "switch_provider",
+                    "score": 0.66,
+                    "reason": "综合排序低于选中策略（选中=revise_prompt，rank=[0, 0.66, 0.95]）",
+                }
+            ],
+            "budget_snapshot": {"level": "project", "remaining_cost_micro": 50000, "remaining_seconds": 600},
+            "provider_profiles": [
+                {
+                    "capability": "image",
+                    "provider": "mock-image",
+                    "model": "mock-image-v2",
+                    "available": True,
+                    "supports_reference_images": True,
+                }
+            ],
+        }
+    )
+    store.add_event(
+        "recovery_selected",
+        stage=StageName.IMAGE_GENERATION.value,
+        shot_ids=["s2"],
+        strategy="revise_prompt",
+        trace_id="trace-1",
+    )
     store.set_status("degraded", reason="自动恢复无法继续，按降级结果发布")
 
 
@@ -144,12 +231,19 @@ class TraceSummaryContractTests(unittest.TestCase):
             db.query(Shot).filter(Shot.project_id == project_id).delete(synchronize_session=False)
             db.query(Project).filter(Project.id == project_id).delete(synchronize_session=False)
             db.add(Project(id=project_id, title="trace"))
-            db.add(Shot(
-                id="s1", project_id=project_id, sequence=1, version=3, status="video_ready", confirmed=True,
-                storyboard_path="s1.png",
-                storyboard_reference_manifest='[{"name": "主角三视图", "kind": "character"}]',
-                video_reference_manifest='[{"name": "上一镜尾帧", "kind": "tail_frame"}, {"name": "场景基准图", "kind": "scene"}]',
-            ))
+            db.add(
+                Shot(
+                    id="s1",
+                    project_id=project_id,
+                    sequence=1,
+                    version=3,
+                    status="video_ready",
+                    confirmed=True,
+                    storyboard_path="s1.png",
+                    storyboard_reference_manifest='[{"name": "主角三视图", "kind": "character"}]',
+                    video_reference_manifest='[{"name": "上一镜尾帧", "kind": "tail_frame"}, {"name": "场景基准图", "kind": "scene"}]',
+                )
+            )
             db.add(Shot(id="s2", project_id=project_id, sequence=2, version=1, status="failed"))
             db.commit()
         finally:

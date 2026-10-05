@@ -25,23 +25,24 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
-from db import SessionLocal, init_db  # noqa: E402
-from models import BackgroundJob, BudgetReservation, Project  # noqa: E402
 from agent import decision, graph  # noqa: E402
 from agent.contracts import FailureKind, RecoveryStrategy  # noqa: E402
 from agent.nodes import script_parser  # noqa: E402
 from agent.output_schemas import parse_script_output  # noqa: E402
 from config import settings  # noqa: E402
+from db import SessionLocal, init_db  # noqa: E402
+from models import BackgroundJob, BudgetReservation, Project  # noqa: E402
 from services import llm_service as llm_service_module  # noqa: E402
 from services import task_registry  # noqa: E402
 from services.job_types import ERROR_CODE_LLM_OUTPUT_TRUNCATED, classify_error_code  # noqa: E402
 from services.llm_service import LLMOutputTruncatedError, LLMService, large_json_max_tokens  # noqa: E402
 from services.providers.endpoint import EndpointConfig  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
-def chat_response(content: str, *, finish_reason: str = "stop", completion_tokens: int | None = 50, prompt_tokens: int = 120) -> SimpleNamespace:
+def chat_response(
+    content: str, *, finish_reason: str = "stop", completion_tokens: int | None = 50, prompt_tokens: int = 120
+) -> SimpleNamespace:
     """构造最小化的 ChatCompletion 形状（llm_service 只读这些属性）。"""
 
     usage = SimpleNamespace(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
@@ -81,7 +82,9 @@ class FakeAdapter:
 
 def _install_fake_llm(handler) -> tuple[LLMService, FakeAdapter]:
     service = LLMService()
-    endpoint = EndpointConfig(protocol="openai-chat", base_url="https://fake.test/v1", api_key="test-key", model="fake-model")
+    endpoint = EndpointConfig(
+        protocol="openai-chat", base_url="https://fake.test/v1", api_key="test-key", model="fake-model"
+    )
     service._endpoint = endpoint
     service._fallback_endpoint = None
     service.model = endpoint.model
@@ -159,7 +162,9 @@ class LargeJsonBudgetTests(unittest.TestCase):
 
     def test_default_budget_is_settings_target(self) -> None:
         original = llm_service_module.get_endpoint
-        llm_service_module.get_endpoint = lambda capability: EndpointConfig(protocol="openai-chat", base_url="https://x", model="m")
+        llm_service_module.get_endpoint = lambda capability: EndpointConfig(
+            protocol="openai-chat", base_url="https://x", model="m"
+        )
         try:
             self.assertEqual(large_json_max_tokens(), settings.LLM_LARGE_JSON_MAX_TOKENS)
         finally:
@@ -289,7 +294,9 @@ class LongScriptSegmentationTests(unittest.TestCase):
         # 合并结果重新通过统一 schema 校验（run 内部已校验，这里独立复核一遍）。
         reparsed = parse_script_output(
             {
-                "characters": [{"name": item["name"], "appearance": item["appearance"]} for item in result["characters"]],
+                "characters": [
+                    {"name": item["name"], "appearance": item["appearance"]} for item in result["characters"]
+                ],
                 "script_scenes": [
                     {
                         "scene_number": scene["scene_number"],
@@ -342,7 +349,9 @@ class LongScriptSegmentationTests(unittest.TestCase):
         self.assertGreaterEqual(len(stub.calls), 2, "截断后必须改变策略（分段），而不是报错或同配置重试")
         self.assertNotIn("第 1/1 段", stub.calls[1]["user"])
         self.assertIn("这是一部长剧本的第 1/2 段", stub.calls[1]["user"])
-        self.assertEqual([scene["dialogue"][0]["line"] for scene in result["script_scenes"]], ["分段后的台词", "第二段台词"])
+        self.assertEqual(
+            [scene["dialogue"][0]["line"] for scene in result["script_scenes"]], ["分段后的台词", "第二段台词"]
+        )
 
     def test_unfixable_truncation_raises_deterministic_error(self) -> None:
         script = "第一场\n林夏说了一句话。"
@@ -431,7 +440,9 @@ class TruncationRecoveryDecisionTests(unittest.TestCase):
         self.assertNotIn(RecoveryStrategy.REVISE_PROMPT, strategies)
         self.assertNotIn(RecoveryStrategy.RETRY, strategies)
         selected = [item for item in candidates if item.strategy is RecoveryStrategy.SWITCH_PROVIDER]
-        self.assertTrue(selected and not selected[0].provider_capability_ok, "没有可换端点时 switch_provider 必须不可行")
+        self.assertTrue(
+            selected and not selected[0].provider_capability_ok, "没有可换端点时 switch_provider 必须不可行"
+        )
 
     def test_switch_targets_fallback_endpoint_not_current(self) -> None:
         from agent.contracts import ProviderProfile
@@ -440,7 +451,9 @@ class TruncationRecoveryDecisionTests(unittest.TestCase):
             ProviderProfile(capability="script", provider="openai-chat", available=True, is_current=True),
             ProviderProfile(capability="script", provider="script_fallback", available=True),
         ]
-        target = decision._switch_provider_target(profiles, failing_provider="", failure_kind=FailureKind.LLM_OUTPUT_TRUNCATED)
+        target = decision._switch_provider_target(
+            profiles, failing_provider="", failure_kind=FailureKind.LLM_OUTPUT_TRUNCATED
+        )
         self.assertEqual(target, "script_fallback")
 
     def test_job_error_code_for_truncation(self) -> None:
@@ -505,7 +518,9 @@ class FailedJobBudgetReleaseTests(unittest.TestCase):
             db.query(BackgroundJob).filter(
                 (BackgroundJob.idempotency_key == job_key) | (BackgroundJob.idempotency_key.like(f"{job_key}#%"))
             ).delete(synchronize_session=False)
-            db.query(BudgetReservation).filter(BudgetReservation.reservation_key == job_key).delete(synchronize_session=False)
+            db.query(BudgetReservation).filter(BudgetReservation.reservation_key == job_key).delete(
+                synchronize_session=False
+            )
             db.query(Project).filter(Project.id == "budget-release-project").delete(synchronize_session=False)
             db.commit()
             db.add(Project(id="budget-release-project", title="预算释放"))

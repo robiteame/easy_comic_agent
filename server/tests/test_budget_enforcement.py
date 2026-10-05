@@ -21,13 +21,12 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from db import SessionLocal, init_db  # noqa: E402
 from models import BackgroundJob, BudgetReservation, Project, Shot  # noqa: E402
 from services import budget_service, job_types, pricing_service, task_registry, usage_service  # noqa: E402
 from services.providers.endpoint import get_endpoint  # noqa: E402
 from services.providers.usage import CAPABILITY_IMAGE, CAPABILITY_VIDEO, UsageMetadata  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 init_db()
 
@@ -49,17 +48,21 @@ def _shot(project_id: str, sequence: int = 1, duration: float = 5.0, dialogue: s
     db = SessionLocal()
     try:
         shot_id = f"shot-{uuid.uuid4().hex[:10]}"
-        db.add(
-            Shot(id=shot_id, project_id=project_id, sequence=sequence, duration=duration, dialogue=dialogue)
-        )
+        db.add(Shot(id=shot_id, project_id=project_id, sequence=sequence, duration=duration, dialogue=dialogue))
         db.commit()
         return shot_id
     finally:
         db.close()
 
 
-def _set_budget(project_id: str, *, soft: int | None = None, hard: int | None = None,
-                hard_seconds: int | None = None, soft_seconds: int | None = None) -> None:
+def _set_budget(
+    project_id: str,
+    *,
+    soft: int | None = None,
+    hard: int | None = None,
+    hard_seconds: int | None = None,
+    soft_seconds: int | None = None,
+) -> None:
     db = SessionLocal()
     try:
         budget_service.save_budget(
@@ -225,9 +228,7 @@ class BudgetGuardTests(unittest.TestCase):
         # 任务执行中真实发生了一次付费调用，然后任务失败。
         usage_service.record_metadata(
             UsageMetadata(capability=CAPABILITY_IMAGE, provider=_image_provider(), images=1),
-            scope=usage_service.UsageScope(
-                project_id=project_id, shot_id=shot_id, job_key=key, job_type="shot_image"
-            ),
+            scope=usage_service.UsageScope(project_id=project_id, shot_id=shot_id, job_key=key, job_type="shot_image"),
         )
         task_registry.finish(key, "failed", "provider exploded")
 
@@ -341,9 +342,7 @@ class SoftBudgetSemanticsTests(unittest.TestCase):
 
     def test_projection_over_soft_warns_pending_not_exceeded(self) -> None:
         # 实际 0.4 元 < 软预算 1 元，但「已用 + 本次预计 0.8 元」的投影会超。
-        state = budget_service.evaluate_limits(
-            self.MONEY_LIMITS, used_cost_micro=400_000, estimate_cost_micro=800_000
-        )
+        state = budget_service.evaluate_limits(self.MONEY_LIMITS, used_cost_micro=400_000, estimate_cost_micro=800_000)
         self.assertEqual(state["level"], budget_service.LEVEL_SOFT_EXCEEDED)
         self.assertEqual(state["reason"], "cost")
         self.assertIn("预计将超支", state["message"])
@@ -353,9 +352,7 @@ class SoftBudgetSemanticsTests(unittest.TestCase):
         self.assertIn("本次预计", state["message"])
 
     def test_actual_equal_to_soft_counts_as_exceeded(self) -> None:
-        state = budget_service.evaluate_limits(
-            self.MONEY_LIMITS, used_cost_micro=1 * MICRO, estimate_cost_micro=None
-        )
+        state = budget_service.evaluate_limits(self.MONEY_LIMITS, used_cost_micro=1 * MICRO, estimate_cost_micro=None)
         self.assertEqual(state["level"], budget_service.LEVEL_SOFT_EXCEEDED)
         self.assertIn("已超支", state["message"])
         self.assertNotIn("预计将超支", state["message"])
@@ -370,9 +367,7 @@ class SoftBudgetSemanticsTests(unittest.TestCase):
 
     def test_projection_equal_to_soft_stays_ok(self) -> None:
         # 投影恰好等于软预算不算超支（严格大于才触发提示）。
-        state = budget_service.evaluate_limits(
-            self.MONEY_LIMITS, used_cost_micro=400_000, estimate_cost_micro=600_000
-        )
+        state = budget_service.evaluate_limits(self.MONEY_LIMITS, used_cost_micro=400_000, estimate_cost_micro=600_000)
         self.assertEqual(state["level"], budget_service.LEVEL_OK)
         self.assertEqual(state["message"], "")
 

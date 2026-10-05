@@ -1,10 +1,10 @@
 import asyncio
 import copy
-from datetime import datetime
 import hashlib
 import json
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,13 +15,14 @@ from agent.checkpoints import CheckpointStore
 from agent.contracts import (
     DecisionTrace,
     StageName,
-    VideoCandidateRecord,
     VideoCandidateSelection,
     VideoCandidateStatus,
     score_video_candidate,
     select_video_candidate,
 )
 from api import schemas
+from api.claim_guard import claim_or_block
+from api.provider_guard import ensure_providers_ready
 from api.websocket import ws_manager
 from config import settings
 from db import SessionLocal, get_db
@@ -29,19 +30,6 @@ from models import Character, Project, SceneAsset, Shot, ShotVersion, ShotVideoC
 from services.audio_routing import resolve_audio_mode
 from services.consistency_service import ConsistencyService, normalize_continuity_mode
 from services.dialogue_audio import generate_dialogue_track
-from services.invalidation_service import clear_shot_media_stale, mark_shot_media_stale
-from services.reference_readiness_service import (
-    blocking_report,
-    build_manifest_for_shot,
-    ensure_generation_gate,
-    refresh_project_reference_state,
-)
-from services.shot_dialogue import (
-    dialogue_lines_payload,
-    parse_shot_dialogue,
-    serialize_dialogue_lines,
-    warn_unknown_speakers,
-)
 from services.error_reporter import (
     ERROR_SHOT_VIDEO,
     ERROR_STORYBOARD,
@@ -50,10 +38,22 @@ from services.error_reporter import (
     report_failure,
 )
 from services.image_service import ImageService
+from services.invalidation_service import clear_shot_media_stale, mark_shot_media_stale
 from services.providers.base import Dialogue
 from services.providers.endpoint import get_endpoint
-from services.providers.registry import UnknownProtocolError, get_adapter
 from services.quality_review_service import quality_review_service
+from services.reference_readiness_service import (
+    build_manifest_for_shot,
+    ensure_generation_gate,
+    refresh_project_reference_state,
+)
+from services.security import existing_file, validate_identifier
+from services.shot_dialogue import (
+    dialogue_lines_payload,
+    parse_shot_dialogue,
+    serialize_dialogue_lines,
+    warn_unknown_speakers,
+)
 from services.shot_version_service import (
     apply_snapshot_to_shot,
     capture_current_snapshot,
@@ -66,7 +66,12 @@ from services.shot_version_service import (
     parse_snapshot,
     version_detail,
 )
-from services.structural_validation import probe_media_duration, validate_video_file
+from services.skill_config_service import (
+    apply_agent_config_to_shot,
+    clean_tts_text,
+    resolve_effective_style,
+    resolve_skill_config,
+)
 from services.story_timing import (
     ShotExecutionPlan,
     StoryTimingError,
@@ -75,26 +80,25 @@ from services.story_timing import (
     provider_duration_capability,
     usable_speech_ms,
 )
-from services.skill_config_service import (
-    apply_agent_config_to_shot,
-    clean_tts_text,
-    resolve_effective_style,
-    resolve_skill_config,
-)
+from services.structural_validation import probe_media_duration, validate_video_file
 from services.style_templates import style_prompt_params
-from services.tts_service import TTSService
-from services.video_service import SeedanceVideoService
-from services.security import existing_file, validate_identifier
-from api.claim_guard import budget_notice, claim_or_block
-from api.provider_guard import ensure_providers_ready
 from services.task_registry import (
     cancel as cancel_task,
+)
+from services.task_registry import (
     cancel_scopes,
-    claim as claim_task,
+)
+from services.task_registry import (
     finish as finish_task,
+)
+from services.task_registry import (
     start as start_task,
+)
+from services.task_registry import (
     update_progress as update_job_progress,
 )
+from services.tts_service import TTSService
+from services.video_service import SeedanceVideoService
 
 router = APIRouter(prefix="/api/shot", tags=["shot"])
 
@@ -218,7 +222,9 @@ async def get_project_shots(project_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Project not found")
     shots = db.query(Shot).filter(Shot.project_id == project_id).order_by(Shot.sequence).all()
     project = db.query(Project).filter(Project.id == project_id).first()
-    style_meta = resolve_effective_style((project.style if project else "anime"), resolve_skill_config(project_id, db), "storyboard_agent")
+    style_meta = resolve_effective_style(
+        (project.style if project else "anime"), resolve_skill_config(project_id, db), "storyboard_agent"
+    )
     return [{**_serialize_shot(s), **style_meta} for s in shots]
 
 
@@ -295,7 +301,9 @@ def _validate_timing_edit(shot: Shot, changed: dict, db: Session) -> int:
     else:
         dialogue_raw = shot.dialogue
     estimated_speech_ms = estimate_speech_ms(dialogue_text(dialogue_raw))
-    action = str(changed.get("character_action") if changed.get("character_action") is not None else shot.character_action or "")
+    action = str(
+        changed.get("character_action") if changed.get("character_action") is not None else shot.character_action or ""
+    )
     available_ms = usable_speech_ms({"character_action": action}, duration)
     if estimated_speech_ms > available_ms:
         raise HTTPException(
@@ -547,7 +555,9 @@ async def regenerate_shot(shot_id: str, data: RegenerateRequest, db: Session = D
 
 
 @router.post("/batch-regenerate")
-async def batch_regenerate(shot_ids: schemas.ShotIdList, reason: schemas.ReasonText = "", db: Session = Depends(get_db)):
+async def batch_regenerate(
+    shot_ids: schemas.ShotIdList, reason: schemas.ReasonText = "", db: Session = Depends(get_db)
+):
     shots = db.query(Shot).filter(Shot.id.in_(shot_ids)).all()
     missing = sorted(set(shot_ids) - {shot.id for shot in shots})
     if missing:
@@ -619,7 +629,12 @@ async def generate_storyboard_images(project_id: str, data: StoryboardGenerateRe
     if not shots:
         raise HTTPException(status_code=404, detail="No shots available for storyboard generation")
 
-    gate = ensure_generation_gate(db, project_id, allow_degraded=bool(getattr(data, "confirm_degraded", False)), shot_ids=[shot.id for shot in shots])
+    gate = ensure_generation_gate(
+        db,
+        project_id,
+        allow_degraded=bool(getattr(data, "confirm_degraded", False)),
+        shot_ids=[shot.id for shot in shots],
+    )
     if gate.get("blocking"):
         if not bool(getattr(data, "confirm_degraded", False)):
             raise HTTPException(
@@ -634,6 +649,7 @@ async def generate_storyboard_images(project_id: str, data: StoryboardGenerateRe
             )
         # 手动模式只有在显式确认后才允许降级；每个未就绪项都留下 degraded 状态。
         from services.reference_readiness_service import mark_reference_degraded
+
         for item in gate.get("blocking_items", []):
             model = Character if item.get("kind") == "character" else SceneAsset
             row = db.query(model).filter(model.id == item.get("asset_id")).first()
@@ -642,7 +658,9 @@ async def generate_storyboard_images(project_id: str, data: StoryboardGenerateRe
         db.commit()
         gate = refresh_project_reference_state(db, project_id)
         if gate.get("blocking"):
-            raise HTTPException(status_code=409, detail={"message": "参考素材降级确认后仍有阻断项", "consistency_report": gate})
+            raise HTTPException(
+                status_code=409, detail={"message": "参考素材降级确认后仍有阻断项", "consistency_report": gate}
+            )
 
     task_key = _project_task_key(project_id, "storyboard")
     claim = claim_or_block(
@@ -692,11 +710,7 @@ async def confirm_storyboard(project_id: str, db: Session = Depends(get_db)):
     shots = db.query(Shot).filter(Shot.project_id == project_id).order_by(Shot.sequence).all()
     if not shots:
         raise HTTPException(status_code=404, detail="No storyboard shots available for confirmation")
-    unfinished = [
-        shot.id
-        for shot in shots
-        if (not shot.storyboard_path and not shot.image_path) or shot.media_stale
-    ]
+    unfinished = [shot.id for shot in shots if (not shot.storyboard_path and not shot.image_path) or shot.media_stale]
     if unfinished:
         raise HTTPException(
             status_code=400,
@@ -905,7 +919,9 @@ async def generate_shot_audio(shot_id: str, data: ShotAudioGenerateRequest, db: 
         return {"id": shot.id, "status": "audio_generating", "deduplicated": True}
     create_version(db, shot, "regenerate", task_id=task_key)
     shot.status = "audio_generating"
-    _mark_project_output_stale(db, shot.project_id, status="storyboard_approved" if shot.confirmed else "storyboard_ready")
+    _mark_project_output_stale(
+        db, shot.project_id, status="storyboard_approved" if shot.confirmed else "storyboard_ready"
+    )
     db.commit()
     task = start_task(task_key, _run_single_shot_audio(shot_id, expected_version))
     _regeneration_tasks.add(task)
@@ -1062,7 +1078,9 @@ def _ensure_reference_provider_capability(db: Session, project_id: str, *, allow
         if allow_degraded:
             from services.reference_readiness_service import mark_reference_degraded
 
-            mark_reference_degraded(db, item.get("kind"), row, reason="用户确认 Provider 纯文本降级", capability_warning=warning)
+            mark_reference_degraded(
+                db, item.get("kind"), row, reason="用户确认 Provider 纯文本降级", capability_warning=warning
+            )
         else:
             from services.reference_readiness_service import mark_reference_unsupported
 
@@ -1190,8 +1208,7 @@ async def _run_storyboard_generation_impl(
                     continuity_reference_path=shot_data.get("continuity_reference_path", ""),
                 )
                 shot_data["reference_versions"] = {
-                    str(item.get("asset_id")): item.get("version")
-                    for item in shot_data["reference_manifest"]
+                    str(item.get("asset_id")): item.get("version") for item in shot_data["reference_manifest"]
                 }
                 apply_agent_config_to_shot(shot_data, skill_config)
                 _apply_recovery_revisions(shot_data, recovery_revisions, shot_id=shot.id, stage="image_generation")
@@ -1256,7 +1273,9 @@ async def _run_storyboard_generation_impl(
                 )
                 shot.continuity_profile = json.dumps(storyboard_profile, ensure_ascii=False)
                 shot.continuity_reference_path = shot_data.get("continuity_reference_path", "")
-                shot.storyboard_reference_manifest = json.dumps(shot_data.get("reference_manifest", []), ensure_ascii=False)
+                shot.storyboard_reference_manifest = json.dumps(
+                    shot_data.get("reference_manifest", []), ensure_ascii=False
+                )
                 shot.reference_capability_warning = str(image_meta.get("reference_capability_warning", ""))
                 shot.pose_reference_path = ""
                 shot.depth_reference_path = ""
@@ -1286,14 +1305,14 @@ async def _run_storyboard_generation_impl(
             if expected_versions:
                 stale_or_missing = [
                     item.id
-                    for item in db.query(Shot)
-                    .filter(Shot.project_id == project_id, Shot.id.in_(shot_ids))
-                    .all()
-                    if (item.version or 1) != expected_versions.get(item.id)
-                    or item.storyboard_status != "done"
+                    for item in db.query(Shot).filter(Shot.project_id == project_id, Shot.id.in_(shot_ids)).all()
+                    if (item.version or 1) != expected_versions.get(item.id) or item.storyboard_status != "done"
                 ]
                 requested_ids = set(expected_versions)
-                found_ids = {item.id for item in db.query(Shot.id).filter(Shot.project_id == project_id, Shot.id.in_(shot_ids)).all()}
+                found_ids = {
+                    item.id
+                    for item in db.query(Shot.id).filter(Shot.project_id == project_id, Shot.id.in_(shot_ids)).all()
+                }
                 stale_or_missing.extend(sorted(requested_ids - found_ids))
                 if stale_or_missing:
                     project = db.query(Project).filter(Project.id == project_id).first()
@@ -1336,11 +1355,7 @@ async def _run_storyboard_generation_impl(
             version_conflict = isinstance(exc, StoryboardVersionConflict)
             if project and emit_project_result and not version_conflict:
                 project.status = "error"
-            queued = (
-                db.query(Shot)
-                .filter(Shot.project_id == project_id, Shot.id.in_(list(expected_versions)))
-                .all()
-            )
+            queued = db.query(Shot).filter(Shot.project_id == project_id, Shot.id.in_(list(expected_versions))).all()
             for shot in queued:
                 expected_version = expected_versions.get(shot.id)
                 if expected_version is not None and (shot.version or 1) != expected_version:
@@ -1602,7 +1617,9 @@ async def _prepare_shot_audio(shot_id: str, expected_version: int) -> dict[str, 
                 dialogue_timing_source="tts_measured",
             ),
         )
-        shot.status = "video_done" if shot.video_path else ("storyboard_approved" if shot.confirmed else "storyboard_done")
+        shot.status = (
+            "video_done" if shot.video_path else ("storyboard_approved" if shot.confirmed else "storyboard_done")
+        )
         create_version(db, shot, "regenerate", task_id=f"shot:{shot_id}:audio")
         db.commit()
     finally:
@@ -1720,7 +1737,9 @@ def _apply_recovery_revisions(shot_data: dict, revisions: list[dict] | None, *, 
                     # Both providers consume these fields through their prompt builders.
                     if field == "visual_prompt":
                         shot_data["visual_notes"] = f"{shot_data.get('visual_notes', '')}\\n{value.strip()}".strip()
-                        shot_data["storyboard_prompt"] = f"{shot_data.get('storyboard_prompt', '')}\\n{value.strip()}".strip()
+                        shot_data["storyboard_prompt"] = (
+                            f"{shot_data.get('storyboard_prompt', '')}\\n{value.strip()}".strip()
+                        )
             elif field == "negative_prompt" and isinstance(value, str):
                 existing = str(shot_data.get(field) or "")
                 shot_data[field] = value if op == "replace" else f"{existing}, {value}".strip(", ")
@@ -1735,7 +1754,8 @@ def _replace_recovery_reference(shot_data: dict, *, stage: str, source: dict) ->
     requested = str(source.get("source") or "scene_baseline_or_previous_tail_frame")
     manifest = list(shot_data.get("reference_manifest") or [])
     valid = [
-        item for item in manifest
+        item
+        for item in manifest
         if isinstance(item, dict)
         and str(item.get("path") or "")
         and Path(str(item.get("path"))).is_file()
@@ -1756,21 +1776,33 @@ def _replace_recovery_reference(shot_data: dict, *, stage: str, source: dict) ->
     selected = list({str(item.get("path")): item for item in selected}.values())
     shot_data["reference_manifest"] = selected
     shot_data["reference_assets"] = [
-        {"type": item.get("type", "reference_image"), "role": item.get("name") or item.get("type", "reference_image"), "path": item["path"], "version": item.get("version", "")}
+        {
+            "type": item.get("type", "reference_image"),
+            "role": item.get("name") or item.get("type", "reference_image"),
+            "path": item["path"],
+            "version": item.get("version", ""),
+        }
         for item in selected
     ]
     shot_data["scene_reference_images"] = [item["path"] for item in selected if item.get("type") == "scene_baseline"]
     shot_data["character_reference_images"] = []
-    continuity = next((item["path"] for item in selected if item.get("type") in {"continuity_frame", "previous_last_frame"}), "")
+    continuity = next(
+        (item["path"] for item in selected if item.get("type") in {"continuity_frame", "previous_last_frame"}), ""
+    )
     if continuity:
         shot_data["continuity_reference_path"] = continuity
-    shot_data["recovery_reference"] = {"requested": requested, "applied": True, "path": chosen["path"], "type": chosen.get("type", "")}
+    shot_data["recovery_reference"] = {
+        "requested": requested,
+        "applied": True,
+        "path": chosen["path"],
+        "type": chosen.get("type", ""),
+    }
 
 
 def _candidate_seed(media_id: str, candidate_index: int, retry_of_candidate_id: str = "") -> int:
     """为每个候选生成可追溯的稳定 seed；Provider 不支持 seed 时仍记录 recipe seed。"""
 
-    payload = f"{media_id}:{candidate_index}:{retry_of_candidate_id}".encode("utf-8")
+    payload = f"{media_id}:{candidate_index}:{retry_of_candidate_id}".encode()
     return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big") % (2**31 - 1)
 
 
@@ -1886,7 +1918,12 @@ def _video_candidate_model(data: dict) -> ShotVideoCandidate:
 def _video_candidate_payload(row: ShotVideoCandidate) -> dict:
     failure = _json_dict(row.failure)
     if not failure and (row.failure_kind or row.failure_message):
-        failure = {"kind": row.failure_kind, "message": row.failure_message, "stage": "video_generation", "shot_id": row.shot_id}
+        failure = {
+            "kind": row.failure_kind,
+            "message": row.failure_message,
+            "stage": "video_generation",
+            "shot_id": row.shot_id,
+        }
     failure = failure or None
     metrics = _json_dict(row.metrics) or _json_dict(row.structural_metrics)
     path = row.path or row.video_path or ""
@@ -1985,6 +2022,7 @@ def _persist_video_candidate_selection(
     matched.selected_at = datetime.utcnow()
     return matched
 
+
 async def _run_single_shot_video(
     shot_id: str,
     force: bool = False,
@@ -2025,7 +2063,9 @@ async def _run_single_shot_video(
             if video_gate.get("blocking"):
                 raise RuntimeError(
                     "一致性参考素材未就绪，视频生成已阻止："
-                    + ", ".join(item.get("name") or item.get("asset_id") for item in video_gate.get("blocking_items", []))
+                    + ", ".join(
+                        item.get("name") or item.get("asset_id") for item in video_gate.get("blocking_items", [])
+                    )
                 )
             project_id = shot.project_id
             project = db.query(Project).filter(Project.id == project_id).first()
@@ -2070,8 +2110,7 @@ async def _run_single_shot_video(
                 continuity_reference_path=previous_reference,
             )
             shot_data["reference_versions"] = {
-                str(item.get("asset_id")): item.get("version")
-                for item in shot_data["reference_manifest"]
+                str(item.get("asset_id")): item.get("version") for item in shot_data["reference_manifest"]
             }
             apply_agent_config_to_shot(shot_data, skill_config)
             _apply_recovery_revisions(shot_data, recovery_revisions, shot_id=shot.id, stage="video_generation")
@@ -2182,7 +2221,7 @@ async def _run_single_shot_video(
             candidate_id = _new_video_candidate_id(media_id, candidate_index, batch_id, retry_of_candidate_id)
             candidate_media_id = _video_candidate_media_id(media_id, candidate_index, retry_of_candidate_id, batch_id)
             if seed_override is not None:
-                seed_payload = f"{int(seed_override)}:{candidate_index}:{batch_id}:{retry_of_candidate_id}".encode("utf-8")
+                seed_payload = f"{int(seed_override)}:{candidate_index}:{batch_id}:{retry_of_candidate_id}".encode()
                 seed = int.from_bytes(hashlib.sha256(seed_payload).digest()[:4], "big") % (2**31 - 1)
             else:
                 seed = _candidate_seed(media_id, candidate_index, retry_of_candidate_id)
@@ -2204,27 +2243,29 @@ async def _run_single_shot_video(
                 "reference_manifest": reference_manifest,
             }
             candidate_specs.append(spec)
-            _save_video_candidate({
-                "candidate_id": candidate_id,
-                "shot_id": shot_id,
-                "project_id": project_id,
-                "shot_version": int(expected_version),
-                "batch_id": batch_id,
-                "candidate_index": candidate_index,
-                "status": VideoCandidateStatus.PENDING.value,
-                "path": "",
-                "last_frame_path": "",
-                "provider": provider_override or get_endpoint("video").protocol,
-                "model": get_endpoint("video").model,
-                "seed": seed,
-                "recipe_hash": recipe_hash,
-                "reference_manifest": reference_manifest,
-                "generation_duration_ms": 0,
-                "score": 0.0,
-                "metrics": {},
-                "failure": {},
-                "retry_of_candidate_id": retry_of_candidate_id,
-            })
+            _save_video_candidate(
+                {
+                    "candidate_id": candidate_id,
+                    "shot_id": shot_id,
+                    "project_id": project_id,
+                    "shot_version": int(expected_version),
+                    "batch_id": batch_id,
+                    "candidate_index": candidate_index,
+                    "status": VideoCandidateStatus.PENDING.value,
+                    "path": "",
+                    "last_frame_path": "",
+                    "provider": provider_override or get_endpoint("video").protocol,
+                    "model": get_endpoint("video").model,
+                    "seed": seed,
+                    "recipe_hash": recipe_hash,
+                    "reference_manifest": reference_manifest,
+                    "generation_duration_ms": 0,
+                    "score": 0.0,
+                    "metrics": {},
+                    "failure": {},
+                    "retry_of_candidate_id": retry_of_candidate_id,
+                }
+            )
 
         async def generate_candidate(spec: dict) -> dict:
             candidate_id = str(spec["candidate_id"])
@@ -2235,23 +2276,25 @@ async def _run_single_shot_video(
             candidate_shot_data = copy.deepcopy(shot_data)
             candidate_shot_data.update({"shot_id": candidate_media_id, "dialogues": dialogues, "seed": spec["seed"]})
             try:
-                _save_video_candidate({
-                    "candidate_id": candidate_id,
-                    "shot_id": shot_id,
-                    "project_id": project_id,
-                    "shot_version": int(expected_version),
-                    "batch_id": batch_id,
-                    "candidate_index": candidate_index,
-                    "status": VideoCandidateStatus.RUNNING.value,
-                    "path": "",
-                    "last_frame_path": "",
-                    "provider": provider_override or endpoint.protocol,
-                    "model": endpoint.model,
-                    "seed": spec["seed"],
-                    "recipe_hash": spec["recipe_hash"],
-                    "reference_manifest": spec["reference_manifest"],
-                    "retry_of_candidate_id": retry_of_candidate_id,
-                })
+                _save_video_candidate(
+                    {
+                        "candidate_id": candidate_id,
+                        "shot_id": shot_id,
+                        "project_id": project_id,
+                        "shot_version": int(expected_version),
+                        "batch_id": batch_id,
+                        "candidate_index": candidate_index,
+                        "status": VideoCandidateStatus.RUNNING.value,
+                        "path": "",
+                        "last_frame_path": "",
+                        "provider": provider_override or endpoint.protocol,
+                        "model": endpoint.model,
+                        "seed": spec["seed"],
+                        "recipe_hash": spec["recipe_hash"],
+                        "reference_manifest": spec["reference_manifest"],
+                        "retry_of_candidate_id": retry_of_candidate_id,
+                    }
+                )
                 candidate_result = await _generate_shot_video(
                     candidate_shot_data,
                     characters,
@@ -2324,27 +2367,29 @@ async def _run_single_shot_video(
                     "retryable": True,
                     "details": {"candidate_index": candidate_index, "candidate_id": candidate_id},
                 }
-                saved = _save_video_candidate({
-                    "candidate_id": candidate_id,
-                    "shot_id": shot_id,
-                    "project_id": project_id,
-                    "shot_version": int(expected_version),
-                    "batch_id": batch_id,
-                    "candidate_index": candidate_index,
-                    "status": VideoCandidateStatus.FAILED.value,
-                    "path": "",
-                    "last_frame_path": "",
-                    "provider": provider_override or endpoint.protocol,
-                    "model": endpoint.model,
-                    "seed": spec["seed"],
-                    "recipe_hash": spec["recipe_hash"],
-                    "reference_manifest": list(spec["reference_manifest"] or []),
-                    "generation_duration_ms": int((time.monotonic() - candidate_started) * 1000),
-                    "score": 0.0,
-                    "metrics": {"passed": False, "issues": [str(candidate_exc)]},
-                    "failure": failure,
-                    "retry_of_candidate_id": retry_of_candidate_id,
-                })
+                saved = _save_video_candidate(
+                    {
+                        "candidate_id": candidate_id,
+                        "shot_id": shot_id,
+                        "project_id": project_id,
+                        "shot_version": int(expected_version),
+                        "batch_id": batch_id,
+                        "candidate_index": candidate_index,
+                        "status": VideoCandidateStatus.FAILED.value,
+                        "path": "",
+                        "last_frame_path": "",
+                        "provider": provider_override or endpoint.protocol,
+                        "model": endpoint.model,
+                        "seed": spec["seed"],
+                        "recipe_hash": spec["recipe_hash"],
+                        "reference_manifest": list(spec["reference_manifest"] or []),
+                        "generation_duration_ms": int((time.monotonic() - candidate_started) * 1000),
+                        "score": 0.0,
+                        "metrics": {"passed": False, "issues": [str(candidate_exc)]},
+                        "failure": failure,
+                        "retry_of_candidate_id": retry_of_candidate_id,
+                    }
+                )
                 return {"candidate_index": candidate_index, "row": saved, "result": {}}
 
         # 候选之间互不等待：一个 Provider 失败只生成自己的 failed 记录，
@@ -2362,10 +2407,7 @@ async def _run_single_shot_video(
             if retry_of_candidate_id
             else [item for item in candidate_rows if item.get("batch_id") == batch_id]
         )
-        selection_pool = [
-            {**item, "score": score_video_candidate(item)}
-            for item in selection_pool
-        ]
+        selection_pool = [{**item, "score": score_video_candidate(item)} for item in selection_pool]
         selection = select_video_candidate(
             selection_pool,
             require_structural=strict_structural_selection,
@@ -2396,7 +2438,11 @@ async def _run_single_shot_video(
                 },
                 "candidate_shot_data": dict(shot_data),
             }
-        video_shot_data = result.get("candidate_shot_data") or {**shot_data, "shot_id": media_id, "dialogues": dialogues}
+        video_shot_data = result.get("candidate_shot_data") or {
+            **shot_data,
+            "shot_id": media_id,
+            "dialogues": dialogues,
+        }
         if result.get("reference_manifest"):
             # 请求级 manifest 含已审核首帧、实际候选参考和 continuity 决策/缺帧原因。
             shot_data["reference_manifest"] = list(result["reference_manifest"])
@@ -2420,19 +2466,29 @@ async def _run_single_shot_video(
                 }
             )
         continuity_profile["reference_capability_warning"] = result.get("reference_capability_warning", "")
-        continuity_profile["reference_manifest"] = result.get("reference_manifest", shot_data.get("reference_manifest", []))
+        continuity_profile["reference_manifest"] = result.get(
+            "reference_manifest", shot_data.get("reference_manifest", [])
+        )
         if result.get("reference_payload_mode"):
             continuity_profile["seedance_reference_payload_mode"] = result["reference_payload_mode"]
             continuity_profile.setdefault("reference_mode", "first_frame_only")
-            continuity_profile.setdefault("references_validated", len(video_shot_data.get("seedance_reference_manifest") or []))
+            continuity_profile.setdefault(
+                "references_validated", len(video_shot_data.get("seedance_reference_manifest") or [])
+            )
             continuity_profile.setdefault(
                 "references_sent",
-                ["approved_storyboard_first_frame"] if result["reference_payload_mode"] == "first_frame_reference" else [],
+                ["approved_storyboard_first_frame"]
+                if result["reference_payload_mode"] == "first_frame_reference"
+                else [],
             )
             continuity_profile.setdefault("provider", get_endpoint("video").protocol)
             continuity_profile.setdefault("model", get_endpoint("video").model)
-            continuity_profile["requested_style"] = video_shot_data.get("requested_style", video_shot_data.get("style", "anime"))
-            continuity_profile["effective_style"] = video_shot_data.get("effective_style", video_shot_data.get("style", "anime"))
+            continuity_profile["requested_style"] = video_shot_data.get(
+                "requested_style", video_shot_data.get("style", "anime")
+            )
+            continuity_profile["effective_style"] = video_shot_data.get(
+                "effective_style", video_shot_data.get("style", "anime")
+            )
             continuity_profile["style_source"] = video_shot_data.get("style_source", "project_request")
             shot_data["continuity_profile"] = continuity_profile
         if native_routed:
@@ -2449,7 +2505,7 @@ async def _run_single_shot_video(
             shot = db.query(Shot).filter(Shot.id == shot_id).first()
             if not shot or (expected_version is not None and (shot.version or 1) != expected_version):
                 raise RuntimeError("镜头版本已变化")
-            selected_candidate_row = _persist_video_candidate_selection(
+            _persist_video_candidate_selection(
                 db,
                 shot,
                 selection,
@@ -2472,7 +2528,9 @@ async def _run_single_shot_video(
             shot.continuity_profile = json.dumps(final_profile, ensure_ascii=False)
             shot.continuity_reference_path = shot_data.get("continuity_reference_path", "")
             shot.video_reference_manifest = json.dumps(shot_data.get("reference_manifest", []), ensure_ascii=False)
-            shot.reference_capability_warning = str(shot_data.get("continuity_profile", {}).get("reference_capability_warning", ""))
+            shot.reference_capability_warning = str(
+                shot_data.get("continuity_profile", {}).get("reference_capability_warning", "")
+            )
             shot.pose_reference_path = shot_data.get("pose_reference_path", "")
             shot.depth_reference_path = shot_data.get("depth_reference_path", "")
             shot.audio_path = audio_path
@@ -2640,7 +2698,6 @@ def _shot_update_payload(shot: Shot) -> dict:
         "consistency_report": _json_dict(getattr(shot, "consistency_report", "{}")),
         "storyboard_reference_manifest": _json_list_raw(getattr(shot, "storyboard_reference_manifest", "[]")),
         "video_reference_manifest": _json_list_raw(getattr(shot, "video_reference_manifest", "[]")),
-        "reference_capability_warning": getattr(shot, "reference_capability_warning", ""),
         "image_path": shot.image_path,
         "storyboard_path": shot.storyboard_path,
         "audio_path": shot.audio_path,
@@ -2648,7 +2705,9 @@ def _shot_update_payload(shot: Shot) -> dict:
         "last_frame_path": shot.last_frame_path,
         "scene_group_id": shot.scene_group_id,
         "reference_weights": _json_dict(shot.reference_weights),
-        "continuity_mode": normalize_continuity_mode(_json_dict(shot.continuity_profile).get("continuity_mode"), default=""),
+        "continuity_mode": normalize_continuity_mode(
+            _json_dict(shot.continuity_profile).get("continuity_mode"), default=""
+        ),
         "continuity_mode_source": _json_dict(shot.continuity_profile).get("continuity_mode_source", ""),
         "continuity_profile": _json_dict(shot.continuity_profile),
         "continuity_reference_path": shot.continuity_reference_path,
@@ -2710,14 +2769,18 @@ def _validate_asset_bindings(db: Session, shot: Shot, scene_asset_id, character_
     asset_project_id = _asset_project_id(db, shot.project_id)
     scene_id = str(scene_asset_id or "").strip()
     if scene_id:
-        scene = db.query(SceneAsset).filter(SceneAsset.id == scene_id, SceneAsset.project_id == asset_project_id).first()
+        scene = (
+            db.query(SceneAsset).filter(SceneAsset.id == scene_id, SceneAsset.project_id == asset_project_id).first()
+        )
         if not scene:
             raise HTTPException(status_code=400, detail="场景资产不属于该项目")
     ids = list(dict.fromkeys(str(item).strip() for item in (character_asset_ids or []) if str(item).strip()))
     if ids:
         found = {
             item.id
-            for item in db.query(Character).filter(Character.id.in_(ids), Character.project_id == asset_project_id).all()
+            for item in db.query(Character)
+            .filter(Character.id.in_(ids), Character.project_id == asset_project_id)
+            .all()
         }
         if found != set(ids):
             raise HTTPException(status_code=400, detail="角色资产不属于该项目")
@@ -2864,11 +2927,14 @@ def _reusable_audio_path(shot_id: str, version: int | None, audio_path: str | No
 def _can_reuse_existing_video(shot: Shot, force: bool = False) -> bool:
     if force or getattr(shot, "media_stale", False) or shot.status != "video_done" or not shot.video_path:
         return False
-    return existing_file(
-        shot.video_path,
-        minimum_size=4096,
-        allowed_roots=(settings.OUTPUT_DIR, settings.ASSETS_DIR, settings.DATA_DIR),
-    ) is not None
+    return (
+        existing_file(
+            shot.video_path,
+            minimum_size=4096,
+            allowed_roots=(settings.OUTPUT_DIR, settings.ASSETS_DIR, settings.DATA_DIR),
+        )
+        is not None
+    )
 
 
 def _invalidate_video_outputs(shot: Shot, reset_status: bool = True) -> None:
@@ -2968,7 +3034,8 @@ def _materialize_control_references(project_id: str, shot_data: dict, skill_conf
     assets = [
         asset
         for asset in (shot_data.get("reference_assets") or [])
-        if isinstance(asset, dict) and str(asset.get("type") or "") not in {"openpose_source_frame", "depth_source_frame"}
+        if isinstance(asset, dict)
+        and str(asset.get("type") or "") not in {"openpose_source_frame", "depth_source_frame"}
     ]
     shot_data["reference_assets"] = assets
 
@@ -2982,7 +3049,9 @@ def _storyboard_notes(shot: Shot, scenes: dict[str, dict]) -> str:
     ]
     if scene:
         parts.extend([scene.get("visual_prompt", ""), scene.get("description", "")])
-        parts.extend([scene.get("prop_lock", ""), scene.get("baseline_image_path", "") and "preserve scene baseline reference"])
+        parts.extend(
+            [scene.get("prop_lock", ""), scene.get("baseline_image_path", "") and "preserve scene baseline reference"]
+        )
         if scene.get("reference_images"):
             parts.append("strictly preserve the approved scene asset reference")
     if shot.visual_notes:
@@ -3022,7 +3091,9 @@ async def _ensure_scene_baselines(
         try:
             scene_payload = dict(scene)
             if skill_append:
-                scene_payload["visual_prompt"] = ", ".join(part for part in [scene.get("visual_prompt", ""), skill_append] if part)
+                scene_payload["visual_prompt"] = ", ".join(
+                    part for part in [scene.get("visual_prompt", ""), skill_append] if part
+                )
             ref_path = await image_service.generate_scene_baseline_reference(
                 scene=scene_payload,
                 style=style,
@@ -3047,7 +3118,9 @@ async def _ensure_scene_baselines(
             from services.error_reporter import log_failure
             from services.reference_readiness_service import mark_reference_failure
 
-            error_id = log_failure(exc, error_type=ERROR_STORYBOARD, context={"asset_type": "scene", "asset_id": scene_id})
+            error_id = log_failure(
+                exc, error_type=ERROR_STORYBOARD, context={"asset_type": "scene", "asset_id": scene_id}
+            )
             db = SessionLocal()
             try:
                 model = (
@@ -3086,7 +3159,15 @@ def _previous_reference_for_shot(db: Session, shot: Shot, prefer_last_frame: boo
     return str(decision.get("continuity_reference_path") or "")
 
 
-async def _progress(project_id: str, step: str, progress: int, message: str, *, job_keys: tuple[str, ...] = (), report: dict | None = None):
+async def _progress(
+    project_id: str,
+    step: str,
+    progress: int,
+    message: str,
+    *,
+    job_keys: tuple[str, ...] = (),
+    report: dict | None = None,
+):
     """推送项目进度，并把同一份进度写进任务中心的 durable 记录。
 
     ``job_keys`` 传候选键即可：只有真正持有当前 run token 的那个会写入成功，其余
@@ -3095,4 +3176,6 @@ async def _progress(project_id: str, step: str, progress: int, message: str, *, 
 
     for key in job_keys:
         update_job_progress(key, progress, current_step=step, message=message, report=report)
-    await ws_manager.send_to_project(project_id, {"type": "progress", "step": step, "progress": progress, "message": message})
+    await ws_manager.send_to_project(
+        project_id, {"type": "progress", "step": step, "progress": progress, "message": message}
+    )

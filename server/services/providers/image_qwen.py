@@ -16,7 +16,6 @@ from services.providers.image_common import extract_image_bytes, read_bounded_re
 from services.providers.usage import CAPABILITY_IMAGE, UsageMetadata
 from services.security import download_remote_bytes
 
-
 _DEFAULT_BASE = "https://dashscope.aliyuncs.com/api/v1"
 _DEFAULT_MODEL = "qwen-image-plus"
 
@@ -207,7 +206,7 @@ class QwenImageAdapter(BaseAdapter):
     def _api_base(self) -> str:
         base = (self.endpoint.base_url or _DEFAULT_BASE).rstrip("/")
         if base.endswith("/compatible-mode/v1"):
-            return f"{base[:-len('/compatible-mode/v1')]}/api/v1"
+            return f"{base[: -len('/compatible-mode/v1')]}/api/v1"
         if not base.endswith("/api/v1"):
             base = f"{base}/api/v1"
         return base

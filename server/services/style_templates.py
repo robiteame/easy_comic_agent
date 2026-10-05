@@ -3,7 +3,6 @@ from __future__ import annotations
 from config import settings
 from services.atomic_json import atomic_write_json, path_lock, read_json_file
 
-
 STYLE_TEMPLATES: dict[str, dict[str, str]] = {
     "anime": {
         "label": "日系写实漫",
@@ -91,7 +90,12 @@ def style_prompt_params(style: str | None) -> dict[str, str]:
 
 def style_options() -> list[dict[str, str]]:
     return [
-        {"value": key, "label": value["label"], "keywords": value.get("keywords", ""), "custom": key.startswith("custom_")}
+        {
+            "value": key,
+            "label": value["label"],
+            "keywords": value.get("keywords", ""),
+            "custom": key.startswith("custom_"),
+        }
         for key, value in _all_templates().items()
     ]
 

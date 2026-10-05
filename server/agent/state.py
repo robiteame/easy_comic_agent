@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from operator import add
-from typing import Annotated, Any, Literal, TypedDict
+from typing import Annotated, Literal, TypedDict
 
 
 def _merge_dicts(left: dict | None, right: dict | None) -> dict:

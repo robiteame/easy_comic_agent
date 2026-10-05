@@ -16,7 +16,7 @@ if str(_SERVER_DIR) not in sys.path:
 
 from PIL import Image  # noqa: E402
 
-from agent import graph, shot_work  # noqa: E402
+from agent import graph  # noqa: E402
 from agent import nodes as agent_nodes  # noqa: E402
 from agent.checkpoints import CheckpointStore  # noqa: E402
 from agent.contracts import (  # noqa: E402
@@ -56,10 +56,7 @@ class ContractAndStateMachineTests(unittest.TestCase):
             graph.GRAPH_STAGE_ORDER.index(StageName.AUDIO_PRODUCTION.value),
             graph.GRAPH_STAGE_ORDER.index(StageName.VIDEO_GENERATION.value),
         )
-        edges = {
-            (edge.source, edge.target, edge.data)
-            for edge in graph.build_graph().compile().get_graph().edges
-        }
+        edges = {(edge.source, edge.target, edge.data) for edge in graph.build_graph().compile().get_graph().edges}
         self.assertIn(("quality_decision", "audio_production", "next"), edges)
         self.assertIn(("audio_decision", "video_generation", "next"), edges)
         self.assertIn(("video_decision", "edit_composition", "next"), edges)
@@ -144,7 +141,9 @@ class DecisionRecoveryTests(unittest.TestCase):
 
     def test_dialogue_too_long_prefers_shot_split(self) -> None:
         candidates = recovery_candidates(
-            type("F", (), {"kind": FailureKind.DIALOGUE_TOO_LONG, "stage": StageName.STORYBOARD_DESIGN, "shot_id": "s1"})(),
+            type(
+                "F", (), {"kind": FailureKind.DIALOGUE_TOO_LONG, "stage": StageName.STORYBOARD_DESIGN, "shot_id": "s1"}
+            )(),
             quality=QualityProfileName.STANDARD,
         )
         self.assertEqual(candidates[0].strategy, RecoveryStrategy.SPLIT_SHOT)
@@ -342,7 +341,11 @@ class GraphIntegrationTests(unittest.TestCase):
             self.assertIsNotNone(selected)
             self.assertIn(
                 selected["strategy"],
-                {RecoveryStrategy.REVISE_PROMPT.value, RecoveryStrategy.SWITCH_PROVIDER.value, RecoveryStrategy.HUMAN_REVIEW.value},
+                {
+                    RecoveryStrategy.REVISE_PROMPT.value,
+                    RecoveryStrategy.SWITCH_PROVIDER.value,
+                    RecoveryStrategy.HUMAN_REVIEW.value,
+                },
             )
             self.assertEqual(fake_store.decisions()[-1]["stage"], StageName.DIRECTOR_PLANNING.value)
 
@@ -351,7 +354,16 @@ class GraphIntegrationTests(unittest.TestCase):
             fake_store = CheckpointStore("image-node", "auto", root=Path(root))
             image = _image(Path(root) / "ok.png")
 
-            async def fake_generate(shot_id, expected_version, *, project_id, provider_override="", preferred_size="", seed_override=None, recovery_revisions=None):
+            async def fake_generate(
+                shot_id,
+                expected_version,
+                *,
+                project_id,
+                provider_override="",
+                preferred_size="",
+                seed_override=None,
+                recovery_revisions=None,
+            ):
                 if shot_id == "bad":
                     raise RuntimeError("image generation failed")
                 return {"shot_id": shot_id, "shot_version": expected_version, "status": "succeeded", "path": image}

@@ -188,24 +188,27 @@ const AgentTracePanel: React.FC<AgentTracePanelProps> = ({ projectId, runId = 'a
         <p className="agent-trace-empty">没有决策记录（流程尚未触发恢复决策）。</p>
       ) : (
         <ol className="agent-trace-decisions">
-          {decisions.slice(-5).reverse().map((row) => (
-            <li key={row.traceId}>
-              <div className="agent-trace-decision-head">
-                <strong>{row.stageLabel}</strong>
-                <span className="agent-trace-decision-strategy">{row.selectedStrategyLabel}</span>
-                {row.provider ? <span className="agent-trace-decision-provider">{row.provider}</span> : null}
-                <span className="agent-trace-decision-cost">
-                  预计 {row.estimatedCostText} / {row.estimatedSecondsText}
-                </span>
-              </div>
-              <p className="agent-trace-decision-reason">{row.reason || row.failureMessage}</p>
-              {row.rejected.length > 0 && (
-                <p className="agent-trace-decision-rejected">
-                  淘汰：{row.rejected.map((item) => `${item.label}（${item.reason}）`).join('；')}
-                </p>
-              )}
-            </li>
-          ))}
+          {decisions
+            .slice(-5)
+            .reverse()
+            .map((row) => (
+              <li key={row.traceId}>
+                <div className="agent-trace-decision-head">
+                  <strong>{row.stageLabel}</strong>
+                  <span className="agent-trace-decision-strategy">{row.selectedStrategyLabel}</span>
+                  {row.provider ? <span className="agent-trace-decision-provider">{row.provider}</span> : null}
+                  <span className="agent-trace-decision-cost">
+                    预计 {row.estimatedCostText} / {row.estimatedSecondsText}
+                  </span>
+                </div>
+                <p className="agent-trace-decision-reason">{row.reason || row.failureMessage}</p>
+                {row.rejected.length > 0 && (
+                  <p className="agent-trace-decision-rejected">
+                    淘汰：{row.rejected.map((item) => `${item.label}（${item.reason}）`).join('；')}
+                  </p>
+                )}
+              </li>
+            ))}
         </ol>
       )}
 
@@ -279,17 +282,20 @@ const AgentTracePanel: React.FC<AgentTracePanelProps> = ({ projectId, runId = 'a
             <>
               <h4 className="agent-trace-subtitle">Prompt 修改（{prompts.length}）</h4>
               <ul className="agent-trace-prompts">
-                {prompts.slice(-6).reverse().map((row) => (
-                  <li key={row.key}>
-                    <span className="agent-trace-prompt-scope">
-                      {row.stageLabel} · {row.shotId}
-                    </span>
-                    <code>
-                      {row.field} {row.op} {row.valueText}
-                    </code>
-                    {row.reason ? <em>{row.reason}</em> : null}
-                  </li>
-                ))}
+                {prompts
+                  .slice(-6)
+                  .reverse()
+                  .map((row) => (
+                    <li key={row.key}>
+                      <span className="agent-trace-prompt-scope">
+                        {row.stageLabel} · {row.shotId}
+                      </span>
+                      <code>
+                        {row.field} {row.op} {row.valueText}
+                      </code>
+                      {row.reason ? <em>{row.reason}</em> : null}
+                    </li>
+                  ))}
               </ul>
             </>
           )}

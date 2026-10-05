@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BulbOutlined,
   CloseOutlined,
@@ -254,17 +255,14 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
     ]
   }, [jobs, currentProjectId])
 
-  const handleTabKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
-      const nextIndex = resolveWorkspaceTabIndex(event.key, index, SECTION_TABS.length)
-      if (nextIndex === null) return
-      event.preventDefault()
-      setSection(SECTION_TABS[nextIndex].id)
-      const node = tabRefs.current[nextIndex]
-      if (node) node.focus()
-    },
-    [],
-  )
+  const handleTabKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const nextIndex = resolveWorkspaceTabIndex(event.key, index, SECTION_TABS.length)
+    if (nextIndex === null) return
+    event.preventDefault()
+    setSection(SECTION_TABS[nextIndex].id)
+    const node = tabRefs.current[nextIndex]
+    if (node) node.focus()
+  }, [])
 
   const handleQueueAction = async (batchId: string, action: 'pause' | 'resume' | 'cancel' | 'retry') => {
     setBusyBatchId(batchId)
@@ -308,7 +306,9 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
           <span className="task-meta-chip">{job.job_type_label}</span>
           {job.stage && <span className="task-meta-chip">阶段 {job.stage}</span>}
           {job.batch_id && <span className="task-meta-chip">队列 {job.queue_position || 0}</span>}
-          {typeof job.priority === 'number' && job.batch_id && <span className="task-meta-chip">优先级 {job.priority}</span>}
+          {typeof job.priority === 'number' && job.batch_id && (
+            <span className="task-meta-chip">优先级 {job.priority}</span>
+          )}
           {job.project_id && <span className="task-meta-chip">项目 {job.project_id}</span>}
           <span className={job.cost.cost_known ? 'task-cost' : 'task-cost task-cost-unknown'}>
             成本 {jobCostComparisonText(job.cost)}
@@ -409,8 +409,16 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
                 size="small"
                 icon={<PlayCircleOutlined />}
                 onClick={() => {
-                  window.dispatchEvent(new CustomEvent('workspace:open-project', { detail: { projectId: job.project_id, shotId: job.shot_id } }))
-                  window.dispatchEvent(new CustomEvent('workspace:open-shot', { detail: { shotId: job.shot_id, projectId: job.project_id } }))
+                  window.dispatchEvent(
+                    new CustomEvent('workspace:open-project', {
+                      detail: { projectId: job.project_id, shotId: job.shot_id },
+                    }),
+                  )
+                  window.dispatchEvent(
+                    new CustomEvent('workspace:open-shot', {
+                      detail: { shotId: job.shot_id, projectId: job.project_id },
+                    }),
+                  )
                 }}
                 aria-label={'跳转到镜头 ' + job.shot_id}
               >
@@ -431,17 +439,31 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
             </Button>
           </Tooltip>
           {job.batch_id && (job.status === 'queued' || job.status === 'running') && (
-            <Button size="small" loading={busyBatchId === job.batch_id} onClick={() => void handleQueueAction(job.batch_id as string, job.paused ? 'resume' : 'pause')}>
+            <Button
+              size="small"
+              loading={busyBatchId === job.batch_id}
+              onClick={() => void handleQueueAction(job.batch_id as string, job.paused ? 'resume' : 'pause')}
+            >
               {job.paused ? '继续队列' : '暂停队列'}
             </Button>
           )}
           {job.batch_id && (job.status === 'failed' || job.status === 'cancelled' || job.status === 'interrupted') && (
-            <Button size="small" icon={<RedoOutlined />} loading={busyBatchId === job.batch_id} onClick={() => void handleQueueAction(job.batch_id as string, 'retry')}>
+            <Button
+              size="small"
+              icon={<RedoOutlined />}
+              loading={busyBatchId === job.batch_id}
+              onClick={() => void handleQueueAction(job.batch_id as string, 'retry')}
+            >
               重试队列
             </Button>
           )}
           {job.batch_id && job.status === 'running' && (
-            <Button size="small" icon={<StopOutlined />} loading={busyBatchId === job.batch_id} onClick={() => void handleQueueAction(job.batch_id as string, 'cancel')}>
+            <Button
+              size="small"
+              icon={<StopOutlined />}
+              loading={busyBatchId === job.batch_id}
+              onClick={() => void handleQueueAction(job.batch_id as string, 'cancel')}
+            >
               取消队列
             </Button>
           )}
@@ -463,548 +485,580 @@ const TaskCenter: React.FC<TaskCenterProps> = ({ open, onClose }) => {
         ref={panelRef}
         tabIndex={-1}
       >
-      <header className="task-center-head">
-        <div>
-          <span className="task-center-eyebrow">后台工作流</span>
-          <h2 className="task-center-title">任务中心</h2>
-          <p className="task-center-sub" aria-live="polite">
-            {connectionLabel(connectionState)}
-            {lastSyncedAt ? ' · 上次同步 ' + formatRelativeTime(new Date(lastSyncedAt).toISOString()) : ''}
-          </p>
-        </div>
-        <div className="task-center-head-actions">
-          <Tooltip title="刷新任务列表">
-            <Button
-              size="small"
-              icon={loading ? <LoadingOutlined /> : <ReloadOutlined />}
-              onClick={() => void sync()}
-              disabled={loading}
-              aria-label="刷新任务列表"
-            >
-              <span className="task-head-action-label">刷新</span>
-            </Button>
-          </Tooltip>
-          <Tooltip title="清理已结束的历史任务">
-            <Button
-              size="small"
-              icon={<DeleteOutlined />}
-              onClick={() => void cleanupHistory()}
-              disabled={busyJobId === '__cleanup__'}
-              aria-label="清理历史任务"
-            >
-              <span className="task-head-action-label">清理历史</span>
-            </Button>
-          </Tooltip>
-          <Tooltip title="关闭任务中心（任务会继续在后台运行）">
-            <Button size="small" type="text" icon={<CloseOutlined />} onClick={onClose} aria-label="关闭任务中心" />
-          </Tooltip>
-        </div>
-      </header>
+        <header className="task-center-head">
+          <div>
+            <span className="task-center-eyebrow">后台工作流</span>
+            <h2 className="task-center-title">任务中心</h2>
+            <p className="task-center-sub" aria-live="polite">
+              {connectionLabel(connectionState)}
+              {lastSyncedAt ? ' · 上次同步 ' + formatRelativeTime(new Date(lastSyncedAt).toISOString()) : ''}
+            </p>
+          </div>
+          <div className="task-center-head-actions">
+            <Tooltip title="刷新任务列表">
+              <Button
+                size="small"
+                icon={loading ? <LoadingOutlined /> : <ReloadOutlined />}
+                onClick={() => void sync()}
+                disabled={loading}
+                aria-label="刷新任务列表"
+              >
+                <span className="task-head-action-label">刷新</span>
+              </Button>
+            </Tooltip>
+            <Tooltip title="清理已结束的历史任务">
+              <Button
+                size="small"
+                icon={<DeleteOutlined />}
+                onClick={() => void cleanupHistory()}
+                disabled={busyJobId === '__cleanup__'}
+                aria-label="清理历史任务"
+              >
+                <span className="task-head-action-label">清理历史</span>
+              </Button>
+            </Tooltip>
+            <Tooltip title="关闭任务中心（任务会继续在后台运行）">
+              <Button size="small" type="text" icon={<CloseOutlined />} onClick={onClose} aria-label="关闭任务中心" />
+            </Tooltip>
+          </div>
+        </header>
 
-      <div className="task-center-summary" role="status" aria-live="polite">
-        <span className="task-summary-chip task-summary-chip-active">
-          <strong>{summary.activeCount}</strong>
-          <small>活动中</small>
-        </span>
-        <span className="task-summary-chip task-summary-chip-failed">
-          <strong>{summary.failedCount}</strong>
-          <small>失败</small>
-        </span>
-        <span className="task-summary-chip">
-          <strong>{summary.retryableCount}</strong>
-          <small>可重试</small>
-        </span>
-        <span className="task-summary-chip">
-          <strong>{summary.total}</strong>
-          <small>全部任务</small>
-        </span>
-        <span className="task-summary-chip task-summary-chip-cost">
-          <strong>{statsCost ? formatCostValue(statsCost.cost_micro, statsCost.cost_known, statsCost.currency) : '—'}</strong>
-          <small>项目累计成本</small>
-        </span>
-        {statsCost && statsCost.unknown_call_count > 0 && (
-          <span className="task-summary-chip task-summary-chip-warn">
-            {statsCost.unknown_call_count} 次调用{UNKNOWN_COST_TEXT}
+        <div className="task-center-summary" role="status" aria-live="polite">
+          <span className="task-summary-chip task-summary-chip-active">
+            <strong>{summary.activeCount}</strong>
+            <small>活动中</small>
           </span>
-        )}
-      </div>
-
-      <div className="task-center-filters">
-        <div className="task-filter-row task-filter-row-primary">
-          <label className="task-filter-field task-filter-project">
-            <span className="task-filter-label">项目范围</span>
-            <Select
-              size="small"
-              value={filters.projectId}
-              options={projectOptions}
-              onChange={(value: string) => setFilters({ projectId: value || '' })}
-              aria-label="按项目筛选任务"
-            />
-          </label>
-          <label className="task-filter-field task-filter-search">
-            <span className="task-filter-label">搜索任务</span>
-            <Input
-              size="small"
-              value={filters.search}
-              allowClear
-              placeholder="名称、项目或错误信息"
-              onChange={(event) => setFilters({ search: event.target.value })}
-              aria-label="搜索任务"
-            />
-          </label>
+          <span className="task-summary-chip task-summary-chip-failed">
+            <strong>{summary.failedCount}</strong>
+            <small>失败</small>
+          </span>
+          <span className="task-summary-chip">
+            <strong>{summary.retryableCount}</strong>
+            <small>可重试</small>
+          </span>
+          <span className="task-summary-chip">
+            <strong>{summary.total}</strong>
+            <small>全部任务</small>
+          </span>
+          <span className="task-summary-chip task-summary-chip-cost">
+            <strong>
+              {statsCost ? formatCostValue(statsCost.cost_micro, statsCost.cost_known, statsCost.currency) : '—'}
+            </strong>
+            <small>项目累计成本</small>
+          </span>
+          {statsCost && statsCost.unknown_call_count > 0 && (
+            <span className="task-summary-chip task-summary-chip-warn">
+              {statsCost.unknown_call_count} 次调用{UNKNOWN_COST_TEXT}
+            </span>
+          )}
         </div>
-        <div className="task-filter-row task-filter-row-secondary">
-          <label className="task-filter-field">
-            <span className="task-filter-label">状态</span>
-            <Select
-              size="small"
-              mode="multiple"
-              allowClear
-              value={filters.statuses}
-              options={statusOptions}
-              placeholder="全部状态"
-              onChange={(value: JobStatus[]) => setFilters({ statuses: value || [] })}
-              aria-label="按状态筛选任务"
-            />
-          </label>
-          <label className="task-filter-field">
-            <span className="task-filter-label">任务类型</span>
-            <Select
-              size="small"
-              mode="multiple"
-              allowClear
-              value={filters.jobTypes}
-              options={typeOptions}
-              placeholder="全部类型"
-              onChange={(value: JobType[]) => setFilters({ jobTypes: value || [] })}
-              aria-label="按类型筛选任务"
-            />
-          </label>
-          <label className="task-filter-field">
-            <span className="task-filter-label">失败原因</span>
-            <Select
-              size="small"
-              mode="multiple"
-              allowClear
-              value={filters.errorCodes}
-              options={FAILURE_CATEGORY_OPTIONS}
-              placeholder="全部原因"
-              onChange={(value: string[]) => setFilters({ errorCodes: value || [] })}
-              aria-label="按失败原因筛选任务"
-            />
-          </label>
-          <label className="task-filter-field">
-            <span className="task-filter-label">排序方式</span>
-            <Select
-              size="small"
-              value={sortKey}
-              options={(Object.keys(SORT_LABELS) as JobSortKey[]).map((key) => ({ value: key, label: SORT_LABELS[key] }))}
-              onChange={(value: JobSortKey) => setSortKey(value)}
-              aria-label="任务排序方式"
-            />
-          </label>
-          <div className="task-filter-actions">
-            <Button size="small" type={filters.onlyActive ? 'primary' : 'default'} onClick={() => setFilters({ onlyActive: !filters.onlyActive })} aria-pressed={filters.onlyActive}>
-              仅看进行中
-            </Button>
-            <Button size="small" onClick={resetFilters} disabled={!filtersActive} aria-label="重置筛选条件">
-              重置
-            </Button>
+
+        <div className="task-center-filters">
+          <div className="task-filter-row task-filter-row-primary">
+            <label className="task-filter-field task-filter-project">
+              <span className="task-filter-label">项目范围</span>
+              <Select
+                size="small"
+                value={filters.projectId}
+                options={projectOptions}
+                onChange={(value: string) => setFilters({ projectId: value || '' })}
+                aria-label="按项目筛选任务"
+              />
+            </label>
+            <label className="task-filter-field task-filter-search">
+              <span className="task-filter-label">搜索任务</span>
+              <Input
+                size="small"
+                value={filters.search}
+                allowClear
+                placeholder="名称、项目或错误信息"
+                onChange={(event) => setFilters({ search: event.target.value })}
+                aria-label="搜索任务"
+              />
+            </label>
+          </div>
+          <div className="task-filter-row task-filter-row-secondary">
+            <label className="task-filter-field">
+              <span className="task-filter-label">状态</span>
+              <Select
+                size="small"
+                mode="multiple"
+                allowClear
+                value={filters.statuses}
+                options={statusOptions}
+                placeholder="全部状态"
+                onChange={(value: JobStatus[]) => setFilters({ statuses: value || [] })}
+                aria-label="按状态筛选任务"
+              />
+            </label>
+            <label className="task-filter-field">
+              <span className="task-filter-label">任务类型</span>
+              <Select
+                size="small"
+                mode="multiple"
+                allowClear
+                value={filters.jobTypes}
+                options={typeOptions}
+                placeholder="全部类型"
+                onChange={(value: JobType[]) => setFilters({ jobTypes: value || [] })}
+                aria-label="按类型筛选任务"
+              />
+            </label>
+            <label className="task-filter-field">
+              <span className="task-filter-label">失败原因</span>
+              <Select
+                size="small"
+                mode="multiple"
+                allowClear
+                value={filters.errorCodes}
+                options={FAILURE_CATEGORY_OPTIONS}
+                placeholder="全部原因"
+                onChange={(value: string[]) => setFilters({ errorCodes: value || [] })}
+                aria-label="按失败原因筛选任务"
+              />
+            </label>
+            <label className="task-filter-field">
+              <span className="task-filter-label">排序方式</span>
+              <Select
+                size="small"
+                value={sortKey}
+                options={(Object.keys(SORT_LABELS) as JobSortKey[]).map((key) => ({
+                  value: key,
+                  label: SORT_LABELS[key],
+                }))}
+                onChange={(value: JobSortKey) => setSortKey(value)}
+                aria-label="任务排序方式"
+              />
+            </label>
+            <div className="task-filter-actions">
+              <Button
+                size="small"
+                type={filters.onlyActive ? 'primary' : 'default'}
+                onClick={() => setFilters({ onlyActive: !filters.onlyActive })}
+                aria-pressed={filters.onlyActive}
+              >
+                仅看进行中
+              </Button>
+              <Button size="small" onClick={resetFilters} disabled={!filtersActive} aria-label="重置筛选条件">
+                重置
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="task-center-tabs" role="tablist" aria-label="任务分组">
-        {SECTION_TABS.map((tab, index) => (
-          <button
-            key={tab.id}
-            type="button"
-            ref={(node) => {
-              tabRefs.current[index] = node
-            }}
-            {...sectionTabAriaProps(tab.id, section)}
-            className={section === tab.id ? 'task-tab active' : 'task-tab'}
-            onClick={() => setSection(tab.id)}
-            onKeyDown={(event) => handleTabKeyDown(event, index)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {notice && (
-        <div className="task-center-notice" role="status">
-          {notice}
-          <button type="button" onClick={dismissNotice} aria-label="关闭提示">
-            ×
-          </button>
-        </div>
-      )}
-      {error && (
-        <div className="task-center-error" role="alert">
-          {error}
-        </div>
-      )}
-
-      <div
-        className="task-center-body"
-        id={SECTION_PANEL_ID}
-        role="tabpanel"
-        aria-labelledby={SECTION_TAB_ID_PREFIX + section}
-        tabIndex={0}
-      >
-        <div className="task-center-list-column">
-          {loading && !jobs.length && (
-            <div className="task-center-status" role="status">
-              <Spin size="small" /> 正在加载任务…
-            </div>
-          )}
-
-          {!loading && !hasVisible && (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={emptyStateText(jobs.length > 0, filtersActive)}
-            />
-          )}
-
-          {visibleSections.map((key) => {
-            const items = sections[key]
-            if (items.length === 0) return null
-            const categoryChips =
-              key === 'failed' && failedCategoryCounts.length > 0 && failedCategoryCounts.length <= 4
-                ? failedCategoryCounts
-                : []
-            return (
-              <section key={key} className="task-section" aria-label={SECTION_TITLES[key]}>
-                <h3 className="task-section-title">
-                  {SECTION_TITLES[key]}
-                  <span className="task-section-count">{items.length}</span>
-                  {categoryChips.map((item) => (
-                    <button
-                      key={item.code}
-                      type="button"
-                      className={
-                        'task-cat-chip task-cat-chip-' +
-                        errorCodeTone(item.code) +
-                        (filters.errorCodes.indexOf(item.code) >= 0 ? ' task-cat-chip-active' : '')
-                      }
-                      title={'按「' + item.label + '」筛选失败任务'}
-                      onClick={() =>
-                        setFilters({
-                          errorCodes:
-                            filters.errorCodes.indexOf(item.code) >= 0
-                              ? filters.errorCodes.filter((code) => code !== item.code)
-                              : [...filters.errorCodes, item.code],
-                        })
-                      }
-                      aria-pressed={filters.errorCodes.indexOf(item.code) >= 0}
-                    >
-                      {item.label} ×{item.count}
-                    </button>
-                  ))}
-                </h3>
-                <ul className="task-list" role="list">
-                  {items.map(renderJob)}
-                </ul>
-              </section>
-            )
-          })}
+        <div className="task-center-tabs" role="tablist" aria-label="任务分组">
+          {SECTION_TABS.map((tab, index) => (
+            <button
+              key={tab.id}
+              type="button"
+              ref={(node) => {
+                tabRefs.current[index] = node
+              }}
+              {...sectionTabAriaProps(tab.id, section)}
+              className={section === tab.id ? 'task-tab active' : 'task-tab'}
+              onClick={() => setSection(tab.id)}
+              onKeyDown={(event) => handleTabKeyDown(event, index)}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
-        <div className="task-center-detail-column">
-          {selectedJobId ? (
-          <section className="task-detail" id="task-center-detail" aria-label="任务详情" tabIndex={0}>
-            <h3 className="task-section-title">任务详情</h3>
-            {detailLoading && <div className="task-center-status"><Spin size="small" /> 正在加载详情…</div>}
-            {!detailLoading && selectedJob && (
-              <>
-                <dl className="task-detail-grid">
-                  <dt>任务名称</dt>
-                  <dd>{selectedJob.display_name}</dd>
-                  <dt>任务类型</dt>
-                  <dd>{selectedJob.job_type_label}</dd>
-                  <dt>所属项目</dt>
-                  <dd>{selectedJob.project_id || '—'}</dd>
-                  <dt>当前状态</dt>
-                  <dd>{selectedJob.status_label}</dd>
-                  <dt>当前步骤</dt>
-                  <dd>{stepText(selectedJob)}</dd>
-                  <dt>进度</dt>
-                  <dd>{progressText(selectedJob)}</dd>
-                  <dt>已运行时长</dt>
-                  <dd>{formatDuration(selectedJob.duration_seconds)}</dd>
-                  <dt>创建时间</dt>
-                  <dd>{selectedJob.created_at || '—'}</dd>
-                  <dt>开始时间</dt>
-                  <dd>{selectedJob.started_at || '—'}</dd>
-                  <dt>更新时间</dt>
-                  <dd>{selectedJob.updated_at || '—'}</dd>
-                  <dt>完成时间</dt>
-                  <dd>{selectedJob.finished_at || '—'}</dd>
-                  <dt>尝试次数</dt>
-                  <dd>
-                    第 {selectedJob.attempt} 次
-                    {selectedJob.retry_relationship?.retry_of_attempt
-                      ? '（重试自第 ' + selectedJob.retry_relationship.retry_of_attempt + ' 次）'
-                      : ''}
-                  </dd>
-                </dl>
-                {selectedJob.report?.items && (
-                  <div className="task-report-block" role="note">
-                    <div className="task-report-title">一致性参考结果</div>
-                    <div className="task-report-summary">
-                      状态：{selectedJob.report.status || '未知'}
-                      {selectedJob.report.shot_range ? ` · ${selectedJob.report.shot_range}` : ''}
-                      {selectedJob.report.affected_shot_count ? ` · 影响 ${selectedJob.report.affected_shot_count} 个镜头` : ''}
-                    </div>
-                    <ul>
-                      {(selectedJob.report.items as any[]).filter((item) => item.status !== 'ready').map((item) => (
-                        <li key={`${item.kind}:${item.asset_id}`}>
-                          <strong>{item.name || item.asset_id}</strong>
-                          <span>：{item.status}</span>
-                          {item.shot_range ? <span>，{item.shot_range}</span> : null}
-                          {item.failure_reason ? <span>，{item.failure_reason}</span> : null}
-                          {item.error_id ? <span>（错误编号 {item.error_id}）</span> : null}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {(selectedJob.error_message || selectedJob.error_detail) && (
-                  <div className="task-error-block" role="note">
-                    <div className="task-error-block-head">
-                      <span className={'task-error-code task-error-code-' + errorCodeTone(effectiveErrorCode(selectedJob))}>
-                        {errorCategoryLabel(selectedJob) || '任务失败'}
-                      </span>
-                      <span className="task-error-code-id">{effectiveErrorCode(selectedJob) || 'job_failed'}</span>
-                    </div>
-                    <p className="task-error-text">{errorHeadline(selectedJob)}</p>
-                    {(selectedJob.error_detail?.suggestion ||
-                      (isTruncationErrorCode(effectiveErrorCode(selectedJob)) ? TRUNCATION_ADVICE : '')) && (
-                      <p className="task-error-advice">
-                        <BulbOutlined aria-hidden="true" /> 修复建议：
-                        {selectedJob.error_detail?.suggestion || TRUNCATION_ADVICE}
-                      </p>
-                    )}
-                    {selectedJob.error_detail?.summary &&
-                      selectedJob.error_message &&
-                      selectedJob.error_detail.summary !== selectedJob.error_message && (
-                        <details className="task-error-raw">
-                          <summary>原始错误信息</summary>
-                          <pre>{selectedJob.error_message}</pre>
-                        </details>
-                      )}
-                    {selectedJob.error_detail?.source && (
-                      <p className="task-error-source">
-                        {selectedJob.error_detail.source === 'llm'
-                          ? '原因由 AI 自动识别' +
-                            (selectedJob.error_detail.model ? '（' + selectedJob.error_detail.model + '）' : '')
-                          : '原因由规则自动识别'}
-                      </p>
-                    )}
-                  </div>
-                )}
-                <h4 className="task-detail-subtitle">历次尝试</h4>
-                <ol className="task-attempt-list">
-                  {(selectedJob.attempts || []).map((attempt) => (
-                    <li key={attempt.id}>
-                      <span>第 {attempt.attempt} 次</span>
-                      <span>{STATUS_LABELS[attempt.status] || attempt.status}</span>
-                      <span>{formatDuration(attempt.duration_seconds)}</span>
-                      <span>{formatRelativeTime(attempt.updated_at)}</span>
-                      {attempt.error_message && (
-                        <em>
-                          {attempt.error_code_label ? attempt.error_code_label + '：' : ''}
-                          {attempt.error_message}
-                        </em>
-                      )}
-                    </li>
-                  ))}
-                </ol>
-                {selectedJob.project_id && (
-                  <details className="task-agent-trace">
-                    <summary>Agent 追踪（阶段 · 决策 · 候选 · 成本）</summary>
-                    <AgentTracePanel projectId={selectedJob.project_id} />
-                  </details>
-                )}
-                <h4 className="task-detail-subtitle">成本明细</h4>
-                {costDetailLoading && (
+        {notice && (
+          <div className="task-center-notice" role="status">
+            {notice}
+            <button type="button" onClick={dismissNotice} aria-label="关闭提示">
+              ×
+            </button>
+          </div>
+        )}
+        {error && (
+          <div className="task-center-error" role="alert">
+            {error}
+          </div>
+        )}
+
+        <div
+          className="task-center-body"
+          id={SECTION_PANEL_ID}
+          role="tabpanel"
+          aria-labelledby={SECTION_TAB_ID_PREFIX + section}
+          tabIndex={0}
+        >
+          <div className="task-center-list-column">
+            {loading && !jobs.length && (
+              <div className="task-center-status" role="status">
+                <Spin size="small" /> 正在加载任务…
+              </div>
+            )}
+
+            {!loading && !hasVisible && (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={emptyStateText(jobs.length > 0, filtersActive)}
+              />
+            )}
+
+            {visibleSections.map((key) => {
+              const items = sections[key]
+              if (items.length === 0) return null
+              const categoryChips =
+                key === 'failed' && failedCategoryCounts.length > 0 && failedCategoryCounts.length <= 4
+                  ? failedCategoryCounts
+                  : []
+              return (
+                <section key={key} className="task-section" aria-label={SECTION_TITLES[key]}>
+                  <h3 className="task-section-title">
+                    {SECTION_TITLES[key]}
+                    <span className="task-section-count">{items.length}</span>
+                    {categoryChips.map((item) => (
+                      <button
+                        key={item.code}
+                        type="button"
+                        className={
+                          'task-cat-chip task-cat-chip-' +
+                          errorCodeTone(item.code) +
+                          (filters.errorCodes.indexOf(item.code) >= 0 ? ' task-cat-chip-active' : '')
+                        }
+                        title={'按「' + item.label + '」筛选失败任务'}
+                        onClick={() =>
+                          setFilters({
+                            errorCodes:
+                              filters.errorCodes.indexOf(item.code) >= 0
+                                ? filters.errorCodes.filter((code) => code !== item.code)
+                                : [...filters.errorCodes, item.code],
+                          })
+                        }
+                        aria-pressed={filters.errorCodes.indexOf(item.code) >= 0}
+                      >
+                        {item.label} ×{item.count}
+                      </button>
+                    ))}
+                  </h3>
+                  <ul className="task-list" role="list">
+                    {items.map(renderJob)}
+                  </ul>
+                </section>
+              )
+            })}
+          </div>
+
+          <div className="task-center-detail-column">
+            {selectedJobId ? (
+              <section className="task-detail" id="task-center-detail" aria-label="任务详情" tabIndex={0}>
+                <h3 className="task-section-title">任务详情</h3>
+                {detailLoading && (
                   <div className="task-center-status">
-                    <Spin size="small" /> 正在加载成本明细…
+                    <Spin size="small" /> 正在加载详情…
                   </div>
                 )}
-                {costDetailError && (
-                  <p className="task-error" role="note">
-                    {costDetailError}
-                  </p>
-                )}
-                {!costDetailLoading && !costDetailError && (
+                {!detailLoading && selectedJob && (
                   <>
                     <dl className="task-detail-grid">
-                      <dt>实际成本</dt>
+                      <dt>任务名称</dt>
+                      <dd>{selectedJob.display_name}</dd>
+                      <dt>任务类型</dt>
+                      <dd>{selectedJob.job_type_label}</dd>
+                      <dt>所属项目</dt>
+                      <dd>{selectedJob.project_id || '—'}</dd>
+                      <dt>当前状态</dt>
+                      <dd>{selectedJob.status_label}</dd>
+                      <dt>当前步骤</dt>
+                      <dd>{stepText(selectedJob)}</dd>
+                      <dt>进度</dt>
+                      <dd>{progressText(selectedJob)}</dd>
+                      <dt>已运行时长</dt>
+                      <dd>{formatDuration(selectedJob.duration_seconds)}</dd>
+                      <dt>创建时间</dt>
+                      <dd>{selectedJob.created_at || '—'}</dd>
+                      <dt>开始时间</dt>
+                      <dd>{selectedJob.started_at || '—'}</dd>
+                      <dt>更新时间</dt>
+                      <dd>{selectedJob.updated_at || '—'}</dd>
+                      <dt>完成时间</dt>
+                      <dd>{selectedJob.finished_at || '—'}</dd>
+                      <dt>尝试次数</dt>
                       <dd>
-                        {costDetail
-                          ? formatCostValue(
-                              costDetail.summary.cost_micro,
-                              costDetail.summary.cost_known,
-                              costDetail.summary.currency,
-                            )
-                          : jobCostText(selectedJob.cost)}
-                        {(costDetail ? costDetail.summary.call_count : selectedJob.cost.call_count) === 0 && (
-                          <em className="task-cost-hint">（{NO_USAGE_TEXT}）</em>
-                        )}
-                      </dd>
-                      <dt>启动前估算</dt>
-                      <dd>
-                        {costDetail?.estimate
-                          ? estimateCostText(costDetail.estimate) +
-                            ' · 预计 ' +
-                            formatDurationText(costDetail.estimate.estimated_seconds) +
-                            '（' + durationSourceLabel(costDetail.estimate.duration_source) + '）'
-                          : '没有估算记录' }
-                      </dd>
-                      <dt>调用次数</dt>
-                      <dd>
-                        {costDetail ? costDetail.summary.call_count : selectedJob.cost.call_count} 次
-                        {costDetail && costDetail.summary.unknown_call_count > 0
-                          ? ' · ' + costDetail.summary.unknown_call_count + ' 次成本未知'
+                        第 {selectedJob.attempt} 次
+                        {selectedJob.retry_relationship?.retry_of_attempt
+                          ? '（重试自第 ' + selectedJob.retry_relationship.retry_of_attempt + ' 次）'
                           : ''}
-                        {costDetail && costDetail.summary.failed_call_count > 0
-                          ? ' · 失败 ' + costDetail.summary.failed_call_count + ' 次'
-                          : ''}
-                      </dd>
-                      <dt>供应商调用耗时</dt>
-                      <dd>
-                        {formatMillisecondsText(
-                          costDetail ? costDetail.summary.duration_ms : selectedJob.cost.provider_seconds * 1000,
-                        )}
                       </dd>
                     </dl>
-
-                    <h4 className="task-detail-subtitle">逐能力成本</h4>
-                    {!costDetail || costDetail.summary.by_capability.length === 0 ? (
-                      <p className="task-message">这次任务没有落库的调用记录（{NO_USAGE_TEXT}）。</p>
-                    ) : (
-                      <table className="task-cost-table">
-                        <thead>
-                          <tr>
-                            <th>能力</th>
-                            <th>调用</th>
-                            <th>数量</th>
-                            <th>成本</th>
-                            <th>耗时</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {costDetail.summary.by_capability.map((entry) => (
-                            <tr key={entry.capability}>
-                              <td>{entry.label}</td>
-                              <td>
-                                {entry.call_count} 次
-                                {entry.unknown_call_count > 0 ? '（' + entry.unknown_call_count + ' 次未知）' : ''}
-                              </td>
-                              <td>
-                                {entry.quantity} {entry.base_unit || '单位'}
-                                {entry.secondary_quantity > 0 ? ' + ' + entry.secondary_quantity + ' 输出 token' : ''}
-                              </td>
-                              <td>{formatCostValue(entry.cost_micro, entry.cost_known, entry.currency)}</td>
-                              <td>{formatDurationText(entry.seconds)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-
-                    {costDetail?.estimate && costDetail.estimate.components.length > 0 && (
-                      <>
-                        <h4 className="task-detail-subtitle">估算拆解（启动前）</h4>
-                        <table className="task-cost-table">
-                          <thead>
-                            <tr>
-                              <th>环节</th>
-                              <th>模型</th>
-                              <th>数量</th>
-                              <th>预计成本</th>
-                              <th>预计耗时</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {costDetail.estimate.components.map((component, index) => (
-                              <tr key={component.capability + '-' + index}>
-                                <td>{component.component_label || component.label}</td>
-                                <td>{[component.provider, component.model].filter(Boolean).join(' / ') || '默认'}</td>
-                                <td>
-                                  {component.quantity} {component.base_unit || '单位'}
-                                </td>
-                                <td>
-                                  {component.cost_known && component.cost_micro !== null
-                                    ? formatCostValue(component.cost_micro, true, costDetail.estimate?.currency)
-                                    : UNKNOWN_COST_TEXT}
-                                </td>
-                                <td>{formatDurationText(component.estimated_seconds)}</td>
-                              </tr>
+                    {selectedJob.report?.items && (
+                      <div className="task-report-block" role="note">
+                        <div className="task-report-title">一致性参考结果</div>
+                        <div className="task-report-summary">
+                          状态：{selectedJob.report.status || '未知'}
+                          {selectedJob.report.shot_range ? ` · ${selectedJob.report.shot_range}` : ''}
+                          {selectedJob.report.affected_shot_count
+                            ? ` · 影响 ${selectedJob.report.affected_shot_count} 个镜头`
+                            : ''}
+                        </div>
+                        <ul>
+                          {(selectedJob.report.items as any[])
+                            .filter((item) => item.status !== 'ready')
+                            .map((item) => (
+                              <li key={`${item.kind}:${item.asset_id}`}>
+                                <strong>{item.name || item.asset_id}</strong>
+                                <span>：{item.status}</span>
+                                {item.shot_range ? <span>，{item.shot_range}</span> : null}
+                                {item.failure_reason ? <span>，{item.failure_reason}</span> : null}
+                                {item.error_id ? <span>（错误编号 {item.error_id}）</span> : null}
+                              </li>
                             ))}
-                          </tbody>
-                        </table>
-                      </>
+                        </ul>
+                      </div>
                     )}
-
-                    {costDetail?.estimate && costDetail.estimate.unknown_components.length > 0 && (
-                      <p className="task-message" role="note">
-                        未知成本原因：{unknownCostReason(costDetail.estimate.unknown_components)}
+                    {(selectedJob.error_message || selectedJob.error_detail) && (
+                      <div className="task-error-block" role="note">
+                        <div className="task-error-block-head">
+                          <span
+                            className={
+                              'task-error-code task-error-code-' + errorCodeTone(effectiveErrorCode(selectedJob))
+                            }
+                          >
+                            {errorCategoryLabel(selectedJob) || '任务失败'}
+                          </span>
+                          <span className="task-error-code-id">{effectiveErrorCode(selectedJob) || 'job_failed'}</span>
+                        </div>
+                        <p className="task-error-text">{errorHeadline(selectedJob)}</p>
+                        {(selectedJob.error_detail?.suggestion ||
+                          (isTruncationErrorCode(effectiveErrorCode(selectedJob)) ? TRUNCATION_ADVICE : '')) && (
+                          <p className="task-error-advice">
+                            <BulbOutlined aria-hidden="true" /> 修复建议：
+                            {selectedJob.error_detail?.suggestion || TRUNCATION_ADVICE}
+                          </p>
+                        )}
+                        {selectedJob.error_detail?.summary &&
+                          selectedJob.error_message &&
+                          selectedJob.error_detail.summary !== selectedJob.error_message && (
+                            <details className="task-error-raw">
+                              <summary>原始错误信息</summary>
+                              <pre>{selectedJob.error_message}</pre>
+                            </details>
+                          )}
+                        {selectedJob.error_detail?.source && (
+                          <p className="task-error-source">
+                            {selectedJob.error_detail.source === 'llm'
+                              ? '原因由 AI 自动识别' +
+                                (selectedJob.error_detail.model ? '（' + selectedJob.error_detail.model + '）' : '')
+                              : '原因由规则自动识别'}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <h4 className="task-detail-subtitle">历次尝试</h4>
+                    <ol className="task-attempt-list">
+                      {(selectedJob.attempts || []).map((attempt) => (
+                        <li key={attempt.id}>
+                          <span>第 {attempt.attempt} 次</span>
+                          <span>{STATUS_LABELS[attempt.status] || attempt.status}</span>
+                          <span>{formatDuration(attempt.duration_seconds)}</span>
+                          <span>{formatRelativeTime(attempt.updated_at)}</span>
+                          {attempt.error_message && (
+                            <em>
+                              {attempt.error_code_label ? attempt.error_code_label + '：' : ''}
+                              {attempt.error_message}
+                            </em>
+                          )}
+                        </li>
+                      ))}
+                    </ol>
+                    {selectedJob.project_id && (
+                      <details className="task-agent-trace">
+                        <summary>Agent 追踪（阶段 · 决策 · 候选 · 成本）</summary>
+                        <AgentTracePanel projectId={selectedJob.project_id} />
+                      </details>
+                    )}
+                    <h4 className="task-detail-subtitle">成本明细</h4>
+                    {costDetailLoading && (
+                      <div className="task-center-status">
+                        <Spin size="small" /> 正在加载成本明细…
+                      </div>
+                    )}
+                    {costDetailError && (
+                      <p className="task-error" role="note">
+                        {costDetailError}
                       </p>
                     )}
-
-                    {costDetail && costDetail.records.items.length > 0 && (
+                    {!costDetailLoading && !costDetailError && (
                       <>
-                        <h4 className="task-detail-subtitle">调用记录（含失败调用）</h4>
-                        <table className="task-cost-table">
-                          <thead>
-                            <tr>
-                              <th>时间</th>
-                              <th>能力</th>
-                              <th>状态</th>
-                              <th>数量</th>
-                              <th>成本</th>
-                              <th>耗时</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {costDetail.records.items.slice(0, 20).map((record) => (
-                              <tr key={record.id}>
-                                <td>{formatRelativeTime(record.created_at)}</td>
-                                <td>{record.capability_label || record.capability}</td>
-                                <td>
-                                  {record.status === 'succeeded' ? '成功' : record.status === 'failed' ? '失败' : '已取消'}
-                                </td>
-                                <td>
-                                  {record.quantity} {record.base_unit || '单位'}
-                                </td>
-                                <td>
-                                  {formatCostValue(record.cost_micro, record.cost_known, record.currency)}
-                                  {record.cost_source === 'local' ? '（本地）' : ''}
-                                </td>
-                                <td>{formatMillisecondsText(record.duration_ms)}</td>
+                        <dl className="task-detail-grid">
+                          <dt>实际成本</dt>
+                          <dd>
+                            {costDetail
+                              ? formatCostValue(
+                                  costDetail.summary.cost_micro,
+                                  costDetail.summary.cost_known,
+                                  costDetail.summary.currency,
+                                )
+                              : jobCostText(selectedJob.cost)}
+                            {(costDetail ? costDetail.summary.call_count : selectedJob.cost.call_count) === 0 && (
+                              <em className="task-cost-hint">（{NO_USAGE_TEXT}）</em>
+                            )}
+                          </dd>
+                          <dt>启动前估算</dt>
+                          <dd>
+                            {costDetail?.estimate
+                              ? estimateCostText(costDetail.estimate) +
+                                ' · 预计 ' +
+                                formatDurationText(costDetail.estimate.estimated_seconds) +
+                                '（' +
+                                durationSourceLabel(costDetail.estimate.duration_source) +
+                                '）'
+                              : '没有估算记录'}
+                          </dd>
+                          <dt>调用次数</dt>
+                          <dd>
+                            {costDetail ? costDetail.summary.call_count : selectedJob.cost.call_count} 次
+                            {costDetail && costDetail.summary.unknown_call_count > 0
+                              ? ' · ' + costDetail.summary.unknown_call_count + ' 次成本未知'
+                              : ''}
+                            {costDetail && costDetail.summary.failed_call_count > 0
+                              ? ' · 失败 ' + costDetail.summary.failed_call_count + ' 次'
+                              : ''}
+                          </dd>
+                          <dt>供应商调用耗时</dt>
+                          <dd>
+                            {formatMillisecondsText(
+                              costDetail ? costDetail.summary.duration_ms : selectedJob.cost.provider_seconds * 1000,
+                            )}
+                          </dd>
+                        </dl>
+
+                        <h4 className="task-detail-subtitle">逐能力成本</h4>
+                        {!costDetail || costDetail.summary.by_capability.length === 0 ? (
+                          <p className="task-message">这次任务没有落库的调用记录（{NO_USAGE_TEXT}）。</p>
+                        ) : (
+                          <table className="task-cost-table">
+                            <thead>
+                              <tr>
+                                <th>能力</th>
+                                <th>调用</th>
+                                <th>数量</th>
+                                <th>成本</th>
+                                <th>耗时</th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody>
+                              {costDetail.summary.by_capability.map((entry) => (
+                                <tr key={entry.capability}>
+                                  <td>{entry.label}</td>
+                                  <td>
+                                    {entry.call_count} 次
+                                    {entry.unknown_call_count > 0 ? '（' + entry.unknown_call_count + ' 次未知）' : ''}
+                                  </td>
+                                  <td>
+                                    {entry.quantity} {entry.base_unit || '单位'}
+                                    {entry.secondary_quantity > 0
+                                      ? ' + ' + entry.secondary_quantity + ' 输出 token'
+                                      : ''}
+                                  </td>
+                                  <td>{formatCostValue(entry.cost_micro, entry.cost_known, entry.currency)}</td>
+                                  <td>{formatDurationText(entry.seconds)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+
+                        {costDetail?.estimate && costDetail.estimate.components.length > 0 && (
+                          <>
+                            <h4 className="task-detail-subtitle">估算拆解（启动前）</h4>
+                            <table className="task-cost-table">
+                              <thead>
+                                <tr>
+                                  <th>环节</th>
+                                  <th>模型</th>
+                                  <th>数量</th>
+                                  <th>预计成本</th>
+                                  <th>预计耗时</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {costDetail.estimate.components.map((component, index) => (
+                                  <tr key={component.capability + '-' + index}>
+                                    <td>{component.component_label || component.label}</td>
+                                    <td>
+                                      {[component.provider, component.model].filter(Boolean).join(' / ') || '默认'}
+                                    </td>
+                                    <td>
+                                      {component.quantity} {component.base_unit || '单位'}
+                                    </td>
+                                    <td>
+                                      {component.cost_known && component.cost_micro !== null
+                                        ? formatCostValue(component.cost_micro, true, costDetail.estimate?.currency)
+                                        : UNKNOWN_COST_TEXT}
+                                    </td>
+                                    <td>{formatDurationText(component.estimated_seconds)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </>
+                        )}
+
+                        {costDetail?.estimate && costDetail.estimate.unknown_components.length > 0 && (
+                          <p className="task-message" role="note">
+                            未知成本原因：{unknownCostReason(costDetail.estimate.unknown_components)}
+                          </p>
+                        )}
+
+                        {costDetail && costDetail.records.items.length > 0 && (
+                          <>
+                            <h4 className="task-detail-subtitle">调用记录（含失败调用）</h4>
+                            <table className="task-cost-table">
+                              <thead>
+                                <tr>
+                                  <th>时间</th>
+                                  <th>能力</th>
+                                  <th>状态</th>
+                                  <th>数量</th>
+                                  <th>成本</th>
+                                  <th>耗时</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {costDetail.records.items.slice(0, 20).map((record) => (
+                                  <tr key={record.id}>
+                                    <td>{formatRelativeTime(record.created_at)}</td>
+                                    <td>{record.capability_label || record.capability}</td>
+                                    <td>
+                                      {record.status === 'succeeded'
+                                        ? '成功'
+                                        : record.status === 'failed'
+                                          ? '失败'
+                                          : '已取消'}
+                                    </td>
+                                    <td>
+                                      {record.quantity} {record.base_unit || '单位'}
+                                    </td>
+                                    <td>
+                                      {formatCostValue(record.cost_micro, record.cost_known, record.currency)}
+                                      {record.cost_source === 'local' ? '（本地）' : ''}
+                                    </td>
+                                    <td>{formatMillisecondsText(record.duration_ms)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </>
+                        )}
                       </>
                     )}
                   </>
                 )}
-              </>
+              </section>
+            ) : (
+              <div className="task-detail-empty">
+                <InfoCircleOutlined aria-hidden="true" />
+                <strong>选择一个任务</strong>
+                <span>查看进度、尝试记录与成本明细</span>
+              </div>
             )}
-          </section>
-          ) : (
-            <div className="task-detail-empty">
-              <InfoCircleOutlined aria-hidden="true" />
-              <strong>选择一个任务</strong>
-              <span>查看进度、尝试记录与成本明细</span>
-            </div>
-          )}
+          </div>
         </div>
-      </div>
       </aside>
     </div>
   )

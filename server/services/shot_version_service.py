@@ -17,12 +17,13 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from config import settings
-from models import Project, SceneAsset, Character, Shot, ShotVersion
+from models import Character, Project, SceneAsset, Shot, ShotVersion
 from services.security import existing_file
 from services.shot_dialogue import dialogue_lines_payload, parse_shot_dialogue, serialize_dialogue_lines
 
@@ -310,7 +311,9 @@ def diff_snapshots(a: dict, b: dict) -> list[dict]:
     extras = sorted((set(a) | set(b)) - set(ordered))
     rows = []
     for key in ordered + extras:
-        default: Any = [] if (key in _JSON_LIST_FIELDS or key == "dialogue") else ({} if key in _JSON_DICT_FIELDS else "")
+        default: Any = (
+            [] if (key in _JSON_LIST_FIELDS or key == "dialogue") else ({} if key in _JSON_DICT_FIELDS else "")
+        )
         value_a = a.get(key, default)
         value_b = b.get(key, default)
         changed = _canonical(value_a) != _canonical(value_b)
@@ -355,7 +358,12 @@ def missing_asset_bindings(db: Session, shot: Shot, snapshot: dict) -> list[str]
     asset_project_id = (project.parent_project_id if project else None) or shot.project_id
     missing: list[str] = []
     scene_id = str(snapshot.get("scene_asset_id", "") or "").strip()
-    if scene_id and not db.query(SceneAsset).filter(SceneAsset.id == scene_id, SceneAsset.project_id == asset_project_id).first():
+    if (
+        scene_id
+        and not db.query(SceneAsset)
+        .filter(SceneAsset.id == scene_id, SceneAsset.project_id == asset_project_id)
+        .first()
+    ):
         missing.append(scene_id)
     character_ids = [str(item).strip() for item in _json_list(snapshot.get("character_asset_ids")) if str(item).strip()]
     if character_ids:

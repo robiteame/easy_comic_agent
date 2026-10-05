@@ -15,7 +15,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from .contracts import (
     MANUAL_ONLY_STRATEGIES,
@@ -36,7 +37,6 @@ from .contracts import (
     utc_now,
 )
 
-
 # 截断必须排在 LLM_INVALID_OUTPUT 之前判定：截断消息里常带 JSON 解析失败细节，
 # 若先命中 llm_invalid_output 就会退化成「改提示词重试」，对长度上限无效。
 _TRUNCATION_PATTERN = re.compile(
@@ -46,14 +46,35 @@ _TRUNCATION_PATTERN = re.compile(
 
 _FAILURE_PATTERNS: tuple[tuple[FailureKind, re.Pattern[str]], ...] = (
     (FailureKind.LLM_OUTPUT_TRUNCATED, _TRUNCATION_PATTERN),
-    (FailureKind.LLM_INVALID_OUTPUT, re.compile(r"json|schema|结构无法解析|非法输出|输出无法使用|invalid.*output", re.I)),
-    (FailureKind.TIMEOUT, re.compile(r"timeout|timed out|超时|connection (reset|refused|error)|network (error|unreachable)|502|503|temporarily unavailable", re.I)),
+    (
+        FailureKind.LLM_INVALID_OUTPUT,
+        re.compile(r"json|schema|结构无法解析|非法输出|输出无法使用|invalid.*output", re.I),
+    ),
+    (
+        FailureKind.TIMEOUT,
+        re.compile(
+            r"timeout|timed out|超时|connection (reset|refused|error)|network (error|unreachable)|502|503|temporarily unavailable",
+            re.I,
+        ),
+    ),
     (FailureKind.BUDGET_EXCEEDED, re.compile(r"budget|预算|quota|额度", re.I)),
     (FailureKind.VERSION_CONFLICT, re.compile(r"version|版本|stale|过期|changed", re.I)),
     (FailureKind.DIALOGUE_TOO_LONG, re.compile(r"dialogue|台词|对白|too long|过长", re.I)),
-    (FailureKind.SHOT_TOO_COMPLEX, re.compile(r"too complex|过于复杂|动作节拍过多|complex.*(shot|镜头)|镜头.*复杂", re.I)),
-    (FailureKind.PROVIDER_REFERENCE_UNSUPPORTED, re.compile(r"reference.*(unsupported|not support)|不支持.*参考|参考图.*不支持|references_sent=0", re.I)),
-    (FailureKind.PROVIDER_CAPABILITY_MISMATCH, re.compile(r"capability.*(mismatch|unsupported)|能力不匹配|不支持.*(分辨率|时长|能力)|降级|not.*supported.*(resolution|duration)", re.I)),
+    (
+        FailureKind.SHOT_TOO_COMPLEX,
+        re.compile(r"too complex|过于复杂|动作节拍过多|complex.*(shot|镜头)|镜头.*复杂", re.I),
+    ),
+    (
+        FailureKind.PROVIDER_REFERENCE_UNSUPPORTED,
+        re.compile(r"reference.*(unsupported|not support)|不支持.*参考|参考图.*不支持|references_sent=0", re.I),
+    ),
+    (
+        FailureKind.PROVIDER_CAPABILITY_MISMATCH,
+        re.compile(
+            r"capability.*(mismatch|unsupported)|能力不匹配|不支持.*(分辨率|时长|能力)|降级|not.*supported.*(resolution|duration)",
+            re.I,
+        ),
+    ),
     (FailureKind.STORAGE_FAILED, re.compile(r"storage|存储|写入失败|save.*fail|尾帧缺失|disk", re.I)),
     (FailureKind.QUALITY_BELOW_THRESHOLD, re.compile(r"quality|质量|阈值|threshold|低于.*分|score.*below", re.I)),
     (FailureKind.CANCELLED, re.compile(r"cancel|取消", re.I)),
@@ -192,7 +213,9 @@ def provider_profiles(capability: str, *, reference_required: bool = False) -> l
         api_key = str(getattr(endpoint, "api_key", "") or "")
         placeholder = protocol in {"placeholder", "local", "native-audio"}
         available = bool(placeholder or api_key)
-        multiple_refs = bool(getattr(caps, "reference_images", False) or getattr(caps, "multiple_reference_images", False))
+        multiple_refs = bool(
+            getattr(caps, "reference_images", False) or getattr(caps, "multiple_reference_images", False)
+        )
         single_ref = bool(getattr(caps, "reference_image", False))
         supports_ref = multiple_refs or single_ref
         native_audio = bool(getattr(caps, "native_audio", False))
@@ -225,7 +248,9 @@ def provider_profiles(capability: str, *, reference_required: bool = False) -> l
 
             fallback_endpoint = get_endpoint("script_fallback")
             primary_endpoint = get_endpoint("script")
-            if fallback_endpoint.api_key and endpoint_identity(fallback_endpoint.base_url) != endpoint_identity(primary_endpoint.base_url):
+            if fallback_endpoint.api_key and endpoint_identity(fallback_endpoint.base_url) != endpoint_identity(
+                primary_endpoint.base_url
+            ):
                 profiles.append(
                     ProviderProfile(
                         capability=capability,
@@ -240,12 +265,20 @@ def provider_profiles(capability: str, *, reference_required: bool = False) -> l
                 )
         except Exception:  # noqa: BLE001 - 备端点不可读时只是少一个切换候选
             pass
-    profiles.sort(key=lambda item: (not item.available, item.provider != getattr(current, "protocol", ""), -item.reliability))
+    profiles.sort(
+        key=lambda item: (not item.available, item.provider != getattr(current, "protocol", ""), -item.reliability)
+    )
     return profiles
 
 
 def _max_resolution_for(protocol: str) -> str:
-    return {"placeholder": "540p", "local": "540p", "stability": "1080p", "qwen-image": "1080p", "ark-seedream": "4k"}.get(protocol, "1080p")
+    return {
+        "placeholder": "540p",
+        "local": "540p",
+        "stability": "1080p",
+        "qwen-image": "1080p",
+        "ark-seedream": "4k",
+    }.get(protocol, "1080p")
 
 
 def _base_cost_micro(capability: str, protocol: str) -> int | None:
@@ -261,13 +294,25 @@ def _base_cost_micro(capability: str, protocol: str) -> int | None:
 
 
 def _base_seconds(capability: str, protocol: str) -> int:
-    return {"script": 3, "image": 8, "video": 35, "voice": 3}.get(capability, 10) if protocol not in {"placeholder", "local"} else 1
+    return (
+        {"script": 3, "image": 8, "video": 35, "voice": 3}.get(capability, 10)
+        if protocol not in {"placeholder", "local"}
+        else 1
+    )
 
 
 def _reliability(protocol: str, available: bool) -> float:
     if not available:
         return 0.2
-    return {"placeholder": 0.98, "local": 0.98, "ark-seedream": 0.9, "qwen-image": 0.86, "stability": 0.82, "ark-seedance": 0.88, "dashscope-wanx": 0.84}.get(protocol, 0.75)
+    return {
+        "placeholder": 0.98,
+        "local": 0.98,
+        "ark-seedream": 0.9,
+        "qwen-image": 0.86,
+        "stability": 0.82,
+        "ark-seedance": 0.88,
+        "dashscope-wanx": 0.84,
+    }.get(protocol, 0.75)
 
 
 _STRATEGY_PRIORITY: dict[RecoveryStrategy, float] = {
@@ -389,7 +434,9 @@ def recovery_candidates(
     remaining_cost = (budget or {}).get("remaining_cost_micro")
     remaining_seconds = (budget or {}).get("remaining_seconds")
     if retries_remaining is None:
-        retries_remaining = default_quality_profile(quality if isinstance(quality, (QualityProfileName, str)) else None).max_recovery_attempts
+        retries_remaining = default_quality_profile(
+            quality if isinstance(quality, (QualityProfileName, str)) else None
+        ).max_recovery_attempts
     retries_remaining = max(0, int(retries_remaining))
     candidate_evidence = _summarize_candidate_results(candidate_results)
     attempted = _normalize_attempted_strategies(attempted_strategies)
@@ -436,7 +483,9 @@ def recovery_candidates(
             retries_remaining=retries_remaining,
             rationale=_rationale(item, failure, profile, mode=mode, retries_remaining=retries_remaining),
         )
-        candidate.score = _score_candidate(candidate, quality, quality_score=quality_score, primary=primary_strategy_for(kind))
+        candidate.score = _score_candidate(
+            candidate, quality, quality_score=quality_score, primary=primary_strategy_for(kind)
+        )
         candidates.append(candidate)
     candidates.sort(key=lambda item: _rank_key(item, primary_strategy_for(kind)), reverse=True)
     return candidates
@@ -490,7 +539,10 @@ def choose_recovery(
     profiles = (
         provider_profiles_by_capability
         if provider_profiles_by_capability is not None
-        else {capability: provider_profiles(capability, reference_required=True) for capability in ("script", "image", "video", "voice")}
+        else {
+            capability: provider_profiles(capability, reference_required=True)
+            for capability in ("script", "image", "video", "voice")
+        }
     )
     options = list(
         candidates
@@ -510,8 +562,17 @@ def choose_recovery(
     )
     primary = primary_strategy_for(_failure_kind(failure))
     attempted = _normalize_attempted_strategies(attempted_strategies)
-    eliminations = {id(item): _elimination_reason(item, mode=mode, retries_remaining=retries_remaining) for item in options}
-    selected = _select_candidate(options, mode=mode, eliminations=eliminations, critique=critique, candidate_results=candidate_results, primary=primary)
+    eliminations = {
+        id(item): _elimination_reason(item, mode=mode, retries_remaining=retries_remaining) for item in options
+    }
+    selected = _select_candidate(
+        options,
+        mode=mode,
+        eliminations=eliminations,
+        critique=critique,
+        candidate_results=candidate_results,
+        primary=primary,
+    )
     rejected = _rejection_records(options, selected, eliminations, primary=primary)
     return DecisionTrace(
         trace_id=trace_id or f"trace:{run_id or 'run'}:{stage}:{utc_now()}",
@@ -547,7 +608,9 @@ def _normalize_attempted_strategies(values: Iterable[RecoveryStrategy | str] | N
 
 
 def _strategy_rank(strategy: RecoveryStrategy) -> int:
-    return {item: index for index, item in enumerate(AUTOMATIC_RECOVERY_ORDER)}.get(strategy, len(AUTOMATIC_RECOVERY_ORDER))
+    return {item: index for index, item in enumerate(AUTOMATIC_RECOVERY_ORDER)}.get(
+        strategy, len(AUTOMATIC_RECOVERY_ORDER)
+    )
 
 
 def _ordered_strategies(strategies: Iterable[RecoveryStrategy], *, mode: str) -> list[RecoveryStrategy]:
@@ -570,11 +633,26 @@ def _strategy_for_failure(kind: FailureKind) -> list[RecoveryStrategy]:
     if kind is FailureKind.DIALOGUE_TOO_LONG:
         return [RecoveryStrategy.SPLIT_SHOT, RecoveryStrategy.REVISE_PROMPT, RecoveryStrategy.HUMAN_REVIEW]
     if kind is FailureKind.SHOT_TOO_COMPLEX:
-        return [RecoveryStrategy.SPLIT_SHOT, RecoveryStrategy.MERGE_SHOTS, RecoveryStrategy.REVISE_PROMPT, RecoveryStrategy.HUMAN_REVIEW]
+        return [
+            RecoveryStrategy.SPLIT_SHOT,
+            RecoveryStrategy.MERGE_SHOTS,
+            RecoveryStrategy.REVISE_PROMPT,
+            RecoveryStrategy.HUMAN_REVIEW,
+        ]
     if kind is FailureKind.PROVIDER_REFERENCE_UNSUPPORTED:
-        return [RecoveryStrategy.SWITCH_PROVIDER, RecoveryStrategy.REPLACE_REFERENCE, RecoveryStrategy.REVISE_PROMPT, RecoveryStrategy.HUMAN_REVIEW]
+        return [
+            RecoveryStrategy.SWITCH_PROVIDER,
+            RecoveryStrategy.REPLACE_REFERENCE,
+            RecoveryStrategy.REVISE_PROMPT,
+            RecoveryStrategy.HUMAN_REVIEW,
+        ]
     if kind is FailureKind.PROVIDER_CAPABILITY_MISMATCH:
-        return [RecoveryStrategy.SWITCH_PROVIDER, RecoveryStrategy.LOWER_RESOLUTION, RecoveryStrategy.REVISE_PROMPT, RecoveryStrategy.HUMAN_REVIEW]
+        return [
+            RecoveryStrategy.SWITCH_PROVIDER,
+            RecoveryStrategy.LOWER_RESOLUTION,
+            RecoveryStrategy.REVISE_PROMPT,
+            RecoveryStrategy.HUMAN_REVIEW,
+        ]
     if kind in {FailureKind.IMAGE_FAILED, FailureKind.VIDEO_FAILED, FailureKind.AUDIO_FAILED}:
         return [
             RecoveryStrategy.RETRY,
@@ -588,21 +666,50 @@ def _strategy_for_failure(kind: FailureKind) -> list[RecoveryStrategy]:
             RecoveryStrategy.HUMAN_REVIEW,
         ]
     if kind in {FailureKind.USER_CHANGED_INPUT, FailureKind.VERSION_CONFLICT}:
-        return [RecoveryStrategy.RESUME_CHECKPOINT, RecoveryStrategy.REGENERATE_FAILED_SHOTS, RecoveryStrategy.HUMAN_REVIEW]
+        return [
+            RecoveryStrategy.RESUME_CHECKPOINT,
+            RecoveryStrategy.REGENERATE_FAILED_SHOTS,
+            RecoveryStrategy.HUMAN_REVIEW,
+        ]
     if kind is FailureKind.BUDGET_EXCEEDED:
         # 预算耗尽后不允许再花一次生成成本，只能降级发布或明确失败。
         return [RecoveryStrategy.DEGRADED_PUBLISH, RecoveryStrategy.TERMINAL_FAILURE]
     if kind is FailureKind.QUALITY_BELOW_THRESHOLD:
-        return [RecoveryStrategy.RETRY, RecoveryStrategy.CHANGE_SEED, RecoveryStrategy.REVISE_PROMPT, RecoveryStrategy.REPLACE_REFERENCE, RecoveryStrategy.SPLIT_SHOT, RecoveryStrategy.SWITCH_PROVIDER, RecoveryStrategy.LOWER_RESOLUTION, RecoveryStrategy.REGENERATE_FAILED_SHOTS, RecoveryStrategy.HUMAN_REVIEW]
+        return [
+            RecoveryStrategy.RETRY,
+            RecoveryStrategy.CHANGE_SEED,
+            RecoveryStrategy.REVISE_PROMPT,
+            RecoveryStrategy.REPLACE_REFERENCE,
+            RecoveryStrategy.SPLIT_SHOT,
+            RecoveryStrategy.SWITCH_PROVIDER,
+            RecoveryStrategy.LOWER_RESOLUTION,
+            RecoveryStrategy.REGENERATE_FAILED_SHOTS,
+            RecoveryStrategy.HUMAN_REVIEW,
+        ]
     if kind is FailureKind.TIMEOUT:
         # 超时是瞬时错误证据，RETRY 才被允许成为候选。
-        return [RecoveryStrategy.RETRY, RecoveryStrategy.SWITCH_PROVIDER, RecoveryStrategy.REVISE_PROMPT, RecoveryStrategy.HUMAN_REVIEW]
+        return [
+            RecoveryStrategy.RETRY,
+            RecoveryStrategy.SWITCH_PROVIDER,
+            RecoveryStrategy.REVISE_PROMPT,
+            RecoveryStrategy.HUMAN_REVIEW,
+        ]
     if kind is FailureKind.STORAGE_FAILED:
-        return [RecoveryStrategy.REGENERATE_FAILED_SHOTS, RecoveryStrategy.RESUME_CHECKPOINT, RecoveryStrategy.RETRY, RecoveryStrategy.HUMAN_REVIEW]
+        return [
+            RecoveryStrategy.REGENERATE_FAILED_SHOTS,
+            RecoveryStrategy.RESUME_CHECKPOINT,
+            RecoveryStrategy.RETRY,
+            RecoveryStrategy.HUMAN_REVIEW,
+        ]
     if kind is FailureKind.CANCELLED:
         return [RecoveryStrategy.TERMINAL_FAILURE]
     # UNKNOWN：没有瞬时错误证据时禁止无条件 RETRY，先换 Provider / 收紧 Prompt。
-    return [RecoveryStrategy.SWITCH_PROVIDER, RecoveryStrategy.REVISE_PROMPT, RecoveryStrategy.REGENERATE_FAILED_SHOTS, RecoveryStrategy.HUMAN_REVIEW]
+    return [
+        RecoveryStrategy.SWITCH_PROVIDER,
+        RecoveryStrategy.REVISE_PROMPT,
+        RecoveryStrategy.REGENERATE_FAILED_SHOTS,
+        RecoveryStrategy.HUMAN_REVIEW,
+    ]
 
 
 def _target_stage_for(stage: StageName | str, strategy: RecoveryStrategy) -> StageName | str:
@@ -627,7 +734,9 @@ def _capability_for_stage(stage: StageName | str) -> str:
     return mapping.get(StageName(stage), "image")
 
 
-def _switch_provider_target(profiles: list[ProviderProfile], *, failing_provider: str, failure_kind: FailureKind) -> str:
+def _switch_provider_target(
+    profiles: list[ProviderProfile], *, failing_provider: str, failure_kind: FailureKind
+) -> str:
     """选择切换目标：优先「可用且与失败 Provider 不同」的最高可靠性 Provider。
 
     当前在用的端点（is_current）即使可用也不是切换目标——切到自己等于原参数
@@ -677,24 +786,25 @@ def _summarize_candidate_results(candidate_results: Iterable[dict[str, Any]] | N
         status = str(item.get("status") or "")
         # Explicit false always rejects. Missing evidence is intentionally unknown,
         # not an implicit pass; path is also required because a status is not a file.
-        usable = bool(
-            status == "succeeded"
-            and path
-            and structural_passed is True
-            and (technical_passed is not False)
+        usable = bool(status == "succeeded" and path and structural_passed is True and (technical_passed is not False))
+        rows.append(
+            {
+                "status": status,
+                "provider": str(item.get("provider") or ""),
+                "path": path,
+                "structural_passed": structural_passed,
+                "technical_passed": technical_passed,
+                "structurally_usable": usable,
+            }
         )
-        rows.append({
-            "status": status,
-            "provider": str(item.get("provider") or ""),
-            "path": path,
-            "structural_passed": structural_passed,
-            "technical_passed": technical_passed,
-            "structurally_usable": usable,
-        })
     if not rows:
         return {
-            "count": 0, "success": 0, "failed": 0, "structurally_usable": 0,
-            "all_failed_same_provider": False, "success_ratio": None,
+            "count": 0,
+            "success": 0,
+            "failed": 0,
+            "structurally_usable": 0,
+            "all_failed_same_provider": False,
+            "success_ratio": None,
         }
     success = sum(1 for row in rows if row["status"] == "succeeded")
     failed = sum(1 for row in rows if row["status"] == "failed")
@@ -719,11 +829,21 @@ def _quality_gain(strategy: RecoveryStrategy, kind: FailureKind, evidence: dict[
     return round(min(1.0, gain), 3)
 
 
-def _candidate_cost(strategy: RecoveryStrategy, profile: ProviderProfile | None, quality: QualityStrategy | QualityProfileName | str | None) -> int | None:
-    if strategy in {RecoveryStrategy.HUMAN_REVIEW, RecoveryStrategy.DEGRADED_PUBLISH, RecoveryStrategy.TERMINAL_FAILURE}:
+def _candidate_cost(
+    strategy: RecoveryStrategy,
+    profile: ProviderProfile | None,
+    quality: QualityStrategy | QualityProfileName | str | None,
+) -> int | None:
+    if strategy in {
+        RecoveryStrategy.HUMAN_REVIEW,
+        RecoveryStrategy.DEGRADED_PUBLISH,
+        RecoveryStrategy.TERMINAL_FAILURE,
+    }:
         return 0
     base = profile.estimated_cost_micro if profile else 20_000
-    multiplier = default_quality_profile(quality if isinstance(quality, (QualityProfileName, str)) else None).cost_multiplier
+    multiplier = default_quality_profile(
+        quality if isinstance(quality, (QualityProfileName, str)) else None
+    ).cost_multiplier
     factor = {
         RecoveryStrategy.REGENERATE_FAILED_SHOTS: 1.0,
         RecoveryStrategy.REVISE_PROMPT: 0.65,
@@ -739,12 +859,27 @@ def _candidate_cost(strategy: RecoveryStrategy, profile: ProviderProfile | None,
     return int((base or 0) * multiplier * factor)
 
 
-def _candidate_seconds(strategy: RecoveryStrategy, profile: ProviderProfile | None, quality: QualityStrategy | QualityProfileName | str | None) -> int | None:
-    if strategy in {RecoveryStrategy.HUMAN_REVIEW, RecoveryStrategy.RESUME_CHECKPOINT, RecoveryStrategy.DEGRADED_PUBLISH, RecoveryStrategy.TERMINAL_FAILURE}:
+def _candidate_seconds(
+    strategy: RecoveryStrategy,
+    profile: ProviderProfile | None,
+    quality: QualityStrategy | QualityProfileName | str | None,
+) -> int | None:
+    if strategy in {
+        RecoveryStrategy.HUMAN_REVIEW,
+        RecoveryStrategy.RESUME_CHECKPOINT,
+        RecoveryStrategy.DEGRADED_PUBLISH,
+        RecoveryStrategy.TERMINAL_FAILURE,
+    }:
         return 0
     base = profile.estimated_seconds if profile else 10
-    multiplier = default_quality_profile(quality if isinstance(quality, (QualityProfileName, str)) else None).cost_multiplier
-    factor = {RecoveryStrategy.LOWER_RESOLUTION: 0.7, RecoveryStrategy.REVISE_PROMPT: 0.75, RecoveryStrategy.SPLIT_SHOT: 1.2}.get(strategy, 1.0)
+    multiplier = default_quality_profile(
+        quality if isinstance(quality, (QualityProfileName, str)) else None
+    ).cost_multiplier
+    factor = {
+        RecoveryStrategy.LOWER_RESOLUTION: 0.7,
+        RecoveryStrategy.REVISE_PROMPT: 0.75,
+        RecoveryStrategy.SPLIT_SHOT: 1.2,
+    }.get(strategy, 1.0)
     return int((base or 0) * multiplier * factor)
 
 
@@ -758,7 +893,9 @@ def _instruction(strategy: RecoveryStrategy) -> str:
     }.get(strategy, "")
 
 
-def _prompt_patches(strategy: RecoveryStrategy, failure: FailureRecord | None, *, provider: str = "", target_stage: str = "") -> list[PromptPatch]:
+def _prompt_patches(
+    strategy: RecoveryStrategy, failure: FailureRecord | None, *, provider: str = "", target_stage: str = ""
+) -> list[PromptPatch]:
     """结构化 Prompt/参数补丁：字段级 op/value，执行节点可直接应用。"""
 
     shot_id = str(getattr(failure, "shot_id", "") or "")
@@ -769,9 +906,20 @@ def _prompt_patches(strategy: RecoveryStrategy, failure: FailureRecord | None, *
         return PromptPatch(field=field, op=op, value=value, shot_id=shot_id, target_stage=stage_value, reason=reason)
 
     if strategy is RecoveryStrategy.CHANGE_SEED:
-        return [patch("seed", "set", {"mode": "derive_next_attempt", "salt": shot_id or "run"}, "当前候选结构/技术失败，改变随机种子避免重复产物")]
+        return [
+            patch(
+                "seed",
+                "set",
+                {"mode": "derive_next_attempt", "salt": shot_id or "run"},
+                "当前候选结构/技术失败，改变随机种子避免重复产物",
+            )
+        ]
     if strategy is RecoveryStrategy.RETRY:
-        return [patch("retry", "set", {"same_provider": True, "preserve_inputs": True}, "瞬时错误先在当前 Provider 原参数重试")]
+        return [
+            patch(
+                "retry", "set", {"same_provider": True, "preserve_inputs": True}, "瞬时错误先在当前 Provider 原参数重试"
+            )
+        ]
     if strategy is RecoveryStrategy.REVISE_PROMPT:
         if kind is FailureKind.LLM_INVALID_OUTPUT:
             return [
@@ -780,27 +928,69 @@ def _prompt_patches(strategy: RecoveryStrategy, failure: FailureRecord | None, *
                 patch("negative_prefix", "append", "不要输出 Markdown、注释或多余字段", "抑制非 JSON 内容"),
             ]
         return [
-            patch("visual_prompt", "replace", {"rule": "主体、动作、镜头运动、光线各一句，删除互相冲突的描述"}, "把自然语言描述收敛为可验证短句"),
+            patch(
+                "visual_prompt",
+                "replace",
+                {"rule": "主体、动作、镜头运动、光线各一句，删除互相冲突的描述"},
+                "把自然语言描述收敛为可验证短句",
+            ),
             patch("negative_prompt", "append", "模糊, 多主体, 文字水印", "减少常见生成缺陷"),
         ]
     if strategy is RecoveryStrategy.SPLIT_SHOT:
         if kind is FailureKind.DIALOGUE_TOO_LONG:
-            return [patch("dialogue", "split", {"max_chars": 90, "append_pause_shot": True}, "对白超出单镜头安全长度，拆成短句并增加停顿镜头")]
-        return [patch("character_action", "split", {"max_beats": 1, "max_seconds": 5.0}, "动作节拍过多，按节拍拆成短镜头")]
+            return [
+                patch(
+                    "dialogue",
+                    "split",
+                    {"max_chars": 90, "append_pause_shot": True},
+                    "对白超出单镜头安全长度，拆成短句并增加停顿镜头",
+                )
+            ]
+        return [
+            patch("character_action", "split", {"max_beats": 1, "max_seconds": 5.0}, "动作节拍过多，按节拍拆成短镜头")
+        ]
     if strategy is RecoveryStrategy.MERGE_SHOTS:
-        return [patch("shots", "replace", {"strategy": "merge_adjacent", "max_duration_s": 5.0}, "连续短镜头合并，减少转场和连续性风险")]
+        return [
+            patch(
+                "shots",
+                "replace",
+                {"strategy": "merge_adjacent", "max_duration_s": 5.0},
+                "连续短镜头合并，减少转场和连续性风险",
+            )
+        ]
     if strategy is RecoveryStrategy.REPLACE_REFERENCE:
-        return [patch("reference_images", "replace", {"source": "scene_baseline_or_previous_tail_frame", "record_weight": True}, "当前参考可能冲突或未被 Provider 接受，改用可追溯参考")]
+        return [
+            patch(
+                "reference_images",
+                "replace",
+                {"source": "scene_baseline_or_previous_tail_frame", "record_weight": True},
+                "当前参考可能冲突或未被 Provider 接受，改用可追溯参考",
+            )
+        ]
     if strategy is RecoveryStrategy.LOWER_RESOLUTION:
         return [patch("resolution", "set", "540p", "先恢复可生成性，再择机补拍高分辨率")]
     if strategy is RecoveryStrategy.SWITCH_PROVIDER:
-        return [patch("provider", "set", provider or "auto_select", "当前 Provider 能力/稳定性不匹配，切换到声明能力更合适的 Provider")]
+        return [
+            patch(
+                "provider",
+                "set",
+                provider or "auto_select",
+                "当前 Provider 能力/稳定性不匹配，切换到声明能力更合适的 Provider",
+            )
+        ]
     if strategy is RecoveryStrategy.REGENERATE_FAILED_SHOTS:
         return [patch("shot_scope", "set", "failed_only", "保留已成功镜头，只补拍失败镜头")]
     return []
 
 
-def _rationale(strategy: RecoveryStrategy, failure: FailureRecord | None, profile: ProviderProfile | None, *, mode: str = "auto", retries_remaining: int = 0) -> str:
+def _rationale(
+    strategy: RecoveryStrategy,
+    failure: FailureRecord | None,
+    profile: ProviderProfile | None,
+    *,
+    mode: str = "auto",
+    retries_remaining: int = 0,
+) -> str:
     kind = _failure_kind(failure).value
     base = {
         RecoveryStrategy.REVISE_PROMPT: "结果或结构不合格，先用可验证的 Prompt 修改降低不确定性。",
@@ -852,7 +1042,12 @@ def _score_candidate(
     if quality_score is not None:
         gap = max(0.0, strategy.quality_threshold - float(quality_score))
         sufficiency = 0.08 if candidate.quality_gain >= max(gap, 0.05) else -0.08
-    return round(max(0.0, min(1.0, base + gain - cost_penalty - seconds_penalty + capability_bonus + budget_bonus + sufficiency)), 4)
+    return round(
+        max(
+            0.0, min(1.0, base + gain - cost_penalty - seconds_penalty + capability_bonus + budget_bonus + sufficiency)
+        ),
+        4,
+    )
 
 
 def _elimination_reason(candidate: RecoveryCandidate, *, mode: str, retries_remaining: int) -> str:
@@ -886,7 +1081,11 @@ def _select_candidate(
     primary: RecoveryStrategy | None,
 ) -> RecoveryCandidate | None:
     feasible = [item for item in options if not eliminations.get(id(item))]
-    non_terminal = [item for item in feasible if item.strategy not in {RecoveryStrategy.DEGRADED_PUBLISH, RecoveryStrategy.TERMINAL_FAILURE}]
+    non_terminal = [
+        item
+        for item in feasible
+        if item.strategy not in {RecoveryStrategy.DEGRADED_PUBLISH, RecoveryStrategy.TERMINAL_FAILURE}
+    ]
     if non_terminal:
         # 自动恢复是固定阶梯而非全局评分竞价：在同一阶梯中仍允许评分/能力排序，
         # 但绝不跳过更早的可行动作（例如 seed 尚未尝试时不能直接切 Provider）。
@@ -903,8 +1102,12 @@ def _select_candidate(
         human = [item for item in options if item.strategy is RecoveryStrategy.HUMAN_REVIEW]
         if human:
             return human[0]
-        return RecoveryCandidate(strategy=RecoveryStrategy.HUMAN_REVIEW, rationale="manual 模式下没有可行候选，转人工审核。")
-    return RecoveryCandidate(strategy=RecoveryStrategy.TERMINAL_FAILURE, rationale="自动模式下没有可行候选且无可用部分结果，明确终止。")
+        return RecoveryCandidate(
+            strategy=RecoveryStrategy.HUMAN_REVIEW, rationale="manual 模式下没有可行候选，转人工审核。"
+        )
+    return RecoveryCandidate(
+        strategy=RecoveryStrategy.TERMINAL_FAILURE, rationale="自动模式下没有可行候选且无可用部分结果，明确终止。"
+    )
 
 
 def _rejection_records(
@@ -937,7 +1140,14 @@ def _rejection_records(
     return records
 
 
-def _decision_reason(selected: RecoveryCandidate | None, failure: FailureRecord | None, quality: QualityStrategy, *, mode: str, retries_remaining: int) -> str:
+def _decision_reason(
+    selected: RecoveryCandidate | None,
+    failure: FailureRecord | None,
+    quality: QualityStrategy,
+    *,
+    mode: str,
+    retries_remaining: int,
+) -> str:
     if selected is None:
         return "没有生成任何恢复候选。"
     head = f"模式={mode}，质量档位={quality.name.value}，剩余恢复次数={retries_remaining}"

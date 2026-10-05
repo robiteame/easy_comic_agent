@@ -5,14 +5,11 @@ from __future__ import annotations
 import json
 import sys
 import unittest
-
 from pathlib import Path
 
 _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
-
-from test_environment import TEST_ROOT  # noqa: F401,E402
 
 from db import SessionLocal, init_db  # noqa: E402
 from models import Character, Project, SceneAsset, Shot, ShotVersion  # noqa: E402
@@ -21,6 +18,7 @@ from services.shot_split_service import (  # noqa: E402
     ShotSplitVersionConflict,
     persist_split_shot,
 )
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class PersistedShotSplitTests(unittest.TestCase):
@@ -92,7 +90,10 @@ class PersistedShotSplitTests(unittest.TestCase):
             self.assertTrue(row.media_stale)
             self.assertFalse(row.video_path)
             self.assertFalse(row.audio_path)
-        self.assertEqual(rows[0].continuity_profile and json.loads(rows[0].continuity_profile)["split_recovery"]["operation_id"], "split-op-1")
+        self.assertEqual(
+            rows[0].continuity_profile and json.loads(rows[0].continuity_profile)["split_recovery"]["operation_id"],
+            "split-op-1",
+        )
         self.assertGreaterEqual(self.db.query(ShotVersion).filter(ShotVersion.shot_id == self.source.id).count(), 2)
         self.assertEqual(self.project.status, "assets_ready")
 
@@ -149,7 +150,9 @@ class PersistedShotSplitTests(unittest.TestCase):
         )
         self.assertEqual(again["status"], "already_applied")
         self.assertEqual(again["shot_ids"], first["shot_ids"])
-        metadata = json.loads(self.db.query(Shot).filter(Shot.id == self.source.id).one().continuity_profile)["split_recovery"]
+        metadata = json.loads(self.db.query(Shot).filter(Shot.id == self.source.id).one().continuity_profile)[
+            "split_recovery"
+        ]
         self.assertEqual(metadata["requested_parts"], 2)
         self.assertEqual(metadata["parts"], first["parts"])
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -25,17 +25,16 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from db import SessionLocal, init_db  # noqa: E402
 from models import BackgroundJob, Project  # noqa: E402
 from services.job_center import attempt_history, job_stats  # noqa: E402
 from services.job_dto import as_utc, job_dto, job_duration_seconds  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 init_db()
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
-UTC = timezone.utc
+UTC = UTC
 
 
 def _naive_utc_job(**overrides) -> BackgroundJob:
@@ -80,7 +79,7 @@ class JobDtoTimezoneTests(unittest.TestCase):
     def test_serialized_instant_is_stable_across_timezones(self) -> None:
         dto = job_dto(_naive_utc_job())
         instant = datetime.fromisoformat(dto["created_at"])
-        self.assertEqual(instant.utcoffset(), timezone.utc.utcoffset(instant))
+        self.assertEqual(instant.utcoffset(), UTC.utcoffset(instant))
         self.assertEqual(instant.astimezone(SHANGHAI).hour, 10, "02:00 UTC 在上海是 10 点")
         self.assertEqual(instant.astimezone(UTC).hour, 2)
 

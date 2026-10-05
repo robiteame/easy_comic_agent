@@ -11,7 +11,6 @@ Shot.version、候选、评分、失败分类和 DecisionTrace，因此可幂等
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -24,13 +23,13 @@ from services.error_reporter import ERROR_PIPELINE, log_failure, new_error_id, r
 
 from .checkpoints import CheckpointStore, fingerprint
 from .contracts import (
+    STAGE_ORDER,
     FailureKind,
     FailureRecord,
     PromptPatch,
     QualityProfileName,
     RecoveryStrategy,
     RunStatus,
-    STAGE_ORDER,
     StageName,
     StageStatus,
     default_quality_profile,
@@ -43,13 +42,13 @@ from .critic import (
     critique_compose,
     critique_director,
     critique_final,
-    extract_final_report,
     critique_images,
     critique_llm_failure,
     critique_storyboard,
     critique_videos,
+    extract_final_report,
 )
-from .decision import TRANSIENT_FAILURES, budget_snapshot, choose_recovery, classify_failure, provider_profiles
+from .decision import TRANSIENT_FAILURES, choose_recovery, classify_failure, provider_profiles
 from .shot_work import (
     fan_in_shot_results,
     generate_audio_shot,
@@ -65,67 +64,289 @@ logger = logging.getLogger(__name__)
 GRAPH_STAGE_ORDER: tuple[str, ...] = tuple(stage.value for stage in STAGE_ORDER)
 
 GRAPH_STAGE_NODE_NAMES: dict[str, dict[str, str]] = {
-    StageName.DIRECTOR_PLANNING.value: {"process": "director_planning", "critic": "director_review", "decision": "director_decision", "recovery": "director_recovery"},
-    StageName.STORYBOARD_DESIGN.value: {"process": "storyboard_design", "critic": "storyboard_review", "decision": "storyboard_decision", "recovery": "storyboard_recovery"},
-    StageName.ASSET_PREPARATION.value: {"process": "asset_preparation", "critic": "asset_review", "decision": "asset_decision", "recovery": "asset_recovery"},
-    StageName.IMAGE_GENERATION.value: {"process": "image_generation", "critic": "image_review", "decision": "image_decision", "recovery": "image_recovery"},
-    StageName.QUALITY_REVIEW.value: {"process": "quality_review", "critic": "quality_critic", "decision": "quality_decision", "recovery": "quality_recovery"},
-    StageName.AUDIO_PRODUCTION.value: {"process": "audio_production", "critic": "audio_review", "decision": "audio_decision", "recovery": "audio_recovery"},
-    StageName.VIDEO_GENERATION.value: {"process": "video_generation", "critic": "video_generation_review", "decision": "video_generation_decision", "recovery": "video_generation_recovery"},
-    StageName.VIDEO_REVIEW.value: {"process": "video_review", "critic": "video_critic", "decision": "video_decision", "recovery": "video_recovery"},
-    StageName.EDIT_COMPOSITION.value: {"process": "edit_composition", "critic": "edit_review", "decision": "edit_decision", "recovery": "edit_recovery"},
-    StageName.FINAL_REVIEW.value: {"process": "final_review", "critic": "final_critic", "decision": "final_decision", "recovery": "final_recovery"},
+    StageName.DIRECTOR_PLANNING.value: {
+        "process": "director_planning",
+        "critic": "director_review",
+        "decision": "director_decision",
+        "recovery": "director_recovery",
+    },
+    StageName.STORYBOARD_DESIGN.value: {
+        "process": "storyboard_design",
+        "critic": "storyboard_review",
+        "decision": "storyboard_decision",
+        "recovery": "storyboard_recovery",
+    },
+    StageName.ASSET_PREPARATION.value: {
+        "process": "asset_preparation",
+        "critic": "asset_review",
+        "decision": "asset_decision",
+        "recovery": "asset_recovery",
+    },
+    StageName.IMAGE_GENERATION.value: {
+        "process": "image_generation",
+        "critic": "image_review",
+        "decision": "image_decision",
+        "recovery": "image_recovery",
+    },
+    StageName.QUALITY_REVIEW.value: {
+        "process": "quality_review",
+        "critic": "quality_critic",
+        "decision": "quality_decision",
+        "recovery": "quality_recovery",
+    },
+    StageName.AUDIO_PRODUCTION.value: {
+        "process": "audio_production",
+        "critic": "audio_review",
+        "decision": "audio_decision",
+        "recovery": "audio_recovery",
+    },
+    StageName.VIDEO_GENERATION.value: {
+        "process": "video_generation",
+        "critic": "video_generation_review",
+        "decision": "video_generation_decision",
+        "recovery": "video_generation_recovery",
+    },
+    StageName.VIDEO_REVIEW.value: {
+        "process": "video_review",
+        "critic": "video_critic",
+        "decision": "video_decision",
+        "recovery": "video_recovery",
+    },
+    StageName.EDIT_COMPOSITION.value: {
+        "process": "edit_composition",
+        "critic": "edit_review",
+        "decision": "edit_decision",
+        "recovery": "edit_recovery",
+    },
+    StageName.FINAL_REVIEW.value: {
+        "process": "final_review",
+        "critic": "final_critic",
+        "decision": "final_decision",
+        "recovery": "final_recovery",
+    },
 }
 
 GRAPH_NODE_META: dict[str, dict] = {
-    "director_planning": {"label": "导演规划", "type": "process", "description": "解析剧本、人物、场景、叙事目标与预算约束，产出导演计划"},
-    "director_review": {"label": "导演 Critic", "type": "critic", "description": "检查角色/场景覆盖和逻辑问题，提出具体修改"},
-    "director_decision": {"label": "导演决策", "type": "decision", "description": "按失败分类、Provider 能力、成本和剩余预算选择恢复策略"},
-    "director_recovery": {"label": "导演恢复", "type": "recovery", "description": "只修改受影响输入并回到导演规划局部重算"},
-    "storyboard_design": {"label": "分镜设计", "type": "process", "description": "生成镜头并自动拆合动作节拍、对白和时长"},
-    "storyboard_review": {"label": "分镜 Critic", "type": "critic", "description": "检查镜头规则、对白密度、连续性和可执行性"},
+    "director_planning": {
+        "label": "导演规划",
+        "type": "process",
+        "description": "解析剧本、人物、场景、叙事目标与预算约束，产出导演计划",
+    },
+    "director_review": {
+        "label": "导演 Critic",
+        "type": "critic",
+        "description": "检查角色/场景覆盖和逻辑问题，提出具体修改",
+    },
+    "director_decision": {
+        "label": "导演决策",
+        "type": "decision",
+        "description": "按失败分类、Provider 能力、成本和剩余预算选择恢复策略",
+    },
+    "director_recovery": {
+        "label": "导演恢复",
+        "type": "recovery",
+        "description": "只修改受影响输入并回到导演规划局部重算",
+    },
+    "storyboard_design": {
+        "label": "分镜设计",
+        "type": "process",
+        "description": "生成镜头并自动拆合动作节拍、对白和时长",
+    },
+    "storyboard_review": {
+        "label": "分镜 Critic",
+        "type": "critic",
+        "description": "检查镜头规则、对白密度、连续性和可执行性",
+    },
     "storyboard_decision": {"label": "分镜决策", "type": "decision", "description": "选择拆分、修改、合并或局部恢复"},
-    "storyboard_recovery": {"label": "分镜恢复", "type": "recovery", "description": "把 Critic 修改写回受影响镜头/Prompt 后局部重算"},
-    "asset_preparation": {"label": "素材准备", "type": "process", "description": "生成角色三视图、场景基准图和连续性参考，并记录能力限制"},
+    "storyboard_recovery": {
+        "label": "分镜恢复",
+        "type": "recovery",
+        "description": "把 Critic 修改写回受影响镜头/Prompt 后局部重算",
+    },
+    "asset_preparation": {
+        "label": "素材准备",
+        "type": "process",
+        "description": "生成角色三视图、场景基准图和连续性参考，并记录能力限制",
+    },
     "asset_review": {"label": "素材 Critic", "type": "critic", "description": "检查素材覆盖、参考图兼容性与版本一致性"},
     "asset_decision": {"label": "素材决策", "type": "decision", "description": "替换参考、切换 Provider 或局部恢复"},
     "asset_recovery": {"label": "素材恢复", "type": "recovery", "description": "只补生成缺失参考，不重跑已成功素材"},
-    "image_generation": {"label": "图像生成", "type": "process", "description": "按镜头版本逐镜头生成故事板，失败镜头独立进入恢复队列"},
-    "image_generation_fan_out": {"label": "图像 fan-out（兼容）", "type": "process", "description": "兼容入口，与图像生成阶段执行同一逐镜头 worker"},
-    "image_generation_fan_in": {"label": "图像 fan-in", "type": "process", "description": "聚合成功、失败、降级和跳过镜头，保留局部成功"},
+    "image_generation": {
+        "label": "图像生成",
+        "type": "process",
+        "description": "按镜头版本逐镜头生成故事板，失败镜头独立进入恢复队列",
+    },
+    "image_generation_fan_out": {
+        "label": "图像 fan-out（兼容）",
+        "type": "process",
+        "description": "兼容入口，与图像生成阶段执行同一逐镜头 worker",
+    },
+    "image_generation_fan_in": {
+        "label": "图像 fan-in",
+        "type": "process",
+        "description": "聚合成功、失败、降级和跳过镜头，保留局部成功",
+    },
     "image_review": {"label": "图像 Critic", "type": "critic", "description": "检查图片结构、失败镜头和候选完整性"},
-    "image_decision": {"label": "图像决策", "type": "decision", "description": "只把失败/低分镜头送入恢复，成功镜头直接进入质量审核"},
-    "image_recovery": {"label": "图像恢复", "type": "recovery", "description": "改 Prompt、换参考、换 Provider 或只补拍失败镜头"},
-    "quality_review": {"label": "质量审核", "type": "process", "description": "执行故事板结构与真实质量门禁，产出逐镜头审核记录"},
-    "quality_critic": {"label": "质量 Critic", "type": "critic", "description": "复核质量报告、证据和修改建议，避免把未检测维度伪装成通过"},
-    "quality_decision": {"label": "质量决策", "type": "decision", "description": "确认分镜并进入音频，或只恢复失败/低分镜头"},
-    "quality_recovery": {"label": "质量恢复", "type": "recovery", "description": "按失败镜头局部补拍或回分镜修改，不重跑成功镜头"},
-    "audio_production": {"label": "音频制作", "type": "process", "description": "外部 TTS 镜头逐镜头生成/复用配音；native audio 镜头跳过外部 TTS"},
-    "audio_review": {"label": "音频检查", "type": "critic", "description": "检查对白长度、TTS 产物、native audio 跳过依据和混音准备度"},
-    "audio_decision": {"label": "音频决策", "type": "decision", "description": "音频检查通过后才允许视频生成，失败镜头只局部重配音"},
-    "audio_recovery": {"label": "音频恢复", "type": "recovery", "description": "拆句、局部重配音或切换 Provider，保留成功音频"},
-    "video_generation": {"label": "视频生成", "type": "process", "description": "逐镜头生成视频候选，失败镜头独立重试/补拍"},
-    "video_generation_fan_out": {"label": "视频 fan-out（兼容）", "type": "process", "description": "兼容入口，与视频生成阶段执行同一逐镜头 worker"},
-    "video_generation_fan_in": {"label": "视频 fan-in", "type": "process", "description": "聚合视频结果，不让一个失败镜头使成功镜头失效"},
-    "video_generation_review": {"label": "视频生成 Critic", "type": "critic", "description": "检查生成产物、候选选择和逐镜头失败，不覆盖成功视频"},
-    "video_generation_decision": {"label": "视频生成决策", "type": "decision", "description": "只恢复失败视频，成功视频进入独立视频检查阶段"},
-    "video_generation_recovery": {"label": "视频生成恢复", "type": "recovery", "description": "只补拍失败镜头并复用成功视频"},
-    "video_review": {"label": "视频检查", "type": "process", "description": "三维度检查：structural_validity（可播放/视频轨）、technical_quality（时长/分辨率/黑帧/冻结/音画/尾帧）、visual_quality_pending（未接入视觉模型，视觉质量待审）"},
-    "video_critic": {"label": "视频检查 Critic", "type": "critic", "description": "复核视频质量报告与证据，保持未检测视觉维度为待审"},
-    "video_decision": {"label": "视频决策", "type": "decision", "description": "视频检查通过后进入剪辑合成，失败镜头只局部补拍"},
-    "video_recovery": {"label": "视频恢复", "type": "recovery", "description": "改 Prompt、换 Provider、降分辨率或只补拍失败视频"},
-    "edit_composition": {"label": "剪辑合成", "type": "process", "description": "按版本校验后的镜头清单合成成片，支持明确降级状态"},
-    "compose": {"label": "剪辑合成（兼容）", "type": "process", "description": "兼容入口，与剪辑合成阶段执行同一渲染任务"},
-    "edit_review": {"label": "剪辑 Critic", "type": "critic", "description": "检查镜头完整率、音画同步、时长和成片可播放性"},
-    "edit_decision": {"label": "剪辑决策", "type": "decision", "description": "成片可复审时进入 final_review，否则只修复剪辑问题"},
-    "edit_recovery": {"label": "剪辑恢复", "type": "recovery", "description": "重新合成或只补拍缺失镜头，不重算完整成功链路"},
-    "final_review": {"label": "成片复审", "type": "process", "description": "从叙事、视觉、音频、节奏和反馈层面复审成片"},
-    "final_critic": {"label": "成片 Critic", "type": "critic", "description": "把成片反馈拆成图像、音频、视频或剪辑的具体修改"},
-    "final_decision": {"label": "成片决策", "type": "decision", "description": "通过则结束，否则路由到明确的局部重算阶段"},
-    "final_recovery": {"label": "成片恢复", "type": "recovery", "description": "反馈可路由回图像、音频、视频或剪辑，不重跑已成功镜头"},
-    "auto_abort": {"label": "自动终止", "type": "output", "description": "自动模式恢复耗尽且无可用结果时记录失败并结束，绝不进入人工节点"},
-    "degraded_publish": {"label": "降级发布", "type": "output", "description": "自动模式恢复无法继续但存在可用部分结果：按降级结果结束并保留失败清单"},
-    "human_gate": {"label": "人工审核", "type": "human", "description": "仅 manual 模式且显式 human_gate_policy=manual 时允许进入"},
+    "image_decision": {
+        "label": "图像决策",
+        "type": "decision",
+        "description": "只把失败/低分镜头送入恢复，成功镜头直接进入质量审核",
+    },
+    "image_recovery": {
+        "label": "图像恢复",
+        "type": "recovery",
+        "description": "改 Prompt、换参考、换 Provider 或只补拍失败镜头",
+    },
+    "quality_review": {
+        "label": "质量审核",
+        "type": "process",
+        "description": "执行故事板结构与真实质量门禁，产出逐镜头审核记录",
+    },
+    "quality_critic": {
+        "label": "质量 Critic",
+        "type": "critic",
+        "description": "复核质量报告、证据和修改建议，避免把未检测维度伪装成通过",
+    },
+    "quality_decision": {
+        "label": "质量决策",
+        "type": "decision",
+        "description": "确认分镜并进入音频，或只恢复失败/低分镜头",
+    },
+    "quality_recovery": {
+        "label": "质量恢复",
+        "type": "recovery",
+        "description": "按失败镜头局部补拍或回分镜修改，不重跑成功镜头",
+    },
+    "audio_production": {
+        "label": "音频制作",
+        "type": "process",
+        "description": "外部 TTS 镜头逐镜头生成/复用配音；native audio 镜头跳过外部 TTS",
+    },
+    "audio_review": {
+        "label": "音频检查",
+        "type": "critic",
+        "description": "检查对白长度、TTS 产物、native audio 跳过依据和混音准备度",
+    },
+    "audio_decision": {
+        "label": "音频决策",
+        "type": "decision",
+        "description": "音频检查通过后才允许视频生成，失败镜头只局部重配音",
+    },
+    "audio_recovery": {
+        "label": "音频恢复",
+        "type": "recovery",
+        "description": "拆句、局部重配音或切换 Provider，保留成功音频",
+    },
+    "video_generation": {
+        "label": "视频生成",
+        "type": "process",
+        "description": "逐镜头生成视频候选，失败镜头独立重试/补拍",
+    },
+    "video_generation_fan_out": {
+        "label": "视频 fan-out（兼容）",
+        "type": "process",
+        "description": "兼容入口，与视频生成阶段执行同一逐镜头 worker",
+    },
+    "video_generation_fan_in": {
+        "label": "视频 fan-in",
+        "type": "process",
+        "description": "聚合视频结果，不让一个失败镜头使成功镜头失效",
+    },
+    "video_generation_review": {
+        "label": "视频生成 Critic",
+        "type": "critic",
+        "description": "检查生成产物、候选选择和逐镜头失败，不覆盖成功视频",
+    },
+    "video_generation_decision": {
+        "label": "视频生成决策",
+        "type": "decision",
+        "description": "只恢复失败视频，成功视频进入独立视频检查阶段",
+    },
+    "video_generation_recovery": {
+        "label": "视频生成恢复",
+        "type": "recovery",
+        "description": "只补拍失败镜头并复用成功视频",
+    },
+    "video_review": {
+        "label": "视频检查",
+        "type": "process",
+        "description": "三维度检查：structural_validity（可播放/视频轨）、technical_quality（时长/分辨率/黑帧/冻结/音画/尾帧）、visual_quality_pending（未接入视觉模型，视觉质量待审）",
+    },
+    "video_critic": {
+        "label": "视频检查 Critic",
+        "type": "critic",
+        "description": "复核视频质量报告与证据，保持未检测视觉维度为待审",
+    },
+    "video_decision": {
+        "label": "视频决策",
+        "type": "decision",
+        "description": "视频检查通过后进入剪辑合成，失败镜头只局部补拍",
+    },
+    "video_recovery": {
+        "label": "视频恢复",
+        "type": "recovery",
+        "description": "改 Prompt、换 Provider、降分辨率或只补拍失败视频",
+    },
+    "edit_composition": {
+        "label": "剪辑合成",
+        "type": "process",
+        "description": "按版本校验后的镜头清单合成成片，支持明确降级状态",
+    },
+    "compose": {
+        "label": "剪辑合成（兼容）",
+        "type": "process",
+        "description": "兼容入口，与剪辑合成阶段执行同一渲染任务",
+    },
+    "edit_review": {
+        "label": "剪辑 Critic",
+        "type": "critic",
+        "description": "检查镜头完整率、音画同步、时长和成片可播放性",
+    },
+    "edit_decision": {
+        "label": "剪辑决策",
+        "type": "decision",
+        "description": "成片可复审时进入 final_review，否则只修复剪辑问题",
+    },
+    "edit_recovery": {
+        "label": "剪辑恢复",
+        "type": "recovery",
+        "description": "重新合成或只补拍缺失镜头，不重算完整成功链路",
+    },
+    "final_review": {
+        "label": "成片复审",
+        "type": "process",
+        "description": "从叙事、视觉、音频、节奏和反馈层面复审成片",
+    },
+    "final_critic": {
+        "label": "成片 Critic",
+        "type": "critic",
+        "description": "把成片反馈拆成图像、音频、视频或剪辑的具体修改",
+    },
+    "final_decision": {
+        "label": "成片决策",
+        "type": "decision",
+        "description": "通过则结束，否则路由到明确的局部重算阶段",
+    },
+    "final_recovery": {
+        "label": "成片恢复",
+        "type": "recovery",
+        "description": "反馈可路由回图像、音频、视频或剪辑，不重跑已成功镜头",
+    },
+    "auto_abort": {
+        "label": "自动终止",
+        "type": "output",
+        "description": "自动模式恢复耗尽且无可用结果时记录失败并结束，绝不进入人工节点",
+    },
+    "degraded_publish": {
+        "label": "降级发布",
+        "type": "output",
+        "description": "自动模式恢复无法继续但存在可用部分结果：按降级结果结束并保留失败清单",
+    },
+    "human_gate": {
+        "label": "人工审核",
+        "type": "human",
+        "description": "仅 manual 模式且显式 human_gate_policy=manual 时允许进入",
+    },
 }
 
 
@@ -136,7 +357,16 @@ def build_graph() -> StateGraph:
     for names in GRAPH_STAGE_NODE_NAMES.values():
         for node_name in names.values():
             graph.add_node(node_name, _NODE_FUNCTIONS[node_name])
-    for node_name in ("image_generation_fan_in", "image_generation_fan_out", "video_generation_fan_in", "video_generation_fan_out", "compose", "auto_abort", "degraded_publish", "human_gate"):
+    for node_name in (
+        "image_generation_fan_in",
+        "image_generation_fan_out",
+        "video_generation_fan_in",
+        "video_generation_fan_out",
+        "compose",
+        "auto_abort",
+        "degraded_publish",
+        "human_gate",
+    ):
         graph.add_node(node_name, _NODE_FUNCTIONS[node_name])
 
     graph.add_edge(START, "director_planning")
@@ -145,75 +375,277 @@ def build_graph() -> StateGraph:
     # failed=terminal_failure；degraded=degraded_publish（存在可用部分结果时优先于终止）。
     graph.add_edge("director_planning", "director_review")
     graph.add_edge("director_review", "director_decision")
-    graph.add_conditional_edges("director_decision", _route_director_decision, {"next": "storyboard_design", "recover": "director_recovery", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
-    graph.add_conditional_edges("director_recovery", _route_director_recovery, {"retry": "director_planning", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
+    graph.add_conditional_edges(
+        "director_decision",
+        _route_director_decision,
+        {
+            "next": "storyboard_design",
+            "recover": "director_recovery",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
+    graph.add_conditional_edges(
+        "director_recovery",
+        _route_director_recovery,
+        {"retry": "director_planning", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"},
+    )
 
     graph.add_edge("storyboard_design", "storyboard_review")
     graph.add_edge("storyboard_review", "storyboard_decision")
-    graph.add_conditional_edges("storyboard_decision", _route_storyboard_decision, {"next": "asset_preparation", "recover": "storyboard_recovery", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
-    graph.add_conditional_edges("storyboard_recovery", _route_storyboard_recovery, {"retry": "storyboard_design", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
+    graph.add_conditional_edges(
+        "storyboard_decision",
+        _route_storyboard_decision,
+        {
+            "next": "asset_preparation",
+            "recover": "storyboard_recovery",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
+    graph.add_conditional_edges(
+        "storyboard_recovery",
+        _route_storyboard_recovery,
+        {"retry": "storyboard_design", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"},
+    )
 
     graph.add_edge("asset_preparation", "asset_review")
     graph.add_edge("asset_review", "asset_decision")
-    graph.add_conditional_edges("asset_decision", _route_asset_decision, {"next": "image_generation", "recover": "asset_recovery", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
-    graph.add_conditional_edges("asset_recovery", _route_asset_recovery, {"retry": "asset_preparation", "storyboard": "storyboard_design", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
+    graph.add_conditional_edges(
+        "asset_decision",
+        _route_asset_decision,
+        {
+            "next": "image_generation",
+            "recover": "asset_recovery",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
+    graph.add_conditional_edges(
+        "asset_recovery",
+        _route_asset_recovery,
+        {
+            "retry": "asset_preparation",
+            "storyboard": "storyboard_design",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
 
     graph.add_edge("image_generation", "image_generation_fan_in")
     graph.add_edge("image_generation_fan_out", "image_generation_fan_in")
     graph.add_edge("image_generation_fan_in", "image_review")
     graph.add_edge("image_review", "image_decision")
-    graph.add_conditional_edges("image_decision", _route_image_decision, {"next": "quality_review", "recover": "image_recovery", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
-    graph.add_conditional_edges("image_recovery", _route_image_recovery, {"retry": "image_generation", "storyboard": "storyboard_design", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
+    graph.add_conditional_edges(
+        "image_decision",
+        _route_image_decision,
+        {
+            "next": "quality_review",
+            "recover": "image_recovery",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
+    graph.add_conditional_edges(
+        "image_recovery",
+        _route_image_recovery,
+        {
+            "retry": "image_generation",
+            "storyboard": "storyboard_design",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
 
     graph.add_edge("quality_review", "quality_critic")
     graph.add_edge("quality_critic", "quality_decision")
-    graph.add_conditional_edges("quality_decision", _route_quality_decision, {"next": "audio_production", "recover": "quality_recovery", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
-    graph.add_conditional_edges("quality_recovery", _route_quality_recovery, {"retry": "image_generation", "storyboard": "storyboard_design", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
+    graph.add_conditional_edges(
+        "quality_decision",
+        _route_quality_decision,
+        {
+            "next": "audio_production",
+            "recover": "quality_recovery",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
+    graph.add_conditional_edges(
+        "quality_recovery",
+        _route_quality_recovery,
+        {
+            "retry": "image_generation",
+            "storyboard": "storyboard_design",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
 
     # 外部 TTS：分镜确认 -> 音频制作 -> 音频检查 -> 视频生成。
     graph.add_edge("audio_production", "audio_review")
     graph.add_edge("audio_review", "audio_decision")
-    graph.add_conditional_edges("audio_decision", _route_audio_decision, {"next": "video_generation", "recover": "audio_recovery", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
-    graph.add_conditional_edges("audio_recovery", _route_audio_recovery, {"retry": "audio_production", "image": "image_generation", "storyboard": "storyboard_design", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
+    graph.add_conditional_edges(
+        "audio_decision",
+        _route_audio_decision,
+        {
+            "next": "video_generation",
+            "recover": "audio_recovery",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
+    graph.add_conditional_edges(
+        "audio_recovery",
+        _route_audio_recovery,
+        {
+            "retry": "audio_production",
+            "image": "image_generation",
+            "storyboard": "storyboard_design",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
 
     graph.add_edge("video_generation", "video_generation_fan_in")
     graph.add_edge("video_generation_fan_out", "video_generation_fan_in")
     graph.add_edge("video_generation_fan_in", "video_generation_review")
     graph.add_edge("video_generation_review", "video_generation_decision")
-    graph.add_conditional_edges("video_generation_decision", _route_video_generation_decision, {"next": "video_review", "recover": "video_generation_recovery", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
-    graph.add_conditional_edges("video_generation_recovery", _route_video_generation_recovery, {"retry": "video_generation", "image": "image_generation", "audio": "audio_production", "storyboard": "storyboard_design", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
+    graph.add_conditional_edges(
+        "video_generation_decision",
+        _route_video_generation_decision,
+        {
+            "next": "video_review",
+            "recover": "video_generation_recovery",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
+    graph.add_conditional_edges(
+        "video_generation_recovery",
+        _route_video_generation_recovery,
+        {
+            "retry": "video_generation",
+            "image": "image_generation",
+            "audio": "audio_production",
+            "storyboard": "storyboard_design",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
 
     graph.add_edge("video_review", "video_critic")
     graph.add_edge("video_critic", "video_decision")
-    graph.add_conditional_edges("video_decision", _route_video_decision, {"next": "edit_composition", "recover": "video_recovery", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
-    graph.add_conditional_edges("video_recovery", _route_video_recovery, {"retry": "video_generation", "image": "image_generation", "audio": "audio_production", "storyboard": "storyboard_design", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
+    graph.add_conditional_edges(
+        "video_decision",
+        _route_video_decision,
+        {
+            "next": "edit_composition",
+            "recover": "video_recovery",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
+    graph.add_conditional_edges(
+        "video_recovery",
+        _route_video_recovery,
+        {
+            "retry": "video_generation",
+            "image": "image_generation",
+            "audio": "audio_production",
+            "storyboard": "storyboard_design",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
 
     graph.add_edge("edit_composition", "edit_review")
     graph.add_edge("compose", "edit_review")
     graph.add_edge("edit_review", "edit_decision")
-    graph.add_conditional_edges("edit_decision", _route_edit_decision, {"next": "final_review", "recover": "edit_recovery", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
-    graph.add_conditional_edges("edit_recovery", _route_edit_recovery, {"retry": "edit_composition", "image": "image_generation", "audio": "audio_production", "video": "video_generation", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
+    graph.add_conditional_edges(
+        "edit_decision",
+        _route_edit_decision,
+        {
+            "next": "final_review",
+            "recover": "edit_recovery",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
+    graph.add_conditional_edges(
+        "edit_recovery",
+        _route_edit_recovery,
+        {
+            "retry": "edit_composition",
+            "image": "image_generation",
+            "audio": "audio_production",
+            "video": "video_generation",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
 
     graph.add_edge("final_review", "final_critic")
     graph.add_edge("final_critic", "final_decision")
-    graph.add_conditional_edges("final_decision", _route_final_decision, {"done": END, "recover": "final_recovery", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
-    graph.add_conditional_edges("final_recovery", _route_final_recovery, {"image": "image_generation", "audio": "audio_production", "video": "video_generation", "compose": "edit_composition", "failed": "auto_abort", "degraded": "degraded_publish", "human": "human_gate"})
+    graph.add_conditional_edges(
+        "final_decision",
+        _route_final_decision,
+        {
+            "done": END,
+            "recover": "final_recovery",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
+    graph.add_conditional_edges(
+        "final_recovery",
+        _route_final_recovery,
+        {
+            "image": "image_generation",
+            "audio": "audio_production",
+            "video": "video_generation",
+            "compose": "edit_composition",
+            "failed": "auto_abort",
+            "degraded": "degraded_publish",
+            "human": "human_gate",
+        },
+    )
 
     graph.add_edge("auto_abort", END)
     graph.add_edge("degraded_publish", END)
     graph.add_edge("human_gate", END)
     return graph
 
+
 # --- stage nodes ---
 
 
-def _reference_gate(project_id: str, *, allow_degraded: bool = False, allow_needs_review: bool = True) -> dict[str, Any]:
+def _reference_gate(
+    project_id: str, *, allow_degraded: bool = False, allow_needs_review: bool = True
+) -> dict[str, Any]:
     from db import SessionLocal
     from services.reference_readiness_service import ensure_generation_gate
 
     db = SessionLocal()
     try:
-        return ensure_generation_gate(db, project_id, allow_degraded=allow_degraded, allow_needs_review=allow_needs_review)
+        return ensure_generation_gate(
+            db, project_id, allow_degraded=allow_degraded, allow_needs_review=allow_needs_review
+        )
     finally:
         db.close()
 
@@ -228,7 +660,9 @@ def _reference_gate_for_state(state: AgentState, *, allow_degraded: bool = False
     )
 
 
-def _reference_review_update(project_id: str, report: dict[str, Any], state: AgentState | None = None) -> dict[str, Any]:
+def _reference_review_update(
+    project_id: str, report: dict[str, Any], state: AgentState | None = None
+) -> dict[str, Any]:
     """参考素材阻断时保留可追踪原因；只有显式 manual 才写人工等待状态。"""
 
     affected = report.get("affected_shot_ids", [])
@@ -241,15 +675,20 @@ def _reference_review_update(project_id: str, report: dict[str, Any], state: Age
     update = {
         "consistency_report": report,
         "affected_shot_ids": affected,
-        "stage_status": {StageName.ASSET_PREPARATION.value: StageStatus.DEGRADED.value if manual else StageStatus.FAILED.value},
+        "stage_status": {
+            StageName.ASSET_PREPARATION.value: StageStatus.DEGRADED.value if manual else StageStatus.FAILED.value
+        },
         "current_step": "asset_review",
     }
     if manual:
         update.update({"needs_human_review": True, "human_reason": reason})
     else:
-        update["recovery_plan"] = {"stage": StageName.ASSET_PREPARATION.value, "reason": reason, "affected_shot_ids": affected}
+        update["recovery_plan"] = {
+            "stage": StageName.ASSET_PREPARATION.value,
+            "reason": reason,
+            "affected_shot_ids": affected,
+        }
     return update
-
 
 
 async def _director_planning(state: AgentState) -> dict:
@@ -259,7 +698,9 @@ async def _director_planning(state: AgentState) -> dict:
     try:
         from agent.nodes import script_parser
 
-        parsed = await script_parser.run({**base["initial_state"], **state, "prompt_revisions": state.get("prompt_revisions") or []})
+        parsed = await script_parser.run(
+            {**base["initial_state"], **state, "prompt_revisions": state.get("prompt_revisions") or []}
+        )
         payload = {
             "script_title": parsed.get("script_title", ""),
             "genre": parsed.get("genre", ""),
@@ -276,7 +717,14 @@ async def _director_planning(state: AgentState) -> dict:
         critique = critique_director(payload)
         return _save_stage(state, store, StageName.DIRECTOR_PLANNING, base, payload, critique=critique)
     except Exception as exc:
-        return _failed_stage(state, store, StageName.DIRECTOR_PLANNING, base, exc, critique=critique_llm_failure(exc, stage=StageName.DIRECTOR_PLANNING))
+        return _failed_stage(
+            state,
+            store,
+            StageName.DIRECTOR_PLANNING,
+            base,
+            exc,
+            critique=critique_llm_failure(exc, stage=StageName.DIRECTOR_PLANNING),
+        )
 
 
 async def _director_review(state: AgentState) -> dict:
@@ -299,12 +747,21 @@ async def _storyboard_design(state: AgentState) -> dict:
     try:
         from agent.nodes import storyboard_gen
 
-        generated = await storyboard_gen.run({**base["initial_state"], **state, "prompt_revisions": state.get("prompt_revisions") or []})
+        generated = await storyboard_gen.run(
+            {**base["initial_state"], **state, "prompt_revisions": state.get("prompt_revisions") or []}
+        )
         payload = {"shots": generated.get("shots", []), "timing_plan": generated.get("timing_plan", {})}
         critique = critique_storyboard({"shots": payload["shots"]})
         return _save_stage(state, store, StageName.STORYBOARD_DESIGN, base, payload, critique=critique)
     except Exception as exc:
-        return _failed_stage(state, store, StageName.STORYBOARD_DESIGN, base, exc, critique=critique_llm_failure(exc, stage=StageName.STORYBOARD_DESIGN))
+        return _failed_stage(
+            state,
+            store,
+            StageName.STORYBOARD_DESIGN,
+            base,
+            exc,
+            critique=critique_llm_failure(exc, stage=StageName.STORYBOARD_DESIGN),
+        )
 
 
 async def _storyboard_review(state: AgentState) -> dict:
@@ -333,7 +790,11 @@ async def _asset_preparation(state: AgentState) -> dict:
         await script_route._ensure_scene_baseline_images(asset_project_id, working)
         await _persist_phase1_idempotent(project_id, working)
         reference_report = refresh_project_reference_state_for_graph(project_id, allow_needs_review=False)
-        reference_supported = any(item.supports_reference_images for item in provider_profiles("image", reference_required=True) if item.available)
+        reference_supported = any(
+            item.supports_reference_images
+            for item in provider_profiles("image", reference_required=True)
+            if item.available
+        )
         critique = critique_assets(working, reference_supported=reference_supported)
         payload = {
             "characters": working.get("characters", []),
@@ -344,11 +805,20 @@ async def _asset_preparation(state: AgentState) -> dict:
         }
         return _save_stage(state, store, StageName.ASSET_PREPARATION, base, payload, critique=critique)
     except Exception as exc:
-        return _failed_stage(state, store, StageName.ASSET_PREPARATION, base, exc, critique=critique_assets(state, reference_supported=False))
+        return _failed_stage(
+            state,
+            store,
+            StageName.ASSET_PREPARATION,
+            base,
+            exc,
+            critique=critique_assets(state, reference_supported=False),
+        )
 
 
 async def _asset_review(state: AgentState) -> dict:
-    reference_supported = any(item.supports_reference_images for item in provider_profiles("image", reference_required=True) if item.available)
+    reference_supported = any(
+        item.supports_reference_images for item in provider_profiles("image", reference_required=True) if item.available
+    )
     critique = critique_assets(state, reference_supported=reference_supported)
     report = state.get("consistency_report") or _reference_gate_for_state(state)
     if report.get("blocking"):
@@ -356,7 +826,11 @@ async def _asset_review(state: AgentState) -> dict:
             "critiques": [critique.model_dump(mode="json")],
             **_reference_review_update(str(state.get("project_id") or ""), report, state),
         }
-    return {"critiques": [critique.model_dump(mode="json")], "consistency_report": report, "current_step": "asset_review"}
+    return {
+        "critiques": [critique.model_dump(mode="json")],
+        "consistency_report": report,
+        "current_step": "asset_review",
+    }
 
 
 async def _asset_decision(state: AgentState) -> dict:
@@ -391,11 +865,14 @@ async def _image_generation_fan_out(state: AgentState) -> dict:
         }
     provider = str((state.get("provider_switch") or {}).get(StageName.IMAGE_GENERATION.value) or "")
     preferred_size = _preferred_image_size(state)
-    worker = partial(generate_storyboard_shot, project_id=project_id, provider_override=provider, preferred_size=preferred_size)
+    worker = partial(
+        generate_storyboard_shot, project_id=project_id, provider_override=provider, preferred_size=preferred_size
+    )
 
     async def generate_one(shot_id: str, version: int) -> dict[str, Any]:
         return await worker(
-            shot_id, version,
+            shot_id,
+            version,
             seed_override=_seed_override(state, StageName.IMAGE_GENERATION, shot_id),
             recovery_revisions=_shot_revisions(state, StageName.IMAGE_GENERATION, shot_id),
         )
@@ -459,16 +936,24 @@ async def _image_review(state: AgentState) -> dict:
 
 
 async def _image_decision(state: AgentState) -> dict:
-    return _decision_node(state, StageName.IMAGE_GENERATION, next_target="quality_review", artifacts_stage=StageName.IMAGE_GENERATION)
+    return _decision_node(
+        state, StageName.IMAGE_GENERATION, next_target="quality_review", artifacts_stage=StageName.IMAGE_GENERATION
+    )
 
 
 async def _image_recovery(state: AgentState) -> dict:
-    return _recovery_node(state, StageName.IMAGE_GENERATION, default_target="image_generation", artifacts_stage=StageName.IMAGE_GENERATION)
+    return _recovery_node(
+        state, StageName.IMAGE_GENERATION, default_target="image_generation", artifacts_stage=StageName.IMAGE_GENERATION
+    )
 
 
 async def _quality_critic(state: AgentState) -> dict:
     reports = [item for item in state.get("critiques", []) if item.get("stage") == StageName.QUALITY_REVIEW.value]
-    critique = reports[-1] if reports else critique_images(_latest_artifacts(state, StageName.IMAGE_GENERATION)).model_dump(mode="json")
+    critique = (
+        reports[-1]
+        if reports
+        else critique_images(_latest_artifacts(state, StageName.IMAGE_GENERATION)).model_dump(mode="json")
+    )
     return {"critiques": [critique], "current_step": "quality_critic"}
 
 
@@ -481,7 +966,11 @@ async def _quality_review(state: AgentState) -> dict:
         return _reference_review_update(str(state.get("project_id") or ""), reference_gate, state)
     gate_shot_ids = state.get("pending_shot_ids") or state.get("split_recovery_shot_ids")
     if gate_shot_ids and not set(_shot_versions(project_id)).issuperset(gate_shot_ids):
-        return {"stage_status": {StageName.QUALITY_REVIEW.value: StageStatus.FAILED.value}, "failed_shot_ids": list(gate_shot_ids), "current_step": "quality_review"}
+        return {
+            "stage_status": {StageName.QUALITY_REVIEW.value: StageStatus.FAILED.value},
+            "failed_shot_ids": list(gate_shot_ids),
+            "current_step": "quality_review",
+        }
     artifacts = _latest_artifacts(state, StageName.IMAGE_GENERATION)
     if gate_shot_ids:
         artifacts = [item for item in artifacts if item.get("shot_id") in gate_shot_ids]
@@ -512,34 +1001,75 @@ async def _quality_review(state: AgentState) -> dict:
         "passed": passed,
         "score": overall_score,
         "metrics": [
-            {"name": "review_score", "value": overall_score, "threshold": default_quality_profile(state.get("quality_profile")).quality_threshold, "passed": passed},
-            {"name": "reviewed_shot_count", "value": len(reviews), "threshold": len(reviews), "passed": not failed_reviews},
+            {
+                "name": "review_score",
+                "value": overall_score,
+                "threshold": default_quality_profile(state.get("quality_profile")).quality_threshold,
+                "passed": passed,
+            },
+            {
+                "name": "reviewed_shot_count",
+                "value": len(reviews),
+                "threshold": len(reviews),
+                "passed": not failed_reviews,
+            },
             # 结构门禁收口时视觉质量仍是 pending：这里显式暴露，不伪装成已审核。
-            {"name": "visual_quality_pending", "passed": None, "detail": "视觉模型缺失，仅结构门禁收口；视觉质量未评估"},
-        ] if visual_pending else [
-            {"name": "review_score", "value": overall_score, "threshold": default_quality_profile(state.get("quality_profile")).quality_threshold, "passed": passed},
-            {"name": "reviewed_shot_count", "value": len(reviews), "threshold": len(reviews), "passed": not failed_reviews},
+            {
+                "name": "visual_quality_pending",
+                "passed": None,
+                "detail": "视觉模型缺失，仅结构门禁收口；视觉质量未评估",
+            },
+        ]
+        if visual_pending
+        else [
+            {
+                "name": "review_score",
+                "value": overall_score,
+                "threshold": default_quality_profile(state.get("quality_profile")).quality_threshold,
+                "passed": passed,
+            },
+            {
+                "name": "reviewed_shot_count",
+                "value": len(reviews),
+                "threshold": len(reviews),
+                "passed": not failed_reviews,
+            },
         ],
         "issues": [
-            {"code": "quality_review_failed", "severity": "error", "message": f"镜头 {shot_id} 未通过质量审核: {review.suggestion or '请查看质量审核记录'}", "shot_id": shot_id}
+            {
+                "code": "quality_review_failed",
+                "severity": "error",
+                "message": f"镜头 {shot_id} 未通过质量审核: {review.suggestion or '请查看质量审核记录'}",
+                "shot_id": shot_id,
+            }
             for shot_id, review in sorted(failed_reviews.items())
         ]
         + (
-            [{
-                "code": "visual_quality_pending",
-                "severity": "info",
-                "message": f"故事板视觉质量待审：{gate.get('reason') or '未配置视觉模型'}；已按结构门禁自动继续",
-                "details": {
-                    "stage": StageName.QUALITY_REVIEW.value,
-                    "status": "pending",
-                    "shot_ids": [str(item) for item in (gate.get("shot_ids") or []) if item],
-                },
-            }]
+            [
+                {
+                    "code": "visual_quality_pending",
+                    "severity": "info",
+                    "message": f"故事板视觉质量待审：{gate.get('reason') or '未配置视觉模型'}；已按结构门禁自动继续",
+                    "details": {
+                        "stage": StageName.QUALITY_REVIEW.value,
+                        "status": "pending",
+                        "shot_ids": [str(item) for item in (gate.get("shot_ids") or []) if item],
+                    },
+                }
+            ]
             if visual_pending
             else []
         ),
         "evidence": [{"kind": "metric", "name": "review_score", "value": overall_score, "passed": passed}]
-        + [{"kind": "issue", "code": "quality_review_failed", "shot_id": shot_id, "details": {"overall_score": float(review.overall_score)}} for shot_id, review in sorted(failed_reviews.items())]
+        + [
+            {
+                "kind": "issue",
+                "code": "quality_review_failed",
+                "shot_id": shot_id,
+                "details": {"overall_score": float(review.overall_score)},
+            }
+            for shot_id, review in sorted(failed_reviews.items())
+        ]
         + ([{"kind": "structural_only_gate", **(gate.get("evidence") or {})}] if visual_pending else []),
         "failure_kind": FailureKind.QUALITY_BELOW_THRESHOLD.value if not passed else None,
         "recoverable": True,
@@ -552,7 +1082,11 @@ async def _quality_review(state: AgentState) -> dict:
     if passed and visual_pending:
         status = StageStatus.DEGRADED.value
     else:
-        status = StageStatus.SUCCEEDED.value if passed else (StageStatus.WAITING_HUMAN.value if human_allowed else StageStatus.FAILED.value)
+        status = (
+            StageStatus.SUCCEEDED.value
+            if passed
+            else (StageStatus.WAITING_HUMAN.value if human_allowed else StageStatus.FAILED.value)
+        )
     update: dict[str, Any] = {
         **_identity_update(state, StageName.QUALITY_REVIEW, base),
         "critiques": [structural.model_dump(mode="json"), quality_critique],
@@ -565,18 +1099,24 @@ async def _quality_review(state: AgentState) -> dict:
         # 视觉待审通过 degraded 状态与未解决风险如实暴露。
         await _confirm_storyboard_shots(project_id, artifacts)
     if visual_pending and passed:
-        update.update(_visual_pending_update(
-            state,
-            stage=StageName.QUALITY_REVIEW,
-            reason=str(gate.get("reason") or "未配置视觉模型"),
-            shot_ids=[str(item) for item in (gate.get("shot_ids") or []) if item],
-        ))
+        update.update(
+            _visual_pending_update(
+                state,
+                stage=StageName.QUALITY_REVIEW,
+                reason=str(gate.get("reason") or "未配置视觉模型"),
+                shot_ids=[str(item) for item in (gate.get("shot_ids") or []) if item],
+            )
+        )
         update["stage_status"] = {StageName.QUALITY_REVIEW.value: StageStatus.DEGRADED.value}
     if gate.get("errors"):
         allowed_keys = {"errors", "needs_human_review", "human_reason"} if human_allowed else set()
         update.update({key: value for key, value in gate.items() if key in allowed_keys})
         if not human_allowed:
-            update["recovery_plan"] = {"stage": StageName.QUALITY_REVIEW.value, "reason": gate.get("errors"), "affected_shot_ids": sorted(failed_reviews) or list(reviews)}
+            update["recovery_plan"] = {
+                "stage": StageName.QUALITY_REVIEW.value,
+                "reason": gate.get("errors"),
+                "affected_shot_ids": sorted(failed_reviews) or list(reviews),
+            }
     quality_row = _save_quality_review_checkpoint(state, quality_critique, reviews, status=status, base=base)
     update.update(
         {
@@ -588,11 +1128,15 @@ async def _quality_review(state: AgentState) -> dict:
 
 
 async def _quality_decision(state: AgentState) -> dict:
-    return _decision_node(state, StageName.QUALITY_REVIEW, next_target="audio_production", artifacts_stage=StageName.IMAGE_GENERATION)
+    return _decision_node(
+        state, StageName.QUALITY_REVIEW, next_target="audio_production", artifacts_stage=StageName.IMAGE_GENERATION
+    )
 
 
 async def _quality_recovery(state: AgentState) -> dict:
-    return _recovery_node(state, StageName.QUALITY_REVIEW, default_target="image_generation", artifacts_stage=StageName.IMAGE_GENERATION)
+    return _recovery_node(
+        state, StageName.QUALITY_REVIEW, default_target="image_generation", artifacts_stage=StageName.IMAGE_GENERATION
+    )
 
 
 async def _video_generation_fan_out(state: AgentState) -> dict:
@@ -603,17 +1147,36 @@ async def _video_generation_fan_out(state: AgentState) -> dict:
     if not storyboard_gate.get("ok"):
         return {
             "stage_status": {StageName.VIDEO_GENERATION.value: StageStatus.FAILED.value},
-            "recovery_plan": {"stage": StageName.QUALITY_REVIEW.value, "reason": _gate_failure_summary(storyboard_gate), "affected_shot_ids": [str(item.get("shot_id")) for item in storyboard_gate.get("failed") or [] if item.get("shot_id")]},
+            "recovery_plan": {
+                "stage": StageName.QUALITY_REVIEW.value,
+                "reason": _gate_failure_summary(storyboard_gate),
+                "affected_shot_ids": [
+                    str(item.get("shot_id")) for item in storyboard_gate.get("failed") or [] if item.get("shot_id")
+                ],
+            },
             "current_step": "video_generation",
         }
-    shot_versions = _shot_versions(project_id, state.get("pending_shot_ids") or state.get("split_recovery_shot_ids"), require_storyboard=True)
+    shot_versions = _shot_versions(
+        project_id, state.get("pending_shot_ids") or state.get("split_recovery_shot_ids"), require_storyboard=True
+    )
     required_shots = state.get("pending_shot_ids") or state.get("split_recovery_shot_ids") or []
     if required_shots and not set(shot_versions).issuperset(required_shots):
-        return {"stage_status": {StageName.VIDEO_GENERATION.value: StageStatus.FAILED.value}, "failed_shot_ids": list(required_shots), "current_step": "video_generation_fan_out"}
+        return {
+            "stage_status": {StageName.VIDEO_GENERATION.value: StageStatus.FAILED.value},
+            "failed_shot_ids": list(required_shots),
+            "current_step": "video_generation_fan_out",
+        }
     if not shot_versions:
-        return {"stage_status": {StageName.VIDEO_GENERATION.value: StageStatus.FAILED.value}, "current_step": "video_generation_fan_out"}
+        return {
+            "stage_status": {StageName.VIDEO_GENERATION.value: StageStatus.FAILED.value},
+            "current_step": "video_generation_fan_out",
+        }
     provider = str((state.get("provider_switch") or {}).get(StageName.VIDEO_GENERATION.value) or "")
-    resolution = str((state.get("provider_switch") or {}).get(f"{StageName.VIDEO_GENERATION.value}:resolution") or state.get("resolution") or "720p")
+    resolution = str(
+        (state.get("provider_switch") or {}).get(f"{StageName.VIDEO_GENERATION.value}:resolution")
+        or state.get("resolution")
+        or "720p"
+    )
     # 音频阶段已经先行完成；视频 worker 只准备/复用当前版本音频，不重复调用 TTS。
     quality_profile = str(state.get("quality_profile") or QualityProfileName.STANDARD.value)
     retry_candidate = str((state.get("recovery_plan") or {}).get("retry_of_candidate_id") or "")
@@ -628,7 +1191,8 @@ async def _video_generation_fan_out(state: AgentState) -> dict:
 
     async def generate_one(shot_id: str, version: int) -> dict[str, Any]:
         return await worker(
-            shot_id, version,
+            shot_id,
+            version,
             seed_override=_seed_override(state, StageName.VIDEO_GENERATION, shot_id),
             recovery_revisions=_shot_revisions(state, StageName.VIDEO_GENERATION, shot_id),
         )
@@ -690,11 +1254,15 @@ async def _video_generation_review(state: AgentState) -> dict:
 
 
 async def _video_generation_decision(state: AgentState) -> dict:
-    return _decision_node(state, StageName.VIDEO_GENERATION, next_target="video_review", artifacts_stage=StageName.VIDEO_GENERATION)
+    return _decision_node(
+        state, StageName.VIDEO_GENERATION, next_target="video_review", artifacts_stage=StageName.VIDEO_GENERATION
+    )
 
 
 async def _video_generation_recovery(state: AgentState) -> dict:
-    return _recovery_node(state, StageName.VIDEO_GENERATION, default_target="video_generation", artifacts_stage=StageName.VIDEO_GENERATION)
+    return _recovery_node(
+        state, StageName.VIDEO_GENERATION, default_target="video_generation", artifacts_stage=StageName.VIDEO_GENERATION
+    )
 
 
 async def _video_review(state: AgentState) -> dict:
@@ -718,11 +1286,25 @@ async def _video_review(state: AgentState) -> dict:
         ]
         + [issue.model_dump(mode="json") for issue in critique.issues if issue.severity == "error"],
         "evidence": list(critique.evidence),
-        "failure_kind": (critique.failure_kind.value if critique.failure_kind else FailureKind.QUALITY_BELOW_THRESHOLD.value) if not passed else None,
+        "failure_kind": (
+            critique.failure_kind.value if critique.failure_kind else FailureKind.QUALITY_BELOW_THRESHOLD.value
+        )
+        if not passed
+        else None,
         "recoverable": critique.recoverable,
         "proposed_changes": critique.proposed_changes,
-        "affected_shot_ids": sorted(set(critique.affected_shot_ids) | set(error_shot_ids) | set(_shot_ids(project_id) if quality.get("errors") else [])),
-        "recommended_strategy": (critique.recommended_strategy.value if critique.recommended_strategy else RecoveryStrategy.REGENERATE_FAILED_SHOTS.value) if not passed else None,
+        "affected_shot_ids": sorted(
+            set(critique.affected_shot_ids)
+            | set(error_shot_ids)
+            | set(_shot_ids(project_id) if quality.get("errors") else [])
+        ),
+        "recommended_strategy": (
+            critique.recommended_strategy.value
+            if critique.recommended_strategy
+            else RecoveryStrategy.REGENERATE_FAILED_SHOTS.value
+        )
+        if not passed
+        else None,
         "source": "quality_review_service",
     }
     if passed and visual_pending:
@@ -730,7 +1312,11 @@ async def _video_review(state: AgentState) -> dict:
         status = StageStatus.DEGRADED
         review_critique["metrics"] = [
             *review_critique["metrics"],
-            {"name": "visual_quality_pending", "passed": None, "detail": "视觉模型缺失，仅结构+技术门禁收口；视觉质量未评估"},
+            {
+                "name": "visual_quality_pending",
+                "passed": None,
+                "detail": "视觉模型缺失，仅结构+技术门禁收口；视觉质量未评估",
+            },
         ]
         review_critique["issues"] = [
             *review_critique["issues"],
@@ -746,7 +1332,11 @@ async def _video_review(state: AgentState) -> dict:
             },
         ]
     else:
-        status = StageStatus.SUCCEEDED if passed else (StageStatus.WAITING_HUMAN if _human_allowed(state) else StageStatus.FAILED)
+        status = (
+            StageStatus.SUCCEEDED
+            if passed
+            else (StageStatus.WAITING_HUMAN if _human_allowed(state) else StageStatus.FAILED)
+        )
     row = store.save_stage(
         StageName.VIDEO_REVIEW.value,
         status=status.value,
@@ -761,16 +1351,20 @@ async def _video_review(state: AgentState) -> dict:
         "stage_status": {StageName.VIDEO_REVIEW.value: status.value},
         "stage_outputs": {StageName.VIDEO_REVIEW.value: row},
         "critiques": [critique.model_dump(mode="json"), review_critique],
-        "failed_shot_ids": [item.get("shot_id") for item in artifacts if item.get("status") == StageStatus.FAILED.value],
+        "failed_shot_ids": [
+            item.get("shot_id") for item in artifacts if item.get("status") == StageStatus.FAILED.value
+        ],
         "current_step": "video_review",
     }
     if passed and visual_pending:
-        update.update(_visual_pending_update(
-            state,
-            stage=StageName.VIDEO_REVIEW,
-            reason=str(quality.get("reason") or "未配置视觉模型"),
-            shot_ids=[str(item) for item in (quality.get("shot_ids") or []) if item],
-        ))
+        update.update(
+            _visual_pending_update(
+                state,
+                stage=StageName.VIDEO_REVIEW,
+                reason=str(quality.get("reason") or "未配置视觉模型"),
+                shot_ids=[str(item) for item in (quality.get("shot_ids") or []) if item],
+            )
+        )
         update["stage_status"] = {StageName.VIDEO_REVIEW.value: StageStatus.DEGRADED.value}
     return update
 
@@ -781,11 +1375,15 @@ async def _video_critic(state: AgentState) -> dict:
 
 
 async def _video_decision(state: AgentState) -> dict:
-    return _decision_node(state, StageName.VIDEO_REVIEW, next_target="edit_composition", artifacts_stage=StageName.VIDEO_GENERATION)
+    return _decision_node(
+        state, StageName.VIDEO_REVIEW, next_target="edit_composition", artifacts_stage=StageName.VIDEO_GENERATION
+    )
 
 
 async def _video_recovery(state: AgentState) -> dict:
-    return _recovery_node(state, StageName.VIDEO_REVIEW, default_target="video_generation", artifacts_stage=StageName.VIDEO_GENERATION)
+    return _recovery_node(
+        state, StageName.VIDEO_REVIEW, default_target="video_generation", artifacts_stage=StageName.VIDEO_GENERATION
+    )
 
 
 async def _audio_production(state: AgentState) -> dict:
@@ -793,10 +1391,16 @@ async def _audio_production(state: AgentState) -> dict:
     plan = _audio_execution_plan(project_id, state)
     if plan["mode"] == "external_tts" and not (state.get("storyboard_confirmed") or plan.get("storyboard_confirmed")):
         return _abort("audio_production", "外部 TTS 依赖分镜确认；分镜未确认前不得生成音频")
-    shot_versions = _audio_shot_versions(project_id, state.get("pending_shot_ids") or state.get("split_recovery_shot_ids"))
+    shot_versions = _audio_shot_versions(
+        project_id, state.get("pending_shot_ids") or state.get("split_recovery_shot_ids")
+    )
     scope_ids = state.get("pending_shot_ids") or state.get("split_recovery_shot_ids") or []
     if scope_ids and not set(_shot_versions(project_id)).issuperset(scope_ids):
-        return {"stage_status": {StageName.AUDIO_PRODUCTION.value: StageStatus.FAILED.value}, "failed_shot_ids": list(scope_ids), "current_step": "audio_production"}
+        return {
+            "stage_status": {StageName.AUDIO_PRODUCTION.value: StageStatus.FAILED.value},
+            "failed_shot_ids": list(scope_ids),
+            "current_step": "audio_production",
+        }
     worker = partial(generate_audio_shot, project_id=project_id)
     result = await run_shot_fanout(
         project_id=project_id,
@@ -836,16 +1440,22 @@ async def _audio_production(state: AgentState) -> dict:
 
 
 async def _audio_review(state: AgentState) -> dict:
-    critique = critique_audio(_db_shots(state.get("project_id", "")), _latest_artifacts(state, StageName.AUDIO_PRODUCTION))
+    critique = critique_audio(
+        _db_shots(state.get("project_id", "")), _latest_artifacts(state, StageName.AUDIO_PRODUCTION)
+    )
     return {"critiques": [critique.model_dump(mode="json")], "current_step": "audio_review"}
 
 
 async def _audio_decision(state: AgentState) -> dict:
-    return _decision_node(state, StageName.AUDIO_PRODUCTION, next_target="video_generation", artifacts_stage=StageName.AUDIO_PRODUCTION)
+    return _decision_node(
+        state, StageName.AUDIO_PRODUCTION, next_target="video_generation", artifacts_stage=StageName.AUDIO_PRODUCTION
+    )
 
 
 async def _audio_recovery(state: AgentState) -> dict:
-    return _recovery_node(state, StageName.AUDIO_PRODUCTION, default_target="audio_production", artifacts_stage=StageName.AUDIO_PRODUCTION)
+    return _recovery_node(
+        state, StageName.AUDIO_PRODUCTION, default_target="audio_production", artifacts_stage=StageName.AUDIO_PRODUCTION
+    )
 
 
 async def _generate_shot_videos(state: AgentState) -> dict:
@@ -859,7 +1469,9 @@ async def _generate_shot_videos(state: AgentState) -> dict:
     project_id = state["project_id"]
     gate = quality_review_service.storyboard_gate_status(project_id, **_visual_pending_gate_kwargs(state))
     if not gate.get("ok"):
-        return _abort("generate_shot_videos", "故事板质量门禁未通过，自动模式禁止生成视频: " + _gate_failure_summary(gate))
+        return _abort(
+            "generate_shot_videos", "故事板质量门禁未通过，自动模式禁止生成视频: " + _gate_failure_summary(gate)
+        )
     failures: dict[str, str] = {}
     transient: dict[str, bool] = {}
     for shot_id in _shot_ids(project_id):
@@ -867,7 +1479,9 @@ async def _generate_shot_videos(state: AgentState) -> dict:
             await _run_single_shot_video(shot_id, force=False, capability_mode="auto")
         except Exception as exc:
             failures[shot_id] = str(exc)
-            transient[shot_id] = classify_failure(stage=StageName.VIDEO_GENERATION, message=str(exc)).kind in TRANSIENT_FAILURES
+            transient[shot_id] = (
+                classify_failure(stage=StageName.VIDEO_GENERATION, message=str(exc)).kind in TRANSIENT_FAILURES
+            )
     if failures:
         # 禁止无条件「重试一次」：只重试被分类为瞬时失败的错误（超时/存储抖动等），
         # 确定性失败交给恢复决策去修改输入或切换 Provider。
@@ -896,12 +1510,17 @@ def _video_structural_fallback(project_id: str, shot_ids: list[str], *, reason: 
     """
 
     wanted = {str(item) for item in shot_ids if item}
-    artifacts = [item for item in _shot_artifacts_from_db(project_id) if not wanted or str(item.get("shot_id") or "") in wanted]
+    artifacts = [
+        item for item in _shot_artifacts_from_db(project_id) if not wanted or str(item.get("shot_id") or "") in wanted
+    ]
     critique = critique_videos(artifacts)
     failed = sorted({issue.shot_id for issue in critique.issues if issue.severity == "error" and issue.shot_id})
     if not critique.passed:
         return {
-            **_abort("review_shot_videos", f"视觉模型缺失且视频结构/技术检查未通过（{reason}）；受影响镜头: {', '.join(failed[:10]) or '未知'}"),
+            **_abort(
+                "review_shot_videos",
+                f"视觉模型缺失且视频结构/技术检查未通过（{reason}）；受影响镜头: {', '.join(failed[:10]) or '未知'}",
+            ),
             "passed": False,
             "visual_pending": False,
         }
@@ -912,7 +1531,11 @@ def _video_structural_fallback(project_id: str, shot_ids: list[str], *, reason: 
         "reason": reason,
         "shot_ids": list(shot_ids),
         "critique": critique.model_dump(mode="json"),
-        "evidence": {"kind": "structural_only_gate", "checked": "video_structural_technical", "shot_count": len(artifacts)},
+        "evidence": {
+            "kind": "structural_only_gate",
+            "checked": "video_structural_technical",
+            "shot_count": len(artifacts),
+        },
         "current_step": "review_shot_videos",
     }
 
@@ -977,11 +1600,19 @@ async def _review_shot_videos(state: AgentState, *, allow_retry: bool = True) ->
     previous_frames = _previous_last_frames(project_id)
     last_reviews: dict[str, Any] = {}
     for attempt in range(max_retries + 1):
-        reviews = {shot_id: await quality_review_service.review_video_shot(shot_id, previous_frame_path=previous_frames.get(shot_id, "")) for shot_id in shot_ids}
+        reviews = {
+            shot_id: await quality_review_service.review_video_shot(
+                shot_id, previous_frame_path=previous_frames.get(shot_id, "")
+            )
+            for shot_id in shot_ids
+        }
         last_reviews = reviews
         errored = {shot_id: review for shot_id, review in reviews.items() if review.verdict == "error"}
         if errored:
-            return {**_abort("review_shot_videos", f"视频质量审核 Provider 调用失败: {_review_summary(errored)}"), "stage_status": {StageName.VIDEO_GENERATION.value: StageStatus.FAILED.value}}
+            return {
+                **_abort("review_shot_videos", f"视频质量审核 Provider 调用失败: {_review_summary(errored)}"),
+                "stage_status": {StageName.VIDEO_GENERATION.value: StageStatus.FAILED.value},
+            }
         unsupported = {shot_id: review for shot_id, review in reviews.items() if review.verdict == "unsupported"}
         if unsupported:
             if allow_human:
@@ -1020,6 +1651,7 @@ async def _compose(state: AgentState) -> dict:
         return _restore_stage(state, store, StageName.EDIT_COMPOSITION)
     try:
         from services.quality_review_service import quality_review_service
+
         video_gate = quality_review_service.video_gate_status(project_id, **_visual_pending_gate_kwargs(state))
         if not video_gate.get("ok"):
             return _abort("compose", "视频质量门禁未通过，自动模式禁止导出成片: " + _gate_failure_summary(video_gate))
@@ -1034,12 +1666,21 @@ async def _compose(state: AgentState) -> dict:
         payload = {"output_path": output_path, "video_path": output_path}
         return _save_stage(state, store, StageName.EDIT_COMPOSITION, base, payload, critique=critique)
     except Exception as exc:
-        return _failed_stage(state, store, StageName.EDIT_COMPOSITION, base, exc, critique=critique_compose(project_id, _db_shots(project_id), ""))
+        return _failed_stage(
+            state,
+            store,
+            StageName.EDIT_COMPOSITION,
+            base,
+            exc,
+            critique=critique_compose(project_id, _db_shots(project_id), ""),
+        )
 
 
 async def _edit_review(state: AgentState) -> dict:
     project_id = str(state.get("project_id") or "")
-    critique = critique_compose(project_id, _db_shots(project_id), str(state.get("output_path") or state.get("video_path") or ""))
+    critique = critique_compose(
+        project_id, _db_shots(project_id), str(state.get("output_path") or state.get("video_path") or "")
+    )
     return {"critiques": [critique.model_dump(mode="json")], "current_step": "edit_review"}
 
 
@@ -1054,7 +1695,9 @@ async def _edit_recovery(state: AgentState) -> dict:
 async def _final_review(state: AgentState) -> dict:
     _project_id, store, base = _stage_context(state, StageName.FINAL_REVIEW)
     critique = critique_final({**state, "shot_artifacts": _latest_artifacts(state, StageName.VIDEO_GENERATION)})
-    failure = None if critique.passed else _failure_from_critique(StageName.FINAL_REVIEW, critique.model_dump(mode="json"))
+    failure = (
+        None if critique.passed else _failure_from_critique(StageName.FINAL_REVIEW, critique.model_dump(mode="json"))
+    )
     update = _save_stage(
         state,
         store,
@@ -1070,16 +1713,31 @@ async def _final_review(state: AgentState) -> dict:
 
 async def _final_critic(state: AgentState) -> dict:
     critique = critique_final({**state, "shot_artifacts": _latest_artifacts(state, StageName.VIDEO_GENERATION)})
-    return {"critiques": [critique.model_dump(mode="json")], "final_report": extract_final_report(critique), "current_step": "final_critic"}
+    return {
+        "critiques": [critique.model_dump(mode="json")],
+        "final_report": extract_final_report(critique),
+        "current_step": "final_critic",
+    }
 
 
 async def _final_decision(state: AgentState) -> dict:
-    return _decision_node(state, StageName.FINAL_REVIEW, next_target="completed", artifacts_stage=StageName.VIDEO_GENERATION)
+    return _decision_node(
+        state, StageName.FINAL_REVIEW, next_target="completed", artifacts_stage=StageName.VIDEO_GENERATION
+    )
 
 
 async def _final_recovery(state: AgentState) -> dict:
-    update = _recovery_node(state, StageName.FINAL_REVIEW, default_target=_final_feedback_target(state), artifacts_stage=StageName.VIDEO_GENERATION)
-    if update.get("run_status") not in {RunStatus.FAILED.value, RunStatus.DEGRADED.value} and not update.get("needs_human_review") and update.get("selected_strategy") != RecoveryStrategy.SPLIT_SHOT.value:
+    update = _recovery_node(
+        state,
+        StageName.FINAL_REVIEW,
+        default_target=_final_feedback_target(state),
+        artifacts_stage=StageName.VIDEO_GENERATION,
+    )
+    if (
+        update.get("run_status") not in {RunStatus.FAILED.value, RunStatus.DEGRADED.value}
+        and not update.get("needs_human_review")
+        and update.get("selected_strategy") != RecoveryStrategy.SPLIT_SHOT.value
+    ):
         update["pending_recovery_target"] = _final_feedback_target(state)
     return update
 
@@ -1271,23 +1929,52 @@ def _route_image_recovery(state: AgentState) -> str:
 
 
 def _route_quality_recovery(state: AgentState) -> str:
-    return _route_recovery(state, {"image_generation": "retry", "quality_review": "retry", "storyboard_design": "storyboard"})
+    return _route_recovery(
+        state, {"image_generation": "retry", "quality_review": "retry", "storyboard_design": "storyboard"}
+    )
 
 
 def _route_audio_recovery(state: AgentState) -> str:
-    return _route_recovery(state, {"audio_production": "retry", "image_generation": "image", "storyboard_design": "storyboard"})
+    return _route_recovery(
+        state, {"audio_production": "retry", "image_generation": "image", "storyboard_design": "storyboard"}
+    )
 
 
 def _route_video_generation_recovery(state: AgentState) -> str:
-    return _route_recovery(state, {"video_generation": "retry", "image_generation": "image", "audio_production": "audio", "storyboard_design": "storyboard"})
+    return _route_recovery(
+        state,
+        {
+            "video_generation": "retry",
+            "image_generation": "image",
+            "audio_production": "audio",
+            "storyboard_design": "storyboard",
+        },
+    )
 
 
 def _route_video_recovery(state: AgentState) -> str:
-    return _route_recovery(state, {"video_generation": "retry", "video_review": "retry", "image_generation": "image", "audio_production": "audio", "storyboard_design": "storyboard"})
+    return _route_recovery(
+        state,
+        {
+            "video_generation": "retry",
+            "video_review": "retry",
+            "image_generation": "image",
+            "audio_production": "audio",
+            "storyboard_design": "storyboard",
+        },
+    )
 
 
 def _route_edit_recovery(state: AgentState) -> str:
-    return _route_recovery(state, {"edit_composition": "retry", "image_generation": "image", "audio_production": "audio", "video_generation": "video"})
+    return _route_recovery(
+        state,
+        {
+            "edit_composition": "retry",
+            "image_generation": "image",
+            "audio_production": "audio",
+            "video_generation": "video",
+        },
+    )
 
 
 def _route_final_recovery(state: AgentState) -> str:
@@ -1335,6 +2022,7 @@ def _route_recovery(state: AgentState, targets: dict[str, str]) -> str:
         return "failed"
     target = str(state.get("pending_recovery_target") or "")
     return targets.get(target, "failed")
+
 
 # --- common helpers ---
 
@@ -1391,7 +2079,9 @@ def _visual_pending_gate_kwargs(state: AgentState) -> dict[str, Any]:
     return {"allow_visual_pending": True} if _visual_pending_continue(state) else {}
 
 
-def _visual_pending_update(state: AgentState, *, stage: StageName, reason: str, shot_ids: list[str] | None = None) -> dict[str, Any]:
+def _visual_pending_update(
+    state: AgentState, *, stage: StageName, reason: str, shot_ids: list[str] | None = None
+) -> dict[str, Any]:
     """视觉能力缺失时的降级继续记录：只降级，不冒充质量通过。"""
 
     detail = VISUAL_PENDING_REASON_TEMPLATE.format(reason=reason or "未配置")
@@ -1443,7 +2133,10 @@ def _final_feedback_target(state: AgentState) -> str:
         for value in (
             state.get("final_feedback"),
             state.get("human_feedback"),
-            *(item.get("message", "") for item in (_latest_critique(state, StageName.FINAL_REVIEW) or {}).get("issues", [])),
+            *(
+                item.get("message", "")
+                for item in (_latest_critique(state, StageName.FINAL_REVIEW) or {}).get("issues", [])
+            ),
         )
     ).lower()
     if any(word in text for word in ("audio", "tts", "voice", "配音", "音轨", "声音", "台词", "对白")):
@@ -1494,7 +2187,15 @@ def _audio_execution_plan(project_id: str, state: AgentState) -> dict[str, Any]:
         "external_tts_shot_ids": external,
         "native_audio_shot_ids": native,
         "storyboard_confirmed": bool(state.get("storyboard_confirmed")),
-        "dependency": ["storyboard_confirmed", "audio_production", "audio_review", "video_generation", "video_review", "edit_composition", "final_review"]
+        "dependency": [
+            "storyboard_confirmed",
+            "audio_production",
+            "audio_review",
+            "video_generation",
+            "video_review",
+            "edit_composition",
+            "final_review",
+        ]
         if mode == "external_tts"
         else ["storyboard_confirmed", "video_generation", "video_review", "edit_composition", "final_review"],
     }
@@ -1545,13 +2246,17 @@ def _stage_context(state: AgentState, stage: StageName) -> tuple[str, Checkpoint
     run_id = str(state.get("run_id") or "auto")
     store = CheckpointStore.get(project_id, run_id)
     changes = store.detect_changes()
-    recovery = bool(state.get("pending_recovery_target")) or str((state.get("stage_status") or {}).get(str(state.get("current_stage") or ""), "")) in {
+    recovery = bool(state.get("pending_recovery_target")) or str(
+        (state.get("stage_status") or {}).get(str(state.get("current_stage") or ""), "")
+    ) in {
         StageStatus.RECOVERING.value,
         StageStatus.FAILED.value,
     }
     # stage_entered 事件是「当前阶段」的稳定事实来源：进程重启后仍能从检查点
     # 文件还原最近一次执行到的阶段，而不依赖内存 state。
-    store.add_event("stage_entered", stage=stage.value, recovery=recovery, shot_version=int(state.get("shot_version") or 0))
+    store.add_event(
+        "stage_entered", stage=stage.value, recovery=recovery, shot_version=int(state.get("shot_version") or 0)
+    )
     _report_stage_progress(project_id, stage)
     initial_state = dict(state.get("initial_state") or {})
     current_stage = state.get("current_stage")
@@ -1576,19 +2281,25 @@ def _stage_context(state: AgentState, stage: StageName) -> tuple[str, Checkpoint
             "upstream_outputs": upstream_outputs,
         }
     )
-    return project_id, store, {
-        "project_id": project_id,
-        "run_id": run_id,
-        "shot_version": shot_version,
-        "input_fingerprint": input_fingerprint,
-        "checkpoint_key": stage_contract(stage).checkpoint_key,
-        "initial_state": initial_state,
-        "changes": changes,
-        "recovery": recovery,
-    }
+    return (
+        project_id,
+        store,
+        {
+            "project_id": project_id,
+            "run_id": run_id,
+            "shot_version": shot_version,
+            "input_fingerprint": input_fingerprint,
+            "checkpoint_key": stage_contract(stage).checkpoint_key,
+            "initial_state": initial_state,
+            "changes": changes,
+            "recovery": recovery,
+        },
+    )
 
 
-def _identity_update(state: AgentState, stage: StageName, base: dict[str, Any], row: dict[str, Any] | None = None) -> dict[str, Any]:
+def _identity_update(
+    state: AgentState, stage: StageName, base: dict[str, Any], row: dict[str, Any] | None = None
+) -> dict[str, Any]:
     source = row or base
     transition = {
         "from": str(state.get("current_stage") or ""),
@@ -1607,7 +2318,16 @@ def _identity_update(state: AgentState, stage: StageName, base: dict[str, Any], 
     }
 
 
-def _save_stage(state: AgentState, store: CheckpointStore, stage: StageName, base: dict[str, Any], payload: dict[str, Any], *, critique: Any = None, failure: Any = None) -> dict:
+def _save_stage(
+    state: AgentState,
+    store: CheckpointStore,
+    stage: StageName,
+    base: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    critique: Any = None,
+    failure: Any = None,
+) -> dict:
     status = StageStatus.DEGRADED if failure else StageStatus.SUCCEEDED
     output_fp = fingerprint(payload)
     row = store.save_stage(
@@ -1635,7 +2355,15 @@ def _save_stage(state: AgentState, store: CheckpointStore, stage: StageName, bas
     return update
 
 
-def _failed_stage(state: AgentState, store: CheckpointStore, stage: StageName, base: dict[str, Any], exc: Exception, *, critique: Any = None) -> dict:
+def _failed_stage(
+    state: AgentState,
+    store: CheckpointStore,
+    stage: StageName,
+    base: dict[str, Any],
+    exc: Exception,
+    *,
+    critique: Any = None,
+) -> dict:
     failure = classify_failure(stage=stage, message=str(exc))
     row = store.save_stage(
         stage.value,
@@ -1690,9 +2418,27 @@ def _restore_stage(state: AgentState, store: CheckpointStore, stage: StageName) 
 
 def _payload_state_fields(stage: StageName, payload: dict[str, Any]) -> dict[str, Any]:
     fields = {
-        StageName.DIRECTOR_PLANNING: ("script_title", "genre", "style_suggestion", "characters", "raw_script", "script_scenes", "logic_issues", "rag_context", "requested_style", "effective_style", "style_source"),
+        StageName.DIRECTOR_PLANNING: (
+            "script_title",
+            "genre",
+            "style_suggestion",
+            "characters",
+            "raw_script",
+            "script_scenes",
+            "logic_issues",
+            "rag_context",
+            "requested_style",
+            "effective_style",
+            "style_source",
+        ),
         StageName.STORYBOARD_DESIGN: ("shots", "timing_plan"),
-        StageName.ASSET_PREPARATION: ("characters", "script_scenes", "shots", "reference_supported", "consistency_report"),
+        StageName.ASSET_PREPARATION: (
+            "characters",
+            "script_scenes",
+            "shots",
+            "reference_supported",
+            "consistency_report",
+        ),
         StageName.EDIT_COMPOSITION: ("output_path", "video_path"),
         StageName.FINAL_REVIEW: ("final_report",),
     }.get(stage, ())
@@ -1715,13 +2461,18 @@ def _candidate_results(state: AgentState, artifacts: list[dict[str, Any]]) -> li
     for item in artifacts:
         candidates = [entry for entry in (item.get("video_candidates") or []) if isinstance(entry, dict)]
         if candidates:
-            rows.extend({
-                "status": str(entry.get("status") or ""),
-                "provider": str(entry.get("provider") or ""),
-                "structural_passed": entry.get("structural_passed"),
-                "technical_passed": ((entry.get("metrics") or {}).get("categories") or {}).get("technical_quality", {}).get("passed"),
-                "path": str(entry.get("path") or entry.get("video_path") or ""),
-            } for entry in candidates)
+            rows.extend(
+                {
+                    "status": str(entry.get("status") or ""),
+                    "provider": str(entry.get("provider") or ""),
+                    "structural_passed": entry.get("structural_passed"),
+                    "technical_passed": ((entry.get("metrics") or {}).get("categories") or {})
+                    .get("technical_quality", {})
+                    .get("passed"),
+                    "path": str(entry.get("path") or entry.get("video_path") or ""),
+                }
+                for entry in candidates
+            )
         else:
             path = str(item.get("path") or "")
             structural_passed = item.get("structural_passed")
@@ -1737,13 +2488,15 @@ def _candidate_results(state: AgentState, artifacts: list[dict[str, Any]]) -> li
                 categories = report.get("categories") or {}
                 structural_passed = (categories.get("structural_validity") or {}).get("passed")
                 technical_passed = (categories.get("technical_quality") or {}).get("passed")
-            rows.append({
-                "status": str(item.get("status") or ""),
-                "provider": str(item.get("provider") or ""),
-                "structural_passed": structural_passed,
-                "technical_passed": technical_passed,
-                "path": path,
-            })
+            rows.append(
+                {
+                    "status": str(item.get("status") or ""),
+                    "provider": str(item.get("provider") or ""),
+                    "structural_passed": structural_passed,
+                    "technical_passed": technical_passed,
+                    "path": path,
+                }
+            )
     return rows
 
 
@@ -1776,7 +2529,9 @@ def _decision_context(state: AgentState, stage: StageName, critique: dict[str, A
     }
 
 
-def _decision_node(state: AgentState, stage: StageName, *, next_target: str, artifacts_stage: StageName | None = None) -> dict:
+def _decision_node(
+    state: AgentState, stage: StageName, *, next_target: str, artifacts_stage: StageName | None = None
+) -> dict:
     critique = _latest_critique(state, stage)
     artifacts = _latest_artifacts(state, artifacts_stage or stage)
     failure = (
@@ -1793,7 +2548,10 @@ def _decision_node(state: AgentState, stage: StageName, *, next_target: str, art
         project_id=str(state.get("project_id") or ""),
         shot_version=int(state.get("shot_version") or 0),
         critique=critique,
-        input_fingerprint=str(state.get("input_fingerprint") or fingerprint({"stage": stage.value, "state": state.get("stage_outputs", {})})),
+        input_fingerprint=str(
+            state.get("input_fingerprint")
+            or fingerprint({"stage": stage.value, "state": state.get("stage_outputs", {})})
+        ),
         mode=context["mode"],
         retries_remaining=context["retries_remaining"],
         quality_score=context["quality_score"],
@@ -1813,7 +2571,9 @@ def _decision_node(state: AgentState, stage: StageName, *, next_target: str, art
     return update
 
 
-def _recovery_node(state: AgentState, stage: StageName, *, default_target: str, artifacts_stage: StageName | None = None) -> dict:
+def _recovery_node(
+    state: AgentState, stage: StageName, *, default_target: str, artifacts_stage: StageName | None = None
+) -> dict:
     artifacts = _latest_artifacts(state, artifacts_stage or stage)
     critique = _latest_critique(state, stage)
     failure = (
@@ -1830,7 +2590,10 @@ def _recovery_node(state: AgentState, stage: StageName, *, default_target: str, 
         project_id=str(state.get("project_id") or ""),
         shot_version=int(state.get("shot_version") or 0),
         critique=critique,
-        input_fingerprint=str(state.get("input_fingerprint") or fingerprint({"stage": stage.value, "attempts": state.get("recovery_attempts", {})})),
+        input_fingerprint=str(
+            state.get("input_fingerprint")
+            or fingerprint({"stage": stage.value, "attempts": state.get("recovery_attempts", {})})
+        ),
         mode=context["mode"],
         retries_remaining=context["retries_remaining"],
         quality_score=context["quality_score"],
@@ -1843,9 +2606,7 @@ def _recovery_node(state: AgentState, stage: StageName, *, default_target: str, 
     provider_switch = dict(state.get("provider_switch") or {})
     pending_ids = list(state.get("pending_shot_ids") or [])
     failed_ids = {
-        str(item.get("shot_id") or "")
-        for item in artifacts
-        if item.get("status") == StageStatus.FAILED.value
+        str(item.get("shot_id") or "") for item in artifacts if item.get("status") == StageStatus.FAILED.value
     }
     if stage is not StageName.FINAL_REVIEW:
         failed_ids.update(str(item or "") for item in (state.get("failed_shot_ids") or []))
@@ -1863,7 +2624,10 @@ def _recovery_node(state: AgentState, stage: StageName, *, default_target: str, 
     if selected_strategy is RecoveryStrategy.CHANGE_SEED and not pending_ids:
         pending_ids = sorted({str(item.get("shot_id")) for item in artifacts if item.get("shot_id")})
     target = default_target
-    generation_stage = {StageName.QUALITY_REVIEW: StageName.IMAGE_GENERATION, StageName.VIDEO_REVIEW: StageName.VIDEO_GENERATION}.get(stage, stage)
+    generation_stage = {
+        StageName.QUALITY_REVIEW: StageName.IMAGE_GENERATION,
+        StageName.VIDEO_REVIEW: StageName.VIDEO_GENERATION,
+    }.get(stage, stage)
     if stage is StageName.FINAL_REVIEW:
         generation_stage = StageName(_final_feedback_target(state))
         feedback_ids = _final_feedback_shot_ids(state, generation_stage.value)
@@ -1879,15 +2643,28 @@ def _recovery_node(state: AgentState, stage: StageName, *, default_target: str, 
     elif selected_strategy is RecoveryStrategy.CHANGE_SEED:
         for shot_id in pending_ids:
             seed = _recovery_seed(state, generation_stage, shot_id, artifacts)
-            prompt_revisions.append({
-                "shot_id": shot_id,
-                "instruction": selected.prompt_changes.get("instruction", ""),
-                "patches": [{"field": "seed", "op": "set", "value": {"seed": seed}, "shot_id": shot_id, "target_stage": generation_stage.value, "reason": "自动更换随机种子"}],
-            })
+            prompt_revisions.append(
+                {
+                    "shot_id": shot_id,
+                    "instruction": selected.prompt_changes.get("instruction", ""),
+                    "patches": [
+                        {
+                            "field": "seed",
+                            "op": "set",
+                            "value": {"seed": seed},
+                            "shot_id": shot_id,
+                            "target_stage": generation_stage.value,
+                            "reason": "自动更换随机种子",
+                        }
+                    ],
+                }
+            )
     elif selected_strategy is RecoveryStrategy.SWITCH_PROVIDER:
         provider_switch[generation_stage.value] = selected.provider
     elif selected_strategy is RecoveryStrategy.LOWER_RESOLUTION:
-        provider_switch[f"{generation_stage.value}:resolution"] = "480p" if generation_stage is StageName.VIDEO_GENERATION else "540p"
+        provider_switch[f"{generation_stage.value}:resolution"] = (
+            "480p" if generation_stage is StageName.VIDEO_GENERATION else "540p"
+        )
     elif selected_strategy is RecoveryStrategy.SPLIT_SHOT:
         # Storyboard design intentionally does not rewrite existing Shot rows.
         # Persist the split under a version fence before regenerating the parts.
@@ -1896,9 +2673,16 @@ def _recovery_node(state: AgentState, stage: StageName, *, default_target: str, 
         # There is no persisted merge transaction. Do not report a prompt-only
         # storyboard retry as though it had changed the database timeline.
         selected_strategy = RecoveryStrategy.TERMINAL_FAILURE
-    elif selected_strategy in {RecoveryStrategy.REGENERATE_FAILED_SHOTS, RecoveryStrategy.REPLACE_REFERENCE, RecoveryStrategy.RETRY, RecoveryStrategy.RESUME_CHECKPOINT}:
+    elif selected_strategy in {
+        RecoveryStrategy.REGENERATE_FAILED_SHOTS,
+        RecoveryStrategy.REPLACE_REFERENCE,
+        RecoveryStrategy.RETRY,
+        RecoveryStrategy.RESUME_CHECKPOINT,
+    }:
         if stage is not StageName.FINAL_REVIEW:
-            pending_ids = [item.get("shot_id") for item in artifacts if item.get("status") == StageStatus.FAILED.value] or pending_ids
+            pending_ids = [
+                item.get("shot_id") for item in artifacts if item.get("status") == StageStatus.FAILED.value
+            ] or pending_ids
     if selected_strategy is RecoveryStrategy.REPLACE_REFERENCE:
         prompt_revisions = [_scope_revision(selected.prompt_changes, generation_stage, pending_ids)]
     if selected_strategy is RecoveryStrategy.HUMAN_REVIEW and not _human_allowed(state):
@@ -1906,29 +2690,60 @@ def _recovery_node(state: AgentState, stage: StageName, *, default_target: str, 
     trace.shot_id = str((pending_ids or [""])[0])
     if selected is not None and selected_strategy is RecoveryStrategy.CHANGE_SEED:
         selected.shot_ids = list(pending_ids)
-        selected.prompt_changes = {"shot_id": trace.shot_id, "instruction": selected.prompt_changes.get("instruction", ""), "revisions": prompt_revisions}
-        selected.prompt_patches = [PromptPatch.model_validate(patch) for revision in prompt_revisions for patch in revision["patches"]]
+        selected.prompt_changes = {
+            "shot_id": trace.shot_id,
+            "instruction": selected.prompt_changes.get("instruction", ""),
+            "revisions": prompt_revisions,
+        }
+        selected.prompt_patches = [
+            PromptPatch.model_validate(patch) for revision in prompt_revisions for patch in revision["patches"]
+        ]
     common = {
         "decision_traces": [trace.model_dump(mode="json")],
-        "recovery_history": [{
-            "stage": stage.value, "strategy": selected_strategy.value, "trace_id": trace.trace_id,
-            "shot_ids": pending_ids, "shot_version": int(state.get("shot_version") or 0),
-            "input_fingerprint": trace.input_fingerprint, "budget": trace.budget_snapshot,
-            "candidate_history": [item.model_dump(mode="json") for item in trace.candidates],
-            "prompt_revisions": prompt_revisions,
-        }],
+        "recovery_history": [
+            {
+                "stage": stage.value,
+                "strategy": selected_strategy.value,
+                "trace_id": trace.trace_id,
+                "shot_ids": pending_ids,
+                "shot_version": int(state.get("shot_version") or 0),
+                "input_fingerprint": trace.input_fingerprint,
+                "budget": trace.budget_snapshot,
+                "candidate_history": [item.model_dump(mode="json") for item in trace.candidates],
+                "prompt_revisions": prompt_revisions,
+            }
+        ],
         "selected_strategy": selected_strategy.value,
         "current_step": f"{stage.value}_recovery",
     }
     store = CheckpointStore.get(str(state.get("project_id") or ""), str(state.get("run_id") or "auto"))
     store.add_decision(trace)
-    store.add_event("recovery_selected", stage=stage.value, shot_ids=pending_ids, strategy=selected_strategy.value, trace_id=trace.trace_id, input_fingerprint=trace.input_fingerprint, shot_version=int(state.get("shot_version") or 0))
+    store.add_event(
+        "recovery_selected",
+        stage=stage.value,
+        shot_ids=pending_ids,
+        strategy=selected_strategy.value,
+        trace_id=trace.trace_id,
+        input_fingerprint=trace.input_fingerprint,
+        shot_version=int(state.get("shot_version") or 0),
+    )
     if selected_strategy is RecoveryStrategy.HUMAN_REVIEW:
         return {**common, "needs_human_review": True, "human_reason": trace.reason}
     if selected_strategy is RecoveryStrategy.DEGRADED_PUBLISH:
-        return {**common, "run_status": RunStatus.DEGRADED.value, "degraded_published": True, "degraded_reason": trace.reason, "pending_recovery_target": "", "stage_status": {stage.value: StageStatus.DEGRADED.value}}
+        return {
+            **common,
+            "run_status": RunStatus.DEGRADED.value,
+            "degraded_published": True,
+            "degraded_reason": trace.reason,
+            "pending_recovery_target": "",
+            "stage_status": {stage.value: StageStatus.DEGRADED.value},
+        }
     if selected_strategy is RecoveryStrategy.TERMINAL_FAILURE:
-        reason = trace.reason if selected_strategy is (selected.strategy if selected else None) else "选定的恢复动作无法安全执行；已明确终止"
+        reason = (
+            trace.reason
+            if selected_strategy is (selected.strategy if selected else None)
+            else "选定的恢复动作无法安全执行；已明确终止"
+        )
         # 终止原因必须保留原始失败信息（如输出截断诊断），否则任务中心只能看到
         # 「没有可行候选」，无法据此给出可执行建议。
         failure_message = str(getattr(failure, "message", "") or "").strip()
@@ -1941,12 +2756,21 @@ def _recovery_node(state: AgentState, stage: StageName, *, default_target: str, 
             if not pending_ids:
                 raise ValueError("拆镜恢复缺少失败镜头 ID")
             split_results = _persist_recovery_splits(
-                project_id, pending_ids, trace_id=trace.trace_id,
+                project_id,
+                pending_ids,
+                trace_id=trace.trace_id,
                 reason=str(failure.message if failure else "自动恢复拆镜"),
             )
         except Exception as exc:
             error_id = log_failure(exc, error_type=ERROR_PIPELINE, context={"node": "split_recovery"}, log=logger)
-            store.add_event("recovery_apply_failed", stage=stage.value, shot_ids=pending_ids, strategy=selected_strategy.value, trace_id=trace.trace_id, error_id=error_id)
+            store.add_event(
+                "recovery_apply_failed",
+                stage=stage.value,
+                shot_ids=pending_ids,
+                strategy=selected_strategy.value,
+                trace_id=trace.trace_id,
+                error_id=error_id,
+            )
             common["recovery_history"][0]["outcome"] = "failed"
             common["recovery_history"][0]["error_id"] = error_id
             return {
@@ -1958,7 +2782,14 @@ def _recovery_node(state: AgentState, stage: StageName, *, default_target: str, 
             }
         pending_ids = [shot_id for result in split_results for shot_id in result["shot_ids"]]
         store.detect_changes()
-        store.add_event("recovery_split_applied", stage=stage.value, shot_ids=pending_ids, strategy=selected_strategy.value, trace_id=trace.trace_id, operations=[result["operation_id"] for result in split_results])
+        store.add_event(
+            "recovery_split_applied",
+            stage=stage.value,
+            shot_ids=pending_ids,
+            strategy=selected_strategy.value,
+            trace_id=trace.trace_id,
+            operations=[result["operation_id"] for result in split_results],
+        )
         common["recovery_history"][0]["shot_ids"] = pending_ids
         common["recovery_history"][0]["outcome"] = "applied"
         common["recovery_history"][0]["split_results"] = split_results
@@ -1969,14 +2800,18 @@ def _recovery_node(state: AgentState, stage: StageName, *, default_target: str, 
         "prompt_revisions": prompt_revisions,
         "provider_switch": provider_switch,
         "pending_shot_ids": pending_ids,
-        "split_recovery_shot_ids": pending_ids if selected_strategy is RecoveryStrategy.SPLIT_SHOT else state.get("split_recovery_shot_ids", []),
+        "split_recovery_shot_ids": pending_ids
+        if selected_strategy is RecoveryStrategy.SPLIT_SHOT
+        else state.get("split_recovery_shot_ids", []),
         "pending_recovery_target": target,
         "recovery_attempts": attempts,
         "stage_status": {stage.value: StageStatus.RECOVERING.value},
     }
 
 
-def _persist_recovery_splits(project_id: str, shot_ids: list[str], *, trace_id: str, reason: str) -> list[dict[str, Any]]:
+def _persist_recovery_splits(
+    project_id: str, shot_ids: list[str], *, trace_id: str, reason: str
+) -> list[dict[str, Any]]:
     """Commit all scoped shot splits together, or leave the timeline unchanged."""
 
     from db import SessionLocal
@@ -1993,9 +2828,13 @@ def _persist_recovery_splits(project_id: str, shot_ids: list[str], *, trace_id: 
             raise ValueError("拆镜恢复的镜头已不存在")
         results = [
             persist_split_shot(
-                db, project_id=project_id, shot_id=shot_id,
-                expected_version=versions[shot_id], parts=2,
-                reason=reason, operation_id=f"{trace_id}:{shot_id}",
+                db,
+                project_id=project_id,
+                shot_id=shot_id,
+                expected_version=versions[shot_id],
+                parts=2,
+                reason=reason,
+                operation_id=f"{trace_id}:{shot_id}",
             )
             for shot_id in shot_ids
         ]
@@ -2032,9 +2871,19 @@ def _failure_from_artifacts(stage: StageName, artifacts: list[dict[str, Any]]) -
             try:
                 return FailureRecord(**data)
             except Exception:
-                return FailureRecord(kind=FailureKind(data.get("kind", FailureKind.UNKNOWN.value)), stage=stage, shot_id=str(item.get("shot_id") or ""), message=str(data.get("message") or ""))
+                return FailureRecord(
+                    kind=FailureKind(data.get("kind", FailureKind.UNKNOWN.value)),
+                    stage=stage,
+                    shot_id=str(item.get("shot_id") or ""),
+                    message=str(data.get("message") or ""),
+                )
         if item.get("status") == StageStatus.FAILED.value:
-            return FailureRecord(kind=FailureKind.IMAGE_FAILED if stage is StageName.IMAGE_GENERATION else FailureKind.VIDEO_FAILED, stage=stage, shot_id=str(item.get("shot_id") or ""), message="镜头产物失败")
+            return FailureRecord(
+                kind=FailureKind.IMAGE_FAILED if stage is StageName.IMAGE_GENERATION else FailureKind.VIDEO_FAILED,
+                stage=stage,
+                shot_id=str(item.get("shot_id") or ""),
+                message="镜头产物失败",
+            )
     return None
 
 
@@ -2051,7 +2900,10 @@ def _failure_from_critique(stage: StageName, critique: dict[str, Any] | None) ->
                 stage=stage,
                 shot_id=str((first_error or {}).get("shot_id") or ""),
                 message=str((first_error or {}).get("message") or kind_value),
-                details={"affected_shot_ids": list(data.get("affected_shot_ids") or []), "recoverable": bool(data.get("recoverable", True))},
+                details={
+                    "affected_shot_ids": list(data.get("affected_shot_ids") or []),
+                    "recoverable": bool(data.get("recoverable", True)),
+                },
             )
         except ValueError:
             pass
@@ -2087,9 +2939,15 @@ def _failure_from_critique(stage: StageName, critique: dict[str, Any] | None) ->
                 "render_missing": FailureKind.STORAGE_FAILED,
                 "video_generation_failure": FailureKind.VIDEO_FAILED,
             }.get(code, FailureKind.QUALITY_BELOW_THRESHOLD)
-            return FailureRecord(kind=kind, stage=stage, shot_id=str(issue.get("shot_id") or ""), message=str(issue.get("message") or ""))
+            return FailureRecord(
+                kind=kind, stage=stage, shot_id=str(issue.get("shot_id") or ""), message=str(issue.get("message") or "")
+            )
     if not data.get("passed", True):
-        return FailureRecord(kind=FailureKind.QUALITY_BELOW_THRESHOLD, stage=stage, message=str(data.get("failure_kind") or "阶段未通过质量门禁"))
+        return FailureRecord(
+            kind=FailureKind.QUALITY_BELOW_THRESHOLD,
+            stage=stage,
+            message=str(data.get("failure_kind") or "阶段未通过质量门禁"),
+        )
     return None
 
 
@@ -2118,7 +2976,9 @@ def _fanout_status(result: dict[str, Any]) -> StageStatus:
     return StageStatus.SUCCEEDED
 
 
-def _shot_versions(project_id: str, only_ids: list[str] | None = None, *, require_storyboard: bool = False) -> dict[str, int]:
+def _shot_versions(
+    project_id: str, only_ids: list[str] | None = None, *, require_storyboard: bool = False
+) -> dict[str, int]:
     from db import SessionLocal
     from models import Shot
 
@@ -2184,7 +3044,7 @@ def _scope_revision(revision: dict[str, Any], stage: StageName, shot_ids: list[s
     patches = []
     for patch in revision.get("patches") or []:
         patch_shot = str(patch.get("shot_id") or "")
-        for shot_id in ([patch_shot] if patch_shot else shot_ids or [""]):
+        for shot_id in [patch_shot] if patch_shot else shot_ids or [""]:
             patches.append({**patch, "shot_id": shot_id, "target_stage": stage.value})
     return {**revision, "shot_id": str((shot_ids or [revision.get("shot_id") or ""])[0]), "patches": patches}
 
@@ -2195,7 +3055,8 @@ def _shot_revisions(state: AgentState, stage: StageName, shot_id: str) -> list[d
     revisions = []
     for revision in state.get("prompt_revisions") or []:
         patches = [
-            patch for patch in revision.get("patches") or []
+            patch
+            for patch in revision.get("patches") or []
             if str(patch.get("target_stage") or "") == stage.value
             and str(patch.get("shot_id") or "") == shot_id
             and str(patch.get("field") or "") != "seed"
@@ -2222,11 +3083,15 @@ def _recovery_seed(state: AgentState, stage: StageName, shot_id: str, artifacts:
 
     previous = {
         int(candidate["seed"])
-        for item in artifacts if str(item.get("shot_id") or "") == shot_id
+        for item in artifacts
+        if str(item.get("shot_id") or "") == shot_id
         for candidate in (item.get("video_candidates") or [])
         if isinstance(candidate, dict) and candidate.get("seed") is not None
     }
-    version = next((int(item.get("shot_version") or 1) for item in artifacts if str(item.get("shot_id") or "") == shot_id), int(state.get("shot_version") or 1))
+    version = next(
+        (int(item.get("shot_version") or 1) for item in artifacts if str(item.get("shot_id") or "") == shot_id),
+        int(state.get("shot_version") or 1),
+    )
     if stage is StageName.IMAGE_GENERATION:
         previous.add(42 + version * 100)
     previous.update(
@@ -2303,7 +3168,11 @@ async def _confirm_storyboard_shots(project_id: str, artifacts: list[dict[str, A
     from db import SessionLocal
     from models import Shot
 
-    ids = {str(item.get("shot_id")) for item in artifacts if item.get("status") == StageStatus.SUCCEEDED.value and item.get("path")}
+    ids = {
+        str(item.get("shot_id"))
+        for item in artifacts
+        if item.get("status") == StageStatus.SUCCEEDED.value and item.get("path")
+    }
     if not ids:
         return
     db = SessionLocal()
@@ -2395,6 +3264,7 @@ async def _run_storyboard_generation_auto(project_id: str, shot_ids: list[str]) 
     """Run automatic storyboard retries while tolerating legacy callables."""
 
     import inspect
+
     from api.routes import shot as shot_route
 
     func = shot_route._run_storyboard_generation
@@ -2481,7 +3351,11 @@ def _storyboard_structural_fallback(project_id: str, shot_ids: list[str], *, rea
         "degraded": True,
         "reason": reason,
         "shot_ids": list(shot_ids),
-        "evidence": {"kind": "structural_only_gate", "checked": "storyboard_image_structure", "shot_count": len(shot_ids)},
+        "evidence": {
+            "kind": "structural_only_gate",
+            "checked": "storyboard_image_structure",
+            "shot_count": len(shot_ids),
+        },
     }
 
 
@@ -2498,7 +3372,7 @@ async def _run_storyboard_quality_gate(
     （仅显式 auto 模式 + 策略允许）时，改用可测量的结构门禁收口：故事板结构可用
     即继续，视觉质量如实记为 pending 并降级，绝不宣称视觉通过。
     """
-    from api.routes.shot import _run_storyboard_generation, prepare_storyboard_quality_retry
+    from api.routes.shot import prepare_storyboard_quality_retry
     from config import settings
     from services.quality_review_service import STAGE_STORYBOARD, quality_review_service
 
@@ -2514,7 +3388,11 @@ async def _run_storyboard_quality_gate(
             return _storyboard_structural_fallback(project_id, shot_ids, reason=reason)
         if allow_human:
             await quality_review_service.mark_shots_needs_human_review(shot_ids)
-        result = {**_abort("quality_review", f"质量审核能力未配置，自动模式不得批准故事板（{reason}）"), "passed": False, "reviews": {}}
+        result = {
+            **_abort("quality_review", f"质量审核能力未配置，自动模式不得批准故事板（{reason}）"),
+            "passed": False,
+            "reviews": {},
+        }
         if allow_human:
             result["needs_human_review"] = True
         return result
@@ -2525,12 +3403,20 @@ async def _run_storyboard_quality_gate(
         last_reviews = reviews
         errored = {shot_id: review for shot_id, review in reviews.items() if review.verdict == "error"}
         if errored:
-            return {**_abort("quality_review", f"质量审核 Provider 调用失败: {_review_summary(errored)}"), "passed": False, "reviews": reviews}
+            return {
+                **_abort("quality_review", f"质量审核 Provider 调用失败: {_review_summary(errored)}"),
+                "passed": False,
+                "reviews": reviews,
+            }
         unsupported = {shot_id: review for shot_id, review in reviews.items() if review.verdict == "unsupported"}
         if unsupported:
             if allow_human:
                 await quality_review_service.mark_shots_needs_human_review(sorted(unsupported))
-            result = {**_abort("quality_review", f"质量审核存在未检测维度: {_review_summary(unsupported)}"), "passed": False, "reviews": reviews}
+            result = {
+                **_abort("quality_review", f"质量审核存在未检测维度: {_review_summary(unsupported)}"),
+                "passed": False,
+                "reviews": reviews,
+            }
             if allow_human:
                 result["needs_human_review"] = True
             return result
@@ -2539,7 +3425,9 @@ async def _run_storyboard_quality_gate(
             return {"passed": True, "reviews": reviews, "attempt": attempt}
         if attempt >= max_retries:
             break
-        retry_ids = [shot_id for shot_id in sorted(failed) if prepare_storyboard_quality_retry(shot_id, failed[shot_id])]
+        retry_ids = [
+            shot_id for shot_id in sorted(failed) if prepare_storyboard_quality_retry(shot_id, failed[shot_id])
+        ]
         if not retry_ids:
             break
         try:
@@ -2548,7 +3436,13 @@ async def _run_storyboard_quality_gate(
             return {**_abort("quality_review", exc), "passed": False, "reviews": reviews}
     if allow_human:
         await quality_review_service.mark_shots_needs_human_review(sorted(last_reviews))
-    result = {**_abort("quality_review", f"以下镜头未通过质量审核（已重试 {max_retries} 次）: {_review_summary(last_reviews)}"), "passed": False, "reviews": last_reviews}
+    result = {
+        **_abort(
+            "quality_review", f"以下镜头未通过质量审核（已重试 {max_retries} 次）: {_review_summary(last_reviews)}"
+        ),
+        "passed": False,
+        "reviews": last_reviews,
+    }
     if allow_human:
         result["needs_human_review"] = True
     return result
@@ -2670,7 +3564,9 @@ async def _auto_approve_storyboard(state: AgentState) -> dict:
         shots = db.query(Shot).filter(Shot.project_id == project_id).all()
         failed = _structural_failures(shots)
         if failed:
-            return _abort("auto_approve_storyboard", f"以下镜头故事板未通过结构检查（已重试一次仍失败）: {', '.join(failed)}")
+            return _abort(
+                "auto_approve_storyboard", f"以下镜头故事板未通过结构检查（已重试一次仍失败）: {', '.join(failed)}"
+            )
         for shot in shots:
             shot.confirmed = True
             shot.status = "storyboard_approved"

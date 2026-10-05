@@ -62,8 +62,7 @@ _DETECTOR_MARKER_RE = re.compile(r"(black|freeze)_(start|end|duration)\s*:\s*(\d
 
 # 视觉质量待审的固定说明：未接入识别模型前不评估、不宣称通过。
 VISUAL_PENDING_REASON = (
-    "未接入身份识别、场景识别或动作识别模型；本检查不评估角色一致性、"
-    "构图、美学或连续性，视觉质量保持待审状态"
+    "未接入身份识别、场景识别或动作识别模型；本检查不评估角色一致性、构图、美学或连续性，视觉质量保持待审状态"
 )
 
 # 视觉质量的五项稳定维度。它们**永远**是 pending：没有真实视觉模型时既不能
@@ -161,7 +160,13 @@ def _empty_categories() -> dict[str, Any]:
             "reason": VISUAL_PENDING_REASON,
             # 五项视觉维度逐项 pending：未接入视觉模型时不评估、不宣称通过。
             "dimensions": visual_pending_dimensions(),
-            "issues": [_issue("visual_quality_pending", "视觉质量未评估（pending）", "接入视觉审核模型或转人工审核后再判断视觉质量")],
+            "issues": [
+                _issue(
+                    "visual_quality_pending",
+                    "视觉质量未评估（pending）",
+                    "接入视觉审核模型或转人工审核后再判断视觉质量",
+                )
+            ],
         },
     }
 
@@ -258,7 +263,13 @@ async def validate_video_file(
         return _finalize_video_result(result)
     size_bytes = target.stat().st_size
     if size_bytes < MIN_VIDEO_BYTES:
-        structural_issues.append(_issue("video_file_too_small", f"文件过小（{size_bytes} 字节）", "重新生成该镜头视频；疑似 Provider 返回了占位内容"))
+        structural_issues.append(
+            _issue(
+                "video_file_too_small",
+                f"文件过小（{size_bytes} 字节）",
+                "重新生成该镜头视频；疑似 Provider 返回了占位内容",
+            )
+        )
         # 同一事实在技术维度也如实记录：过小是输出质量的确定性缺陷，不只是可读性。
         technical["issues"].append(
             _issue(
@@ -273,34 +284,50 @@ async def validate_video_file(
     try:
         probe = await _ffprobe_streams(target)
     except FileNotFoundError:
-        structural_issues.append(_issue("ffprobe_unavailable", "ffprobe 不可用（unsupported）", "安装 ffmpeg/ffprobe 后重跑检查；渲染链路本身也依赖它"))
+        structural_issues.append(
+            _issue(
+                "ffprobe_unavailable",
+                "ffprobe 不可用（unsupported）",
+                "安装 ffmpeg/ffprobe 后重跑检查；渲染链路本身也依赖它",
+            )
+        )
         result["issues"].append("ffprobe 不可用（unsupported）")
         return _finalize_video_result(result)
     except Exception as exc:
-        structural_issues.append(_issue("video_unreadable", f"ffprobe 无法读取: {exc}", "重新生成该镜头视频；文件可能损坏或格式不受支持"))
+        structural_issues.append(
+            _issue("video_unreadable", f"ffprobe 无法读取: {exc}", "重新生成该镜头视频；文件可能损坏或格式不受支持")
+        )
         result["issues"].append(f"ffprobe 失败: {exc}")
         return _finalize_video_result(result)
     if probe.get("video_streams") == 0:
-        structural_issues.append(_issue("video_stream_missing", "没有视频轨", "重新生成该镜头视频；检查 Provider 是否返回了纯音频/空内容"))
+        structural_issues.append(
+            _issue("video_stream_missing", "没有视频轨", "重新生成该镜头视频；检查 Provider 是否返回了纯音频/空内容")
+        )
         result["issues"].append("没有视频轨")
         return _finalize_video_result(result)
     duration = probe.get("duration")
     if duration is not None and duration <= 0.2:
-        structural_issues.append(_issue("video_duration_invalid", f"时长异常（{duration:.2f}s）", "重新生成该镜头视频；疑似截断产物"))
+        structural_issues.append(
+            _issue("video_duration_invalid", f"时长异常（{duration:.2f}s）", "重新生成该镜头视频；疑似截断产物")
+        )
         result["issues"].append(f"时长异常（{duration:.2f}s）")
         return _finalize_video_result(result)
 
     result.update(
         {
             "duration_seconds": round(duration, 2) if duration is not None else None,
-            "video_duration_seconds": round(probe["video_duration"], 2) if probe.get("video_duration") is not None else None,
+            "video_duration_seconds": round(probe["video_duration"], 2)
+            if probe.get("video_duration") is not None
+            else None,
             "width": probe.get("width"),
             "height": probe.get("height"),
             "bytes": size_bytes,
             "fps": probe.get("fps"),
             "audio": {
                 "streams": int(probe.get("audio_streams") or 0),
-                "duration_seconds": round(probe["audio_duration"], 2) if probe.get("audio_duration") is not None else None,
+                "duration_seconds": round(probe["audio_duration"], 2)
+                if probe.get("audio_duration") is not None
+                else None,
             },
         }
     )
@@ -314,19 +341,33 @@ async def validate_video_file(
             # 扫描工具缺失不算产物缺陷：记为 warning，不阻断候选。
             technical["skipped"].append("frame_scan")
             technical["unknown"] = True
-            _add_warning(result, "frame_scan_unavailable", "ffmpeg 不可用，跳过黑帧/冻结扫描（unsupported）", "安装 ffmpeg 后重跑；本项未检测不代表通过")
+            _add_warning(
+                result,
+                "frame_scan_unavailable",
+                "ffmpeg 不可用，跳过黑帧/冻结扫描（unsupported）",
+                "安装 ffmpeg 后重跑；本项未检测不代表通过",
+            )
             result["issues"].append("ffmpeg 不可用，跳过黑帧/冻结扫描（unsupported）")
             scan = None
         except Exception as exc:
             technical["skipped"].append("frame_scan")
-            _add_warning(result, "frame_scan_inconclusive", f"黑帧/冻结扫描未完成: {exc}", "重跑检查；连续失败时人工抽查该镜头画面")
+            _add_warning(
+                result,
+                "frame_scan_inconclusive",
+                f"黑帧/冻结扫描未完成: {exc}",
+                "重跑检查；连续失败时人工抽查该镜头画面",
+            )
             result["issues"].append(f"黑帧/冻结扫描未完成: {exc}")
             scan = None
         if scan is not None:
             result["frame_scan"] = scan
             if scan.get("returncode") != 0:
                 structural_issues.append(
-                    _issue("video_not_playable", "视频无法完整解码播放", "重新生成该镜头视频；本地重mux 无效时切换 Provider")
+                    _issue(
+                        "video_not_playable",
+                        "视频无法完整解码播放",
+                        "重新生成该镜头视频；本地重mux 无效时切换 Provider",
+                    )
                 )
                 result["issues"].append("视频无法完整解码播放")
             else:
@@ -487,10 +528,6 @@ async def validate_video_file(
         technical["skipped"].append("tail_frame")
 
     categories[CATEGORY_STRUCTURAL]["passed"] = not structural_issues
-    contextual_checks = any(
-        value is not None
-        for value in (expected_duration_s, expected_aspect_ratio, audio_duration_s, first_frame_path, tail_frame_path)
-    ) or not deep_scan
     required_skips = {
         item
         for item in technical.get("skipped", [])
@@ -525,14 +562,20 @@ def _assess_frame_scan(result: dict, technical: dict, duration: float) -> None:
             )
         )
     elif total_black > 0:
-        _add_warning(result, "video_black_frames_partial", f"存在少量黑帧（共 {total_black:.2f}s）", "常见于转场余量；若影响观感再重生成")
+        _add_warning(
+            result,
+            "video_black_frames_partial",
+            f"存在少量黑帧（共 {total_black:.2f}s）",
+            "常见于转场余量；若影响观感再重生成",
+        )
     # 空帧：整帧无内容（纯黑/纯白/纯灰/纯色底）。黑帧已由 blackdetect 覆盖，
     # 这里扣除与黑帧重叠的时长，避免同一缺陷重复计数。
     blank_only = [
         item
         for item in blanks
         if not any(
-            float(item.get("start", 0)) < float(black.get("end", 0)) and float(black.get("start", 0)) < float(item.get("end", 0))
+            float(item.get("start", 0)) < float(black.get("end", 0))
+            and float(black.get("start", 0)) < float(item.get("end", 0))
             for black in blacks
         )
     ]
@@ -548,10 +591,20 @@ def _assess_frame_scan(result: dict, technical: dict, duration: float) -> None:
             )
         )
     elif total_blank > 0:
-        _add_warning(result, "video_empty_frames_partial", f"存在少量空帧（共 {total_blank:.2f}s）", "低于阻断阈值；频繁出现时检查 Provider 稳定性")
+        _add_warning(
+            result,
+            "video_empty_frames_partial",
+            f"存在少量空帧（共 {total_blank:.2f}s）",
+            "低于阻断阈值；频繁出现时检查 Provider 稳定性",
+        )
     if scan.get("blank_scan_skipped"):
         technical["skipped"].append("blank_scan")
-        _add_warning(result, "blank_scan_unavailable", "空帧检测未执行（临时文件不可用）", "本项未检测不代表通过；修复临时目录后重跑检查")
+        _add_warning(
+            result,
+            "blank_scan_unavailable",
+            "空帧检测未执行（临时文件不可用）",
+            "本项未检测不代表通过；修复临时目录后重跑检查",
+        )
     result["frame_scan"]["blank_seconds"] = round(total_blank, 2)
     worst_freeze = max((float(item.get("duration", 0)) for item in freezes), default=0.0)
     total_freeze = sum(float(item.get("duration", 0)) for item in freezes)
@@ -565,7 +618,12 @@ def _assess_frame_scan(result: dict, technical: dict, duration: float) -> None:
             )
         )
     elif worst_freeze >= FREEZE_DETECT_MIN_S:
-        _add_warning(result, "video_freeze_partial", f"存在短暂静止画面（最长 {worst_freeze:.2f}s）", "低于阻断阈值；频繁出现时再调整 Prompt 要求持续动作")
+        _add_warning(
+            result,
+            "video_freeze_partial",
+            f"存在短暂静止画面（最长 {worst_freeze:.2f}s）",
+            "低于阻断阈值；频繁出现时再调整 Prompt 要求持续动作",
+        )
     result["frame_scan"]["black_seconds"] = round(total_black, 2)
     result["frame_scan"]["freeze_seconds"] = round(total_freeze, 2)
 
@@ -625,7 +683,9 @@ async def _ffprobe_streams(target: Path) -> dict:
         duration = float((data.get("format") or {}).get("duration"))
     except (TypeError, ValueError):
         duration = None
-    audio_duration = next((_stream_duration(item) for item in audio_streams if _stream_duration(item) is not None), None)
+    audio_duration = next(
+        (_stream_duration(item) for item in audio_streams if _stream_duration(item) is not None), None
+    )
     if duration is None or duration <= 0:
         # 容器级时长缺失时退回视频流时长，避免误报 unsupported。
         duration = next((_stream_duration(item) for item in video_streams if _stream_duration(item) is not None), None)
@@ -646,7 +706,9 @@ async def _ffprobe_streams(target: Path) -> dict:
         "fps": fps,
         "duration": duration if duration and duration > 0 else None,
         # 画面可用时长以视频流为准：容器时长会被更长的音轨撑大。
-        "video_duration": next((_stream_duration(item) for item in video_streams if _stream_duration(item) is not None), None),
+        "video_duration": next(
+            (_stream_duration(item) for item in video_streams if _stream_duration(item) is not None), None
+        ),
         "audio_duration": audio_duration,
     }
 
@@ -763,7 +825,9 @@ def _parse_blank_intervals(text: str, total_duration: float | None) -> list[dict
     return intervals
 
 
-def _parse_detector_markers(text: str, total_duration: float | None) -> tuple[list[dict[str, float]], list[dict[str, float]]]:
+def _parse_detector_markers(
+    text: str, total_duration: float | None
+) -> tuple[list[dict[str, float]], list[dict[str, float]]]:
     """解析 blackdetect/freezedetect 日志（兼容经典同行格式与 lavfi 元数据格式）。
 
     freeze 持续到文件结束时新版 ffmpeg 只输出 start 不输出 duration/end，
@@ -800,7 +864,11 @@ def _parse_detector_markers(text: str, total_duration: float | None) -> tuple[li
             elif action == "duration" and open_freeze_start is not None:
                 pending_freeze_duration = value
             elif action == "end" and open_freeze_start is not None:
-                duration = pending_freeze_duration if pending_freeze_duration is not None else max(0.0, value - open_freeze_start)
+                duration = (
+                    pending_freeze_duration
+                    if pending_freeze_duration is not None
+                    else max(0.0, value - open_freeze_start)
+                )
                 freeze.append({"start": open_freeze_start, "duration": max(0.0, duration)})
                 open_freeze_start = None
                 pending_freeze_duration = None

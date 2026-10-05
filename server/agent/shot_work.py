@@ -9,8 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
 from .checkpoints import CheckpointStore, fingerprint
@@ -86,7 +85,9 @@ async def run_shot_fanout(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            failure = classify_failure(stage=stage, message=str(exc), shot_id=shot_id, kind=_kind_from_exception(exc, stage))
+            failure = classify_failure(
+                stage=stage, message=str(exc), shot_id=shot_id, kind=_kind_from_exception(exc, stage)
+            )
             artifact = ShotArtifact(
                 project_id=project_id,
                 run_id=run_id,
@@ -97,7 +98,9 @@ async def run_shot_fanout(
                 status=StageStatus.FAILED,
                 failure=failure,
                 duration_ms=int((time.monotonic() - started) * 1000),
-                output_fingerprint=fingerprint({"shot_id": shot_id, "version": version, "stage": str(stage), "error": str(exc)}),
+                output_fingerprint=fingerprint(
+                    {"shot_id": shot_id, "version": version, "stage": str(stage), "error": str(exc)}
+                ),
             )
         row = artifact.model_dump(mode="json")
         artifacts.append(row)
@@ -223,7 +226,12 @@ async def generate_storyboard_shot(
         seed_override=seed_override,
         recovery_revisions=recovery_revisions,
     )
-    return _db_artifact(shot_id, stage="image_generation", path_fields=("storyboard_path", "image_path"), expected_version=expected_version)
+    return _db_artifact(
+        shot_id,
+        stage="image_generation",
+        path_fields=("storyboard_path", "image_path"),
+        expected_version=expected_version,
+    )
 
 
 async def generate_video_shot(
@@ -258,15 +266,21 @@ async def generate_video_shot(
         seed_override=seed_override,
         recovery_revisions=recovery_revisions,
     )
-    artifact = _db_artifact(shot_id, stage="video_generation", path_fields=("video_path",), expected_version=expected_version)
+    artifact = _db_artifact(
+        shot_id, stage="video_generation", path_fields=("video_path",), expected_version=expected_version
+    )
     candidates = [VideoCandidateRecord.model_validate(item) for item in generation.get("video_candidates", [])]
     selection_raw = generation.get("candidate_selection") or {}
-    artifact.update({
-        "video_candidates": [item.model_dump(mode="json") for item in candidates],
-        "selected_video_candidate_id": str(generation.get("selected_video_candidate_id") or ""),
-        "candidate_selection": VideoCandidateSelection.model_validate(selection_raw).model_dump(mode="json") if selection_raw else None,
-        "decision_trace": generation.get("decision_trace") or None,
-    })
+    artifact.update(
+        {
+            "video_candidates": [item.model_dump(mode="json") for item in candidates],
+            "selected_video_candidate_id": str(generation.get("selected_video_candidate_id") or ""),
+            "candidate_selection": VideoCandidateSelection.model_validate(selection_raw).model_dump(mode="json")
+            if selection_raw
+            else None,
+            "decision_trace": generation.get("decision_trace") or None,
+        }
+    )
     return artifact
 
 
@@ -288,7 +302,9 @@ async def generate_audio_shot(shot_id: str, expected_version: int, *, project_id
     from api.routes.shot import _run_single_shot_audio
 
     await _run_single_shot_audio(str(shot_id), int(expected_version))
-    return _db_artifact(shot_id, stage="audio_production", path_fields=("audio_path",), expected_version=expected_version)
+    return _db_artifact(
+        shot_id, stage="audio_production", path_fields=("audio_path",), expected_version=expected_version
+    )
 
 
 def _shot_audio_context(shot_id: str) -> dict[str, Any]:
@@ -397,7 +413,9 @@ def _artifact_from(
         output_fingerprint=str(raw.get("output_fingerprint") or fingerprint(raw)),
         video_candidates=[VideoCandidateRecord.model_validate(item) for item in raw.get("video_candidates") or []],
         selected_video_candidate_id=str(raw.get("selected_video_candidate_id") or ""),
-        candidate_selection=VideoCandidateSelection.model_validate(raw["candidate_selection"]) if raw.get("candidate_selection") else None,
+        candidate_selection=VideoCandidateSelection.model_validate(raw["candidate_selection"])
+        if raw.get("candidate_selection")
+        else None,
         decision_trace=dict(raw.get("decision_trace") or {}) or None,
         expected_duration_s=_optional_positive_float(raw.get("expected_duration_s")),
         expected_aspect_ratio=_optional_positive_float(raw.get("expected_aspect_ratio")),
@@ -416,7 +434,7 @@ def _optional_positive_float(value: Any) -> float | None:
 
 def _db_artifact(shot_id: str, *, stage: str, path_fields: tuple[str, ...], expected_version: int) -> dict[str, Any]:
     from db import SessionLocal
-    from models import Project, Shot
+    from models import Shot
 
     db = SessionLocal()
     try:
@@ -429,7 +447,9 @@ def _db_artifact(shot_id: str, *, stage: str, path_fields: tuple[str, ...], expe
                 "shot_version": int(expected_version),
                 "stage": stage,
                 "status": StageStatus.FAILED.value,
-                "failure": classify_failure(stage=stage, kind=FailureKind.VERSION_CONFLICT, shot_id=str(shot_id), message="shot version changed").model_dump(mode="json"),
+                "failure": classify_failure(
+                    stage=stage, kind=FailureKind.VERSION_CONFLICT, shot_id=str(shot_id), message="shot version changed"
+                ).model_dump(mode="json"),
             }
         path = next((str(getattr(shot, field) or "") for field in path_fields if getattr(shot, field, "")), "")
         # 音频阶段对无对白 / native 音频镜头允许空路径并视为成功；
@@ -440,11 +460,17 @@ def _db_artifact(shot_id: str, *, stage: str, path_fields: tuple[str, ...], expe
                 from services.audio_routing import resolve_audio_mode
                 from services.shot_dialogue import parse_shot_dialogue
 
-                audio_skipped = not parse_shot_dialogue(shot.dialogue) or resolve_audio_mode({
-                    "dialogue": shot.dialogue,
-                    "shot_type": shot.shot_type,
-                    "continuity_profile": json.loads(shot.continuity_profile or "{}"),
-                }) == "native"
+                audio_skipped = (
+                    not parse_shot_dialogue(shot.dialogue)
+                    or resolve_audio_mode(
+                        {
+                            "dialogue": shot.dialogue,
+                            "shot_type": shot.shot_type,
+                            "continuity_profile": json.loads(shot.continuity_profile or "{}"),
+                        }
+                    )
+                    == "native"
+                )
             except Exception:
                 audio_skipped = False
         artifact: dict[str, Any] = {
@@ -454,7 +480,9 @@ def _db_artifact(shot_id: str, *, stage: str, path_fields: tuple[str, ...], expe
             "status": StageStatus.SUCCEEDED.value if path or audio_skipped else StageStatus.FAILED.value,
             "path": path,
             "score": 1.0 if path else 0.0,
-            "metrics": [{"name": "audio_source", "value": "native"}] if audio_skipped and path == "" and shot.dialogue else [],
+            "metrics": [{"name": "audio_source", "value": "native"}]
+            if audio_skipped and path == "" and shot.dialogue
+            else [],
         }
         if stage == "video_generation":
             # 视频 Critic 的技术检查需要执行计划上下文；从存档计划与镜头
@@ -481,6 +509,10 @@ def _video_check_context(db: Any, shot: Any) -> dict[str, Any]:
     if shot.last_frame_path:
         context["tail_frame_path"] = str(shot.last_frame_path)
     try:
+        # 修复:此处此前引用了未导入的 Project,NameError 被外层 except 吞掉,
+        # 导致 expected_aspect_ratio 从未被填充、视频 Critic 画幅检查失效。
+        from models import Project
+
         project = db.query(Project).filter(Project.id == shot.project_id).first()
         output_format = str(getattr(project, "output_format", "") or "")
         width, _, height = output_format.partition(":")

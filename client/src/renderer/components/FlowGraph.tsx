@@ -67,9 +67,12 @@ const FlowGraph: React.FC<FlowGraphProps> = ({ compact }) => {
     // 阶段条只在运行中需要轮询；终态（completed/degraded/failed）停止刷新。
     const terminal = summary && ['completed', 'degraded', 'failed', 'cancelled'].includes(summary.run?.status)
     if (terminal) return
-    const timer = window.setInterval(() => {
-      void refresh()
-    }, compact ? 5000 : 2500)
+    const timer = window.setInterval(
+      () => {
+        void refresh()
+      },
+      compact ? 5000 : 2500,
+    )
     return () => window.clearInterval(timer)
   }, [refresh, projectId, compact, summary?.run?.status])
 

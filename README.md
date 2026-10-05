@@ -478,6 +478,17 @@ pnpm --dir client run electron:dev    # 自动启动后端 + Vite + Electron 窗
 
 > 如遇 Electron 二进制下载超时，项目 `.npmrc` 已配置国内镜像源。也可先使用纯 Web 模式开发。
 
+### 代码质量工具链
+
+| 工具 | 范围 | 配置 | 命令（仓库根目录） |
+| --- | --- | --- | --- |
+| [Biome](https://biomejs.dev/) | 客户端 TS/TSX/JSON 的 lint + format | `biome.json` | `pnpm lint` / `pnpm lint:fix` |
+| [Ruff](https://docs.astral.sh/ruff/) | 服务端 Python 的 lint + format | `server/pyproject.toml` | `pnpm lint:server` / `pnpm lint:server:fix`（要求 ruff 在 PATH，或用 `server/.venv/bin/ruff`） |
+
+- 两端 lint 均已接入 CI（`ci.yml`），与测试、构建同为合并门禁。
+- [lefthook](https://lefthook.dev/) pre-commit 钩子会在提交时对暂存文件自动 lint + format 并重新暂存（`pnpm install` 时自动安装钩子）；确需跳过时用 `git commit --no-verify`，CI 会兜底拦截。
+- 客户端格式约定：单引号、JSX 属性双引号、无分号、2 空格缩进、行宽 120；服务端同为双引号、行宽 120。
+
 ### 桌面窗口外观
 
 桌面壳使用透明窗口 + 系统级玻璃材质，叠加渲染层白色渐变蒙版，形成白色磨砂玻璃观感：

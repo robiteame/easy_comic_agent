@@ -7,7 +7,6 @@ API Key / 供应商原始响应」的安全约束。
 
 from __future__ import annotations
 
-import json
 import sys
 import unittest
 import uuid
@@ -17,16 +16,15 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from fastapi.testclient import TestClient  # noqa: E402
 
 from db import SessionLocal, init_db  # noqa: E402
 from main import app  # noqa: E402
 from models import BackgroundJob, Project, Shot  # noqa: E402
-from services import budget_service, pricing_service, task_registry, usage_service  # noqa: E402
+from services import pricing_service, task_registry, usage_service  # noqa: E402
 from services.providers.endpoint import get_endpoint  # noqa: E402
 from services.providers.usage import CAPABILITY_IMAGE, UsageMetadata  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 init_db()
 
@@ -236,7 +234,12 @@ class BudgetApiTests(unittest.TestCase):
         )
         self.client.put(
             "/api/budget/config",
-            json={"scope_type": "project", "scope_id": episode_id, "soft_cost_micro": 1 * MICRO, "hard_cost_micro": 5 * MICRO},
+            json={
+                "scope_type": "project",
+                "scope_id": episode_id,
+                "soft_cost_micro": 1 * MICRO,
+                "hard_cost_micro": 5 * MICRO,
+            },
         )
 
         summary = self.client.get("/api/budget/summary", params={"project_id": episode_id}).json()
@@ -338,9 +341,7 @@ class BudgetApiTests(unittest.TestCase):
 
     def test_budget_estimate_requires_valid_job_type(self) -> None:
         project_id = _project()
-        response = self.client.post(
-            "/api/budget/estimate", json={"job_type": "not_a_job", "project_id": project_id}
-        )
+        response = self.client.post("/api/budget/estimate", json={"job_type": "not_a_job", "project_id": project_id})
         self.assertEqual(response.status_code, 400)
 
 

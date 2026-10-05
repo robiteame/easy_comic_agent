@@ -17,16 +17,17 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
+from agent import graph as graph_module  # noqa: E402
 from api.routes import script as script_route  # noqa: E402
 from api.routes import shot as shot_route  # noqa: E402
 from api.websocket import ws_manager  # noqa: E402
-from agent import graph as graph_module  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
 from models import BackgroundJob, Character, Project, SceneAsset, Shot  # noqa: E402
-from services import error_reporter  # noqa: E402
-from services import task_registry  # noqa: E402
+from services import (
+    error_reporter,  # noqa: E402
+    task_registry,  # noqa: E402
+)
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 SECRET_KEY = "sk-abcdefghijklmnop0123456789"
 SECRET_PATH = "/Users/someone/private/comic-agent/keys.txt"
@@ -143,8 +144,9 @@ class PipelineErrorReportingTests(unittest.TestCase):
         async def failing_run(state):
             raise RuntimeError(SENSITIVE_ERROR)
 
-        with patch.object(ws_manager, "send_to_project", self._capture), patch.object(
-            script_route.script_parser, "run", failing_run
+        with (
+            patch.object(ws_manager, "send_to_project", self._capture),
+            patch.object(script_route.script_parser, "run", failing_run),
         ):
             with self.assertLogs("services.error_reporter", level=logging.ERROR):
                 with self.assertRaises(RuntimeError):
@@ -173,8 +175,9 @@ class PipelineErrorReportingTests(unittest.TestCase):
         async def failing_baselines(*args, **kwargs):
             raise RuntimeError(SENSITIVE_ERROR)
 
-        with patch.object(ws_manager, "send_to_project", self._capture), patch.object(
-            shot_route, "_ensure_scene_baselines", failing_baselines
+        with (
+            patch.object(ws_manager, "send_to_project", self._capture),
+            patch.object(shot_route, "_ensure_scene_baselines", failing_baselines),
         ):
             with self.assertLogs("services.error_reporter", level=logging.ERROR):
                 with self.assertRaises(RuntimeError):

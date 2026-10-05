@@ -28,11 +28,7 @@ import type {
   ShotVersionListResponse,
   ShotVersionRestoreResponse,
 } from './shotVersionTypes'
-import type {
-  QualityCapabilityResponse,
-  QualityReviewRow,
-  ReviewStage,
-} from '../components/qualityReviewModel.ts'
+import type { QualityCapabilityResponse, QualityReviewRow, ReviewStage } from '../components/qualityReviewModel.ts'
 
 // The packaged desktop shell spawns the backend on a per-launch random
 // loopback port (main.ts reserveBackendPort) and injects the base URL here;
@@ -227,22 +223,25 @@ export const shotApi = {
   generateStoryboard: (
     projectId: string,
     shotIds?: string[],
-    optionsOrConfirmDegraded: boolean | {
-      confirm_degraded?: boolean
-      capability_mode?: 'manual' | 'auto'
-      confirm_capability_downgrade?: boolean
-    } = false,
+    optionsOrConfirmDegraded:
+      | boolean
+      | {
+          confirm_degraded?: boolean
+          capability_mode?: 'manual' | 'auto'
+          confirm_capability_downgrade?: boolean
+        } = false,
   ) => {
     const options = typeof optionsOrConfirmDegraded === 'boolean' ? {} : optionsOrConfirmDegraded || {}
-    const confirmDegraded = typeof optionsOrConfirmDegraded === 'boolean'
-      ? optionsOrConfirmDegraded
-      : Boolean(options.confirm_degraded)
-    return api.post(`/api/shot/${projectId}/generate-storyboard`, {
-      shot_ids: shotIds || [],
-      confirm_degraded: confirmDegraded,
-      capability_mode: options.capability_mode || 'manual',
-      confirm_capability_downgrade: Boolean(options.confirm_capability_downgrade),
-    }).then((r) => r.data)
+    const confirmDegraded =
+      typeof optionsOrConfirmDegraded === 'boolean' ? optionsOrConfirmDegraded : Boolean(options.confirm_degraded)
+    return api
+      .post(`/api/shot/${projectId}/generate-storyboard`, {
+        shot_ids: shotIds || [],
+        confirm_degraded: confirmDegraded,
+        capability_mode: options.capability_mode || 'manual',
+        confirm_capability_downgrade: Boolean(options.confirm_capability_downgrade),
+      })
+      .then((r) => r.data)
   },
 
   approveStoryboard: (shotId: string, approved = true) =>
@@ -253,11 +252,13 @@ export const shotApi = {
     force = false,
     options?: { capability_mode?: 'manual' | 'auto'; confirm_capability_downgrade?: boolean },
   ) =>
-    api.post(`/api/shot/${shotId}/generate-video`, {
-      force,
-      capability_mode: options?.capability_mode || 'manual',
-      confirm_capability_downgrade: Boolean(options?.confirm_capability_downgrade),
-    }).then((r) => r.data),
+    api
+      .post(`/api/shot/${shotId}/generate-video`, {
+        force,
+        capability_mode: options?.capability_mode || 'manual',
+        confirm_capability_downgrade: Boolean(options?.confirm_capability_downgrade),
+      })
+      .then((r) => r.data),
 
   generateAudio: (shotId: string, force = false, reuseExisting = false) =>
     api.post(`/api/shot/${shotId}/generate-audio`, { force, reuse_existing: reuseExisting }).then((r) => r.data),
@@ -266,8 +267,7 @@ export const shotApi = {
 
   // --- 版本历史（只读对比 + 追加式恢复） ---
 
-  versions: (shotId: string) =>
-    api.get(`/api/shot/${shotId}/versions`).then((r) => r.data as ShotVersionListResponse),
+  versions: (shotId: string) => api.get(`/api/shot/${shotId}/versions`).then((r) => r.data as ShotVersionListResponse),
 
   versionDetail: (shotId: string, versionId: string) =>
     api.get(`/api/shot/${shotId}/versions/${encodeURIComponent(versionId)}`).then((r) => r.data as ShotVersionDetail),
@@ -300,12 +300,18 @@ export interface RegenerationQueueSubmit {
 export const regenerationQueueApi = {
   submit: (data: RegenerationQueueSubmit) => api.post('/api/regeneration-queue', data).then((r) => r.data),
   detail: (batchId: string) => api.get(`/api/regeneration-queue/${encodeURIComponent(batchId)}`).then((r) => r.data),
-  pause: (batchId: string) => api.post(`/api/regeneration-queue/${encodeURIComponent(batchId)}/pause`).then((r) => r.data),
-  resume: (batchId: string) => api.post(`/api/regeneration-queue/${encodeURIComponent(batchId)}/resume`).then((r) => r.data),
-  continue: (batchId: string) => api.post(`/api/regeneration-queue/${encodeURIComponent(batchId)}/continue`).then((r) => r.data),
-  cancel: (batchId: string) => api.post(`/api/regeneration-queue/${encodeURIComponent(batchId)}/cancel`).then((r) => r.data),
-  retry: (batchId: string) => api.post(`/api/regeneration-queue/${encodeURIComponent(batchId)}/retry`).then((r) => r.data),
-  resumeFailed: (batchId: string) => api.post(`/api/regeneration-queue/${encodeURIComponent(batchId)}/resume-failed`).then((r) => r.data),
+  pause: (batchId: string) =>
+    api.post(`/api/regeneration-queue/${encodeURIComponent(batchId)}/pause`).then((r) => r.data),
+  resume: (batchId: string) =>
+    api.post(`/api/regeneration-queue/${encodeURIComponent(batchId)}/resume`).then((r) => r.data),
+  continue: (batchId: string) =>
+    api.post(`/api/regeneration-queue/${encodeURIComponent(batchId)}/continue`).then((r) => r.data),
+  cancel: (batchId: string) =>
+    api.post(`/api/regeneration-queue/${encodeURIComponent(batchId)}/cancel`).then((r) => r.data),
+  retry: (batchId: string) =>
+    api.post(`/api/regeneration-queue/${encodeURIComponent(batchId)}/retry`).then((r) => r.data),
+  resumeFailed: (batchId: string) =>
+    api.post(`/api/regeneration-queue/${encodeURIComponent(batchId)}/resume-failed`).then((r) => r.data),
   remove: (batchId: string) => api.delete(`/api/regeneration-queue/${encodeURIComponent(batchId)}`).then((r) => r.data),
 }
 
@@ -331,8 +337,7 @@ export interface ReferenceActionPayload {
 // --- 质量审核（quality review）：评分 / 问题 / 证据 / 历史候选 ---
 
 export const qualityReviewApi = {
-  capability: () =>
-    api.get('/api/quality-review/capability').then((r) => r.data as QualityCapabilityResponse),
+  capability: () => api.get('/api/quality-review/capability').then((r) => r.data as QualityCapabilityResponse),
 
   projectReviews: (projectId: string) =>
     api
@@ -359,8 +364,7 @@ export const assetApi = {
   updateShotAssets: (
     shotId: string,
     data: { project_id?: string; scene_asset_id?: string; character_asset_ids?: string[] },
-  ) =>
-    api.put(`/api/asset/shot/${shotId}`, data).then((r) => r.data),
+  ) => api.put(`/api/asset/shot/${shotId}`, data).then((r) => r.data),
 
   updateCharacter: (characterId: string, data: Record<string, any>) =>
     api.put(`/api/asset/character/${characterId}`, data).then((r) => r.data),
@@ -558,7 +562,10 @@ export const subtitleApi = {
 
   replaceCues: (
     trackId: string,
-    data: { project_id: string; cues: Array<{ start_ms: number; end_ms: number; text: string; character_name?: string }> },
+    data: {
+      project_id: string
+      cues: Array<{ start_ms: number; end_ms: number; text: string; character_name?: string }>
+    },
   ) => api.put(`/api/subtitle/track/${trackId}/cues`, data).then((r) => r.data as SubtitleTrackDto),
 
   importSubtitle: (trackId: string, data: { project_id: string; format: 'srt' | 'vtt'; content: string }) =>
@@ -567,11 +574,16 @@ export const subtitleApi = {
   generateFromShots: (trackId: string, projectId: string) =>
     api
       .post(`/api/subtitle/track/${trackId}/generate`, { project_id: projectId })
-      .then((r) => r.data as SubtitleTrackDto & { overlaps?: Array<{ index_a: number; index_b: number; overlap_ms: number }> }),
+      .then(
+        (r) =>
+          r.data as SubtitleTrackDto & { overlaps?: Array<{ index_a: number; index_b: number; overlap_ms: number }> },
+      ),
 
   /** 导出走浏览器下载；本地鉴权 token 通过查询参数注入。 */
   exportUrl: (trackId: string, projectId: string, format: 'srt' | 'vtt') =>
-    withLocalAuthQuery(`${API_BASE}/api/subtitle/track/${trackId}/export?project_id=${encodeURIComponent(projectId)}&format=${format}`),
+    withLocalAuthQuery(
+      `${API_BASE}/api/subtitle/track/${trackId}/export?project_id=${encodeURIComponent(projectId)}&format=${format}`,
+    ),
 }
 
 export const audioTrackApi = {
@@ -622,7 +634,8 @@ export const settingsApi = {
 
   saveSkillConfig: (data: Record<string, any>) => api.post('/api/settings/skill-configs', data).then((r) => r.data),
 
-  updateSkillBindings: (data: Record<string, any>) => api.put('/api/settings/skill-configs/bindings', data).then((r) => r.data),
+  updateSkillBindings: (data: Record<string, any>) =>
+    api.put('/api/settings/skill-configs/bindings', data).then((r) => r.data),
 
   modelConfigs: () => api.get('/api/settings/model-configs').then((r) => r.data),
 
@@ -745,9 +758,7 @@ export const budgetApi = {
 
   /** 单个任务的成本明细：失败 / 取消的任务同样可查已发生成本。 */
   jobCost: (jobId: string) =>
-    api
-      .get(`/api/budget/jobs/${encodeURIComponent(jobId)}`)
-      .then((r) => r.data as JobCostDetailDto),
+    api.get(`/api/budget/jobs/${encodeURIComponent(jobId)}`).then((r) => r.data as JobCostDetailDto),
 }
 
 /**
@@ -813,15 +824,13 @@ export const agentGraphApi = {
 }
 
 function localTokenQuery(): string {
-  return LOCAL_AUTH_TOKEN && isLocalApiOrigin(API_BASE)
-    ? `?token=${encodeURIComponent(LOCAL_AUTH_TOKEN)}`
-    : ''
+  return LOCAL_AUTH_TOKEN && isLocalApiOrigin(API_BASE) ? `?token=${encodeURIComponent(LOCAL_AUTH_TOKEN)}` : ''
 }
 
 function parseSocketPayload(data: unknown): any {
   try {
     return JSON.parse(String(data))
-  } catch (err) {
+  } catch (_err) {
     // 后端可能发来非 JSON 文本帧（如纯文本心跳），忽略而非中断消息处理
     console.warn('收到无法解析的 WebSocket 消息，已忽略:', data)
     return null
@@ -844,7 +853,7 @@ export function createWebSocket(
     let parsed: any
     try {
       parsed = JSON.parse(event.data)
-    } catch (err) {
+    } catch (_err) {
       // 后端可能发来非 JSON 文本帧（如纯文本心跳），忽略而非中断消息处理
       console.warn('收到无法解析的 WebSocket 消息，已忽略:', event.data)
       return
@@ -878,10 +887,7 @@ export function createWebSocket(
  * 因此前端不会因为「连接建立得比事件晚」而丢状态。断线重连由 store 负责：重连
  * 成功后必须重新拉一次 REST 快照，不能只依赖增量事件。
  */
-export function createJobsWebSocket(
-  onMessage: (data: any) => void,
-  options: WebSocketOptions = {},
-): WebSocket {
+export function createJobsWebSocket(onMessage: (data: any) => void, options: WebSocketOptions = {}): WebSocket {
   const ws = new WebSocket(`${WS_BASE}/ws/jobs${localTokenQuery()}`)
 
   ws.onopen = (event) => {

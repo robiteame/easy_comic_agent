@@ -27,8 +27,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from PIL import Image  # noqa: E402
 
 from agent.decision import provider_profiles  # noqa: E402
@@ -43,6 +41,7 @@ from services.providers.endpoint import EndpointConfig  # noqa: E402
 from services.providers.video_ark_seedance import ArkSeedanceVideoAdapter  # noqa: E402
 from services.providers.video_dashscope_wanx import DashscopeWanxVideoAdapter  # noqa: E402
 from services.video_service import VideoService  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 SEEDANCE_ENDPOINT = EndpointConfig(
     protocol="ark-seedance",
@@ -186,9 +185,7 @@ class VideoModeSelectionTests(unittest.TestCase):
             first_last_frame_interpolation=False,
             multiple_reference_images=True,
         )
-        mode = select_video_mode(
-            ["first_frame", "multiple_reference_images", "first_last_frame_interpolation"], caps
-        )
+        mode = select_video_mode(["first_frame", "multiple_reference_images", "first_last_frame_interpolation"], caps)
         self.assertEqual(mode, VIDEO_MODE_MULTI_REFERENCE_R2V)
 
     def test_default_is_first_frame_i2v(self) -> None:
@@ -256,8 +253,11 @@ class FirstFrameOnlyRoutingTests(_RoutingTestCase):
         )
         capture: dict = {}
         result = self._run_shot(
-            SEEDANCE_ENDPOINT, ArkSeedanceVideoAdapter, shot,
-            confirm_capability_downgrade=True, capture=capture,
+            SEEDANCE_ENDPOINT,
+            ArkSeedanceVideoAdapter,
+            shot,
+            confirm_capability_downgrade=True,
+            capture=capture,
         )
 
         self.assertEqual(shot["video_mode"], VIDEO_MODE_FIRST_FRAME_I2V)
@@ -301,8 +301,11 @@ class FirstFrameOnlyRoutingTests(_RoutingTestCase):
             character_reference_images=[_png("char_claim", (200, 30, 30))],
         )
         self._run_shot(
-            SEEDANCE_ENDPOINT, ArkSeedanceVideoAdapter, shot,
-            confirm_capability_downgrade=True, real_single_shot=True,
+            SEEDANCE_ENDPOINT,
+            ArkSeedanceVideoAdapter,
+            shot,
+            confirm_capability_downgrade=True,
+            real_single_shot=True,
         )
 
         report = shot["consistency_metrics"].get("provider_capabilities", {})
@@ -405,9 +408,7 @@ class ProviderOverridePriorityTests(_RoutingTestCase):
             patch("services.video_service.video_protocol_defaults", return_value=WAN_R2V_ENDPOINT),
             patch.object(VideoService, "generate_single_shot", side_effect=fake_single),
         ):
-            asyncio.run(
-                service.generate_shot_video(shot, [], {}, "routing_tests", provider_override="dashscope-wanx")
-            )
+            asyncio.run(service.generate_shot_video(shot, [], {}, "routing_tests", provider_override="dashscope-wanx"))
 
         self.assertEqual(adapter_calls, ["dashscope-wanx"])
         self.assertEqual(shot["video_mode"], VIDEO_MODE_MULTI_REFERENCE_R2V)
@@ -593,7 +594,9 @@ class WanxMediaEntryPriorityTests(unittest.TestCase):
 
         media = adapter._media_entries(first_url, request)
 
-        self.assertEqual([entry["type"] for entry in media], ["first_frame", "reference_image", "reference_image", "reference_image"])
+        self.assertEqual(
+            [entry["type"] for entry in media], ["first_frame", "reference_image", "reference_image", "reference_image"]
+        )
         self.assertEqual(
             [entry["url"] for entry in media],
             [first_url, urls["character_three_view"], urls["scene_baseline"], urls["continuity_frame"]],
@@ -603,7 +606,11 @@ class WanxMediaEntryPriorityTests(unittest.TestCase):
         adapter = DashscopeWanxVideoAdapter(WAN_R2V_ENDPOINT)
         first_url = adapter.reference_assets.to_image_url(_png("media_first_cap", (1, 2, 3)))
         assets = [
-            ReferenceAsset(url=adapter.reference_assets.to_image_url(_png(f"media_cap_{index}", (70, 80 + index, 90))), type="character_three_view", source_path=f"h{index}")
+            ReferenceAsset(
+                url=adapter.reference_assets.to_image_url(_png(f"media_cap_{index}", (70, 80 + index, 90))),
+                type="character_three_view",
+                source_path=f"h{index}",
+            )
             for index in range(6)
         ]
 
@@ -615,7 +622,11 @@ class WanxMediaEntryPriorityTests(unittest.TestCase):
         adapter = DashscopeWanxVideoAdapter(WAN_I2V_ENDPOINT)
         first_url = adapter.reference_assets.to_image_url(_png("media_first_i2v", (1, 2, 3)))
         assets = [
-            ReferenceAsset(url=adapter.reference_assets.to_image_url(_png("media_i2v_char", (7, 8, 9))), type="character_three_view", source_path="h"),
+            ReferenceAsset(
+                url=adapter.reference_assets.to_image_url(_png("media_i2v_char", (7, 8, 9))),
+                type="character_three_view",
+                source_path="h",
+            ),
         ]
 
         media = adapter._media_entries(first_url, self._request(assets, first_url))
@@ -649,7 +660,10 @@ class SingleShotMetadataTests(unittest.TestCase):
                     prompt="p",
                     project_id="routing_tests",
                     shot_id="s1",
-                    content=[{"type": "text", "text": "p"}, {"type": "image_url", "image_url": {"url": data_url}, "role": "first_frame"}],
+                    content=[
+                        {"type": "text", "text": "p"},
+                        {"type": "image_url", "image_url": {"url": data_url}, "role": "first_frame"},
+                    ],
                     reference_assets=[character],
                     provider_override="dashscope-wanx",
                 )

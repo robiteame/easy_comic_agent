@@ -21,9 +21,10 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Coroutine
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Any, Coroutine, Coroutine as _Coroutine
+from typing import Any
 
 from sqlalchemy import text
 
@@ -31,13 +32,19 @@ from config import settings
 from db import SessionLocal
 from models import BackgroundJob, Project, Shot
 from services import budget_service, usage_service
+from services.error_reporter import ERROR_BACKGROUND_JOB, log_failure, redact, summarize
 from services.job_debug import (
     append_event as append_debug_event,
+)
+from services.job_debug import (
     make_event as make_debug_event,
+)
+from services.job_debug import (
     parse_events as parse_debug_events,
+)
+from services.job_debug import (
     publish_debug_event,
 )
-from services.error_reporter import ERROR_BACKGROUND_JOB, log_failure, redact, summarize
 from services.job_dto import job_dto
 from services.job_events import (
     EVENT_JOB_CREATED,
@@ -64,7 +71,6 @@ from services.job_types import (
     job_type_label,
     parse_job_key,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -278,10 +284,20 @@ def _claim_row(
             # 队列项在真正派发时会被归档；把队列元数据带到新的运行行，
             # 任务中心因此仍能按批次、阶段和镜头关联展示活动任务。
             for field_name in (
-                "queue_batch_id", "queue_position", "queue_priority", "queue_order",
-                "queue_stage", "queue_shot_id", "queue_dependency_ids", "queue_blocked_reason",
-                "queue_concurrency", "queue_paused", "queue_resume_missing",
-                "queue_reuse_audio", "queue_force_confirmed", "queue_requested_version",
+                "queue_batch_id",
+                "queue_position",
+                "queue_priority",
+                "queue_order",
+                "queue_stage",
+                "queue_shot_id",
+                "queue_dependency_ids",
+                "queue_blocked_reason",
+                "queue_concurrency",
+                "queue_paused",
+                "queue_resume_missing",
+                "queue_reuse_audio",
+                "queue_force_confirmed",
+                "queue_requested_version",
             ):
                 if hasattr(existing, field_name):
                     queue_metadata[field_name] = getattr(existing, field_name)
@@ -470,7 +486,9 @@ def update_progress(
             BackgroundJob.updated_at: datetime.utcnow(),
         }
         resolved_step = str(current_step if current_step is not None else job.current_step or "")[:120]
-        resolved_message = summarize(message, limit=_ERROR_MESSAGE_CHARS) if message is not None else str(job.message or "")
+        resolved_message = (
+            summarize(message, limit=_ERROR_MESSAGE_CHARS) if message is not None else str(job.message or "")
+        )
         if current_step is not None:
             values[BackgroundJob.current_step] = resolved_step
         if message is not None:
@@ -589,7 +607,9 @@ def finish(
             _terminal_message(target, job.message),
             step=str(job.current_step or ""),
             progress=100 if target == STATUS_COMPLETED else int(job.progress or 0),
-            status="success" if target == STATUS_COMPLETED else ("cancelled" if target == STATUS_CANCELLED else "error"),
+            status="success"
+            if target == STATUS_COMPLETED
+            else ("cancelled" if target == STATUS_CANCELLED else "error"),
             detail={"error_code": str(job.error_code or "")} if target != STATUS_COMPLETED else None,
         )
         debug_raw, debug_revision = append_debug_event(
@@ -899,16 +919,14 @@ async def cancel_scopes(
         shot_ids = {scope.split(":", 1)[1] for scope in scope_set if scope.startswith("shot:")}
         if project_ids:
             project_shot_ids = {
-                shot_id
-                for (shot_id,) in db.query(Shot.id).filter(Shot.project_id.in_(project_ids)).all()
+                shot_id for (shot_id,) in db.query(Shot.id).filter(Shot.project_id.in_(project_ids)).all()
             }
             for job in active_jobs:
                 if job.scope.startswith("shot:") and job.scope.split(":", 1)[1] in project_shot_ids:
                     jobs_by_id[job.id] = job
         if shot_ids:
             shot_project_ids = {
-                project_id
-                for (project_id,) in db.query(Shot.project_id).filter(Shot.id.in_(shot_ids)).all()
+                project_id for (project_id,) in db.query(Shot.project_id).filter(Shot.id.in_(shot_ids)).all()
             }
             for job in active_jobs:
                 if job.scope.startswith("project:") and job.scope.split(":", 1)[1] in shot_project_ids:
@@ -1107,19 +1125,10 @@ def _scope_owner(db, scope: str) -> BackgroundJob | None:
             return next((job for job in active_jobs if job.scope == f"project:{project_id}"), None)
         return None
     if owner_type == "project":
-        active_shot_jobs = {
-            job.scope.split(":", 1)[1]: job
-            for job in active_jobs
-            if job.scope.startswith("shot:")
-        }
+        active_shot_jobs = {job.scope.split(":", 1)[1]: job for job in active_jobs if job.scope.startswith("shot:")}
         if not active_shot_jobs:
             return None
-        shot_id = (
-            db.query(Shot.id)
-            .filter(Shot.project_id == owner_id, Shot.id.in_(active_shot_jobs))
-            .limit(1)
-            .scalar()
-        )
+        shot_id = db.query(Shot.id).filter(Shot.project_id == owner_id, Shot.id.in_(active_shot_jobs)).limit(1).scalar()
         return active_shot_jobs.get(shot_id) if shot_id else None
     return None
 
@@ -1131,7 +1140,21 @@ def _is_queue_placeholder(job: BackgroundJob | None) -> bool:
 
 
 __all__ = [
-    "ACTIVE_STATUSES", "SCOPE_BLOCK_KEY_PREFIX", "ScopeCancellation", "TERMINAL_STATUSES", "active", "cancel",
-    "cancel_scopes", "claim", "finish", "keys", "recover_interrupted", "register", "release_scope_block",
-    "snapshot", "start", "unregister", "update_progress",
+    "ACTIVE_STATUSES",
+    "SCOPE_BLOCK_KEY_PREFIX",
+    "ScopeCancellation",
+    "TERMINAL_STATUSES",
+    "active",
+    "cancel",
+    "cancel_scopes",
+    "claim",
+    "finish",
+    "keys",
+    "recover_interrupted",
+    "register",
+    "release_scope_block",
+    "snapshot",
+    "start",
+    "unregister",
+    "update_progress",
 ]

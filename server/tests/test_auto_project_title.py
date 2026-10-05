@@ -19,11 +19,10 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from api.routes.script import _persist_phase1, _script_title  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
 from models import Project  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _state(project_id: str, *, script_title: str = "", user_input: str = "第一场：小雨捡到一本旧日记。") -> dict:

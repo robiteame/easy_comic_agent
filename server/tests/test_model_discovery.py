@@ -51,7 +51,10 @@ class ModelDiscoveryTests(unittest.TestCase):
 
         discover = AsyncMock(return_value={"models": [], "count": 0, "endpoint": "https://provider.example/v1/models"})
         with (
-            patch("api.routes.settings.get_endpoint", return_value=EndpointConfig(base_url="https://provider.example/v1", api_key="saved-secret")),
+            patch(
+                "api.routes.settings.get_endpoint",
+                return_value=EndpointConfig(base_url="https://provider.example/v1", api_key="saved-secret"),
+            ),
             patch("api.routes.settings.discover_models", discover),
         ):
             asyncio.run(

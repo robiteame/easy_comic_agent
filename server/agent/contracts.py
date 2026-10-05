@@ -6,7 +6,7 @@ API 追踪和测试都使用这里的枚举/模型，避免不同层各自发明
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal
 
@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class StageName(str, Enum):
@@ -152,7 +152,7 @@ class QualityStrategy(BaseModel):
     auto_approve: bool
 
     @model_validator(mode="after")
-    def validate_automatic_human_policy(self) -> "QualityStrategy":
+    def validate_automatic_human_policy(self) -> QualityStrategy:
         if self.mode == "auto" and self.human_intervention is not HumanInterventionPolicy.DISABLED:
             raise ValueError("自动模式的 human_intervention 必须为 disabled")
         return self
@@ -409,7 +409,7 @@ class VideoCandidateRecord(BaseModel):
         return data
 
     @model_validator(mode="after")
-    def _sync_aliases(self) -> "VideoCandidateRecord":
+    def _sync_aliases(self) -> VideoCandidateRecord:
         self.path = str(self.path or self.video_path or "")
         self.video_path = self.path
         self.last_frame_path = str(self.last_frame_path or self.tail_frame_path or "")
@@ -450,16 +450,23 @@ def select_video_candidate(
     succeeded = [row for row in rows if row.status is VideoCandidateStatus.SUCCEEDED]
     # ``False`` 表示结构检查明确失败，任何模式都不得选中；``None`` 只用于旧 Provider
     # 无法探测媒体时的兼容路径，严格模式仍要求 True。
-    eligible = [row for row in succeeded if row.structural_passed is True] if require_structural else [
-        row for row in succeeded if row.structural_passed is not False
-    ]
+    eligible = (
+        [row for row in succeeded if row.structural_passed is True]
+        if require_structural
+        else [row for row in succeeded if row.structural_passed is not False]
+    )
     rejected: list[dict[str, Any]] = []
     for row in rows:
         if row.status is not VideoCandidateStatus.SUCCEEDED:
             rejected.append({"candidate_id": row.candidate_id, "reason": "candidate_failed"})
         elif row.structural_passed is False or (require_structural and row.structural_passed is not True):
             rejected.append({"candidate_id": row.candidate_id, "reason": "structural_check_failed"})
-    if not eligible and allow_single_candidate_fallback and len(succeeded) == 1 and succeeded[0].structural_passed is not False:
+    if (
+        not eligible
+        and allow_single_candidate_fallback
+        and len(succeeded) == 1
+        and succeeded[0].structural_passed is not False
+    ):
         chosen = succeeded[0]
         return VideoCandidateSelection(
             candidate_id=chosen.candidate_id,
@@ -470,8 +477,12 @@ def select_video_candidate(
             rejected=rejected,
         )
     if not eligible:
-        return VideoCandidateSelection(reason="no_structurally_valid_candidate", considered=considered, rejected=rejected)
-    chosen = min(eligible, key=lambda row: (-row.score, row.generation_duration_ms, row.candidate_index, row.candidate_id))
+        return VideoCandidateSelection(
+            reason="no_structurally_valid_candidate", considered=considered, rejected=rejected
+        )
+    chosen = min(
+        eligible, key=lambda row: (-row.score, row.generation_duration_ms, row.candidate_index, row.candidate_id)
+    )
     return VideoCandidateSelection(
         candidate_id=chosen.candidate_id,
         shot_version=chosen.shot_version,
@@ -486,7 +497,9 @@ def select_video_candidate(
                 "eligible": row in eligible,
                 "status": row.status.value,
                 "structural_passed": row.structural_passed,
-                "rejection_reason": next((item["reason"] for item in rejected if item["candidate_id"] == row.candidate_id), ""),
+                "rejection_reason": next(
+                    (item["reason"] for item in rejected if item["candidate_id"] == row.candidate_id), ""
+                ),
             }
             for row in sorted(rows, key=lambda item: item.candidate_id)
         ],
@@ -749,10 +762,14 @@ class StageContract(BaseModel):
     description: str = ""
 
     @model_validator(mode="after")
-    def validate_contract(self) -> "StageContract":
+    def validate_contract(self) -> StageContract:
         allowed = list(_DEFAULT_ALLOWED_RECOVERY[self.stage])
         # 终止回退（降级发布/明确失败）在任何阶段都必须可选，否则恢复耗尽后无路可走。
-        allowed.extend(item for item in (RecoveryStrategy.DEGRADED_PUBLISH, RecoveryStrategy.TERMINAL_FAILURE) if item not in allowed)
+        allowed.extend(
+            item
+            for item in (RecoveryStrategy.DEGRADED_PUBLISH, RecoveryStrategy.TERMINAL_FAILURE)
+            if item not in allowed
+        )
         if not self.allowed_recovery:
             object.__setattr__(self, "allowed_recovery", allowed)
         if self.recoverable and not self.allowed_recovery:
@@ -768,8 +785,19 @@ STAGE_CONTRACTS: dict[StageName, StageContract] = {
         label="导演规划",
         input_model=StageInput,
         output_model=StageOutput,
-        quality_metrics=["schema_valid", "character_coverage", "scene_coverage", "logic_issue_count", "duration_deviation"],
-        failure_classes=[FailureKind.LLM_INVALID_OUTPUT, FailureKind.LLM_OUTPUT_TRUNCATED, FailureKind.DEPENDENCY_FAILED, FailureKind.TIMEOUT],
+        quality_metrics=[
+            "schema_valid",
+            "character_coverage",
+            "scene_coverage",
+            "logic_issue_count",
+            "duration_deviation",
+        ],
+        failure_classes=[
+            FailureKind.LLM_INVALID_OUTPUT,
+            FailureKind.LLM_OUTPUT_TRUNCATED,
+            FailureKind.DEPENDENCY_FAILED,
+            FailureKind.TIMEOUT,
+        ],
         checkpoint_key="director",
         description="解析剧本、人物、场景、叙事目标和资源预算，产出导演意图与候选拍摄计划。",
     ),
@@ -778,8 +806,20 @@ STAGE_CONTRACTS: dict[StageName, StageContract] = {
         label="分镜设计",
         input_model=StageInput,
         output_model=StageOutput,
-        quality_metrics=["shot_count", "shot_rule_compliance", "dialogue_duration_ratio", "continuity_score", "complex_action_score"],
-        failure_classes=[FailureKind.LLM_INVALID_OUTPUT, FailureKind.LLM_OUTPUT_TRUNCATED, FailureKind.DIALOGUE_TOO_LONG, FailureKind.SHOT_TOO_COMPLEX, FailureKind.QUALITY_BELOW_THRESHOLD],
+        quality_metrics=[
+            "shot_count",
+            "shot_rule_compliance",
+            "dialogue_duration_ratio",
+            "continuity_score",
+            "complex_action_score",
+        ],
+        failure_classes=[
+            FailureKind.LLM_INVALID_OUTPUT,
+            FailureKind.LLM_OUTPUT_TRUNCATED,
+            FailureKind.DIALOGUE_TOO_LONG,
+            FailureKind.SHOT_TOO_COMPLEX,
+            FailureKind.QUALITY_BELOW_THRESHOLD,
+        ],
         checkpoint_key="storyboard",
         description="将导演意图拆成可执行镜头，必要时自动拆分或合并镜头并保留决策记录。",
     ),
@@ -788,8 +828,19 @@ STAGE_CONTRACTS: dict[StageName, StageContract] = {
         label="素材准备",
         input_model=StageInput,
         output_model=StageOutput,
-        quality_metrics=["character_reference_coverage", "scene_reference_coverage", "reference_compatibility", "asset_version_match"],
-        failure_classes=[FailureKind.PROVIDER_REFERENCE_UNSUPPORTED, FailureKind.PROVIDER_CAPABILITY_MISMATCH, FailureKind.PROVIDER_UNAVAILABLE, FailureKind.STORAGE_FAILED, FailureKind.USER_CHANGED_INPUT],
+        quality_metrics=[
+            "character_reference_coverage",
+            "scene_reference_coverage",
+            "reference_compatibility",
+            "asset_version_match",
+        ],
+        failure_classes=[
+            FailureKind.PROVIDER_REFERENCE_UNSUPPORTED,
+            FailureKind.PROVIDER_CAPABILITY_MISMATCH,
+            FailureKind.PROVIDER_UNAVAILABLE,
+            FailureKind.STORAGE_FAILED,
+            FailureKind.USER_CHANGED_INPUT,
+        ],
         checkpoint_key="assets",
         description="生成/校验角色三视图、场景基准图和连续性参考，标记 Provider 能力限制。",
     ),
@@ -799,7 +850,15 @@ STAGE_CONTRACTS: dict[StageName, StageContract] = {
         input_model=StageInput,
         output_model=StageOutput,
         quality_metrics=["image_valid", "prompt_alignment", "character_consistency", "composition", "candidate_score"],
-        failure_classes=[FailureKind.IMAGE_FAILED, FailureKind.PROVIDER_REFERENCE_UNSUPPORTED, FailureKind.PROVIDER_CAPABILITY_MISMATCH, FailureKind.TIMEOUT, FailureKind.VERSION_CONFLICT, FailureKind.BUDGET_EXCEEDED, FailureKind.STORAGE_FAILED],
+        failure_classes=[
+            FailureKind.IMAGE_FAILED,
+            FailureKind.PROVIDER_REFERENCE_UNSUPPORTED,
+            FailureKind.PROVIDER_CAPABILITY_MISMATCH,
+            FailureKind.TIMEOUT,
+            FailureKind.VERSION_CONFLICT,
+            FailureKind.BUDGET_EXCEEDED,
+            FailureKind.STORAGE_FAILED,
+        ],
         checkpoint_key="image",
         fan_out=True,
         description="逐镜头独立生成故事板候选；单镜头失败不会回滚已成功镜头。",
@@ -809,8 +868,18 @@ STAGE_CONTRACTS: dict[StageName, StageContract] = {
         label="质量审核",
         input_model=StageInput,
         output_model=StageOutput,
-        quality_metrics=["structural_validity", "continuity", "prompt_alignment", "review_score", "failure_recovery_rate"],
-        failure_classes=[FailureKind.QUALITY_BELOW_THRESHOLD, FailureKind.DIALOGUE_TOO_LONG, FailureKind.DEPENDENCY_FAILED],
+        quality_metrics=[
+            "structural_validity",
+            "continuity",
+            "prompt_alignment",
+            "review_score",
+            "failure_recovery_rate",
+        ],
+        failure_classes=[
+            FailureKind.QUALITY_BELOW_THRESHOLD,
+            FailureKind.DIALOGUE_TOO_LONG,
+            FailureKind.DEPENDENCY_FAILED,
+        ],
         checkpoint_key="quality",
         description="Critic/Reviewer 对候选结果给出评分、问题证据、具体修改和恢复建议。",
     ),
@@ -827,7 +896,15 @@ STAGE_CONTRACTS: dict[StageName, StageContract] = {
             "duration_match",
             "provider_capability",
         ],
-        failure_classes=[FailureKind.VIDEO_FAILED, FailureKind.PROVIDER_UNAVAILABLE, FailureKind.PROVIDER_CAPABILITY_MISMATCH, FailureKind.TIMEOUT, FailureKind.STORAGE_FAILED, FailureKind.VERSION_CONFLICT, FailureKind.BUDGET_EXCEEDED],
+        failure_classes=[
+            FailureKind.VIDEO_FAILED,
+            FailureKind.PROVIDER_UNAVAILABLE,
+            FailureKind.PROVIDER_CAPABILITY_MISMATCH,
+            FailureKind.TIMEOUT,
+            FailureKind.STORAGE_FAILED,
+            FailureKind.VERSION_CONFLICT,
+            FailureKind.BUDGET_EXCEEDED,
+        ],
         checkpoint_key="video",
         fan_out=True,
         description="逐镜头生成视频候选，支持失败镜头局部补拍、降分辨率和 Provider 切换；视觉质量在接入视觉模型前保持待审（visual_quality_pending）。",
@@ -837,8 +914,19 @@ STAGE_CONTRACTS: dict[StageName, StageContract] = {
         label="视频检查",
         input_model=StageInput,
         output_model=StageOutput,
-        quality_metrics=["structural_validity", "technical_quality", "visual_quality_pending", "review_score", "failure_recovery_rate"],
-        failure_classes=[FailureKind.QUALITY_BELOW_THRESHOLD, FailureKind.VIDEO_FAILED, FailureKind.PROVIDER_CAPABILITY_MISMATCH, FailureKind.DEPENDENCY_FAILED],
+        quality_metrics=[
+            "structural_validity",
+            "technical_quality",
+            "visual_quality_pending",
+            "review_score",
+            "failure_recovery_rate",
+        ],
+        failure_classes=[
+            FailureKind.QUALITY_BELOW_THRESHOLD,
+            FailureKind.VIDEO_FAILED,
+            FailureKind.PROVIDER_CAPABILITY_MISMATCH,
+            FailureKind.DEPENDENCY_FAILED,
+        ],
         checkpoint_key="video_review",
         description="检查已生成视频的结构、技术质量和待审视觉质量，并把失败镜头送入局部恢复。",
     ),
@@ -848,7 +936,12 @@ STAGE_CONTRACTS: dict[StageName, StageContract] = {
         input_model=StageInput,
         output_model=StageOutput,
         quality_metrics=["dialogue_length", "tts_valid", "voice_consistency", "audio_duration", "mix_readiness"],
-        failure_classes=[FailureKind.DIALOGUE_TOO_LONG, FailureKind.AUDIO_FAILED, FailureKind.PROVIDER_UNAVAILABLE, FailureKind.VERSION_CONFLICT],
+        failure_classes=[
+            FailureKind.DIALOGUE_TOO_LONG,
+            FailureKind.AUDIO_FAILED,
+            FailureKind.PROVIDER_UNAVAILABLE,
+            FailureKind.VERSION_CONFLICT,
+        ],
         checkpoint_key="audio",
         fan_out=True,
         description="为对白镜头生成/复用配音，过长对白自动拆句或转人工。",
@@ -859,7 +952,12 @@ STAGE_CONTRACTS: dict[StageName, StageContract] = {
         input_model=StageInput,
         output_model=StageOutput,
         quality_metrics=["shot_completeness", "av_sync", "timeline_duration", "render_valid", "degraded_shot_count"],
-        failure_classes=[FailureKind.DEPENDENCY_FAILED, FailureKind.STORAGE_FAILED, FailureKind.TIMEOUT, FailureKind.BUDGET_EXCEEDED],
+        failure_classes=[
+            FailureKind.DEPENDENCY_FAILED,
+            FailureKind.STORAGE_FAILED,
+            FailureKind.TIMEOUT,
+            FailureKind.BUDGET_EXCEEDED,
+        ],
         checkpoint_key="compose",
         description="只消费已完成/明确降级的镜头，生成成片并保留跳过或人工介入状态。",
     ),
@@ -868,8 +966,19 @@ STAGE_CONTRACTS: dict[StageName, StageContract] = {
         label="成片复审",
         input_model=StageInput,
         output_model=StageOutput,
-        quality_metrics=["story_coherence", "visual_consistency", "audio_quality", "pacing", "overall_score", "human_gate"],
-        failure_classes=[FailureKind.QUALITY_BELOW_THRESHOLD, FailureKind.USER_CHANGED_INPUT, FailureKind.DEPENDENCY_FAILED],
+        quality_metrics=[
+            "story_coherence",
+            "visual_consistency",
+            "audio_quality",
+            "pacing",
+            "overall_score",
+            "human_gate",
+        ],
+        failure_classes=[
+            FailureKind.QUALITY_BELOW_THRESHOLD,
+            FailureKind.USER_CHANGED_INPUT,
+            FailureKind.DEPENDENCY_FAILED,
+        ],
         checkpoint_key="final",
         description="从成片层面反思节奏、连续性、对白和视觉质量，决定发布、局部重算或转人工。",
     ),
@@ -1039,10 +1148,37 @@ def transition_allowed(current: RunStatus | str | None, target: RunStatus | str)
         return stage_status_transition_allowed(current, target)
     allowed: dict[RunStatus, set[RunStatus]] = {
         RunStatus.PENDING: {RunStatus.RUNNING, RunStatus.CANCELLED, RunStatus.FAILED},
-        RunStatus.RUNNING: {RunStatus.RECOVERING, RunStatus.WAITING_HUMAN, RunStatus.COMPLETED, RunStatus.DEGRADED, RunStatus.FAILED, RunStatus.CANCELLED},
-        RunStatus.RECOVERING: {RunStatus.RUNNING, RunStatus.WAITING_HUMAN, RunStatus.COMPLETED, RunStatus.DEGRADED, RunStatus.FAILED, RunStatus.CANCELLED},
-        RunStatus.WAITING_HUMAN: {RunStatus.RUNNING, RunStatus.RECOVERING, RunStatus.COMPLETED, RunStatus.DEGRADED, RunStatus.FAILED, RunStatus.CANCELLED},
-        RunStatus.DEGRADED: {RunStatus.RUNNING, RunStatus.RECOVERING, RunStatus.WAITING_HUMAN, RunStatus.COMPLETED, RunStatus.FAILED},
+        RunStatus.RUNNING: {
+            RunStatus.RECOVERING,
+            RunStatus.WAITING_HUMAN,
+            RunStatus.COMPLETED,
+            RunStatus.DEGRADED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        },
+        RunStatus.RECOVERING: {
+            RunStatus.RUNNING,
+            RunStatus.WAITING_HUMAN,
+            RunStatus.COMPLETED,
+            RunStatus.DEGRADED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        },
+        RunStatus.WAITING_HUMAN: {
+            RunStatus.RUNNING,
+            RunStatus.RECOVERING,
+            RunStatus.COMPLETED,
+            RunStatus.DEGRADED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        },
+        RunStatus.DEGRADED: {
+            RunStatus.RUNNING,
+            RunStatus.RECOVERING,
+            RunStatus.WAITING_HUMAN,
+            RunStatus.COMPLETED,
+            RunStatus.FAILED,
+        },
         RunStatus.COMPLETED: set(),
         RunStatus.FAILED: {RunStatus.RUNNING, RunStatus.RECOVERING},
         RunStatus.CANCELLED: set(),

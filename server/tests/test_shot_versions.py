@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 import unittest
 from pathlib import Path
@@ -23,10 +22,9 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
+from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 from api.routes import script as script_route  # noqa: E402
 from api.routes import shot as shot_route  # noqa: E402
@@ -36,10 +34,9 @@ from main import app  # noqa: E402
 from models import BackgroundJob, Character, Project, SceneAsset, Shot, ShotVersion  # noqa: E402
 from services.shot_version_service import (  # noqa: E402
     create_version,
-    list_versions,
     parse_snapshot,
-    version_detail,
 )
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _media_file(name: str) -> str:
@@ -79,12 +76,7 @@ class ShotVersionTestCase(unittest.TestCase):
         return project, shot
 
     def rows(self, shot_id: str) -> list[ShotVersion]:
-        return (
-            self.db.query(ShotVersion)
-            .filter(ShotVersion.shot_id == shot_id)
-            .order_by(ShotVersion.number)
-            .all()
-        )
+        return self.db.query(ShotVersion).filter(ShotVersion.shot_id == shot_id).order_by(ShotVersion.number).all()
 
 
 class EditVersionChainTests(ShotVersionTestCase):
@@ -366,7 +358,14 @@ class RestoreVersionTests(ShotVersionTestCase):
     def test_restore_rejects_deleted_asset_binding(self) -> None:
         project = Project(id="shot-ver-project", title="版本测试")
         scene = SceneAsset(id="shot-ver-scene", project_id=project.id, name="教室")
-        shot = Shot(id="shot-ver-shot", project_id=project.id, sequence=1, version=1, dialogue="one", scene_asset_id="shot-ver-scene")
+        shot = Shot(
+            id="shot-ver-shot",
+            project_id=project.id,
+            sequence=1,
+            version=1,
+            dialogue="one",
+            scene_asset_id="shot-ver-scene",
+        )
         self.db.add_all([project, scene, shot])
         self.db.commit()
         row = create_version(self.db, shot, "manual_edit")
@@ -406,7 +405,7 @@ class ImmutabilityAndStorageTests(ShotVersionTestCase):
         row = create_version(self.db, shot, "manual_edit")
         self.db.commit()
 
-        with self.assertRaises(Exception):
+        with self.assertRaises(IntegrityError):
             self.db.execute(
                 text("UPDATE shot_versions SET source = 'hacked', snapshot = '{}' WHERE id = :id"),
                 {"id": row.id},

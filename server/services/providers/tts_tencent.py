@@ -16,7 +16,7 @@ import json
 import time
 import uuid
 import wave
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
 from urllib.parse import urlparse
 
@@ -153,9 +153,7 @@ class TencentTTSAdapter(BaseAdapter):
             raise RuntimeError("腾讯云 TTS 凭据格式应为 SecretId:SecretKey")
         return secret_id.strip(), secret_key.strip()
 
-    async def _synthesize_segment(
-        self, text: str, voice: str, codec: str, secret_id: str, secret_key: str
-    ) -> bytes:
+    async def _synthesize_segment(self, text: str, voice: str, codec: str, secret_id: str, secret_key: str) -> bytes:
         # TC3 签名覆盖请求体字节，payload 只序列化一次并原样发送。
         payload = json.dumps(
             {
@@ -225,11 +223,9 @@ class TencentTTSAdapter(BaseAdapter):
                     writer.writeframes(reader.readframes(reader.getnframes()))
         return output.getvalue()
 
-    def _signed_headers(
-        self, host: str, action: str, payload: str, secret_id: str, secret_key: str
-    ) -> dict[str, str]:
+    def _signed_headers(self, host: str, action: str, payload: str, secret_id: str, secret_key: str) -> dict[str, str]:
         timestamp = int(time.time())
-        date = datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d")
+        date = datetime.fromtimestamp(timestamp, tz=UTC).strftime("%Y-%m-%d")
         hashed_payload = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         canonical_request = "\n".join(
             [

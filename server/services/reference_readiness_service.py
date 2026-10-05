@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Any, Iterable
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -51,7 +52,12 @@ def _status_for_item(kind: str, item: Any) -> str:
     status = str(getattr(item, "reference_status", "") or "").strip().lower()
     paths = _paths(kind, item)
     # 迁移前的旧资产没有状态列；已有可用参考图时按 ready 处理。
-    if status == "stale" and paths and not str(getattr(item, "reference_failure_reason", "") or "") and str(getattr(item, "asset_status", "") or "") != "stale":
+    if (
+        status == "stale"
+        and paths
+        and not str(getattr(item, "reference_failure_reason", "") or "")
+        and str(getattr(item, "asset_status", "") or "") != "stale"
+    ):
         return "ready"
     if status in REFERENCE_STATUSES:
         return status
@@ -78,10 +84,7 @@ def _shot_impact(db: Session, kind: str, item: Any) -> list[dict[str, Any]]:
     if not project_ids:
         return []
     shots = (
-        db.query(Shot)
-        .filter(Shot.project_id.in_(project_ids))
-        .order_by(Shot.project_id, Shot.sequence, Shot.id)
-        .all()
+        db.query(Shot).filter(Shot.project_id.in_(project_ids)).order_by(Shot.project_id, Shot.sequence, Shot.id).all()
     )
     item_id = str(getattr(item, "id", "") or "")
     item_name = str(getattr(item, "name", "") or "")
@@ -114,7 +117,9 @@ def _shot_range(impact: Iterable[dict[str, Any]]) -> str:
     if len(sequences) == 1:
         return f"镜头 {sequences[0]}"
     contiguous = sequences == list(range(sequences[0], sequences[-1] + 1))
-    return f"镜头 {sequences[0]}-{sequences[-1]}" if contiguous else "镜头 " + "、".join(str(value) for value in sequences)
+    return (
+        f"镜头 {sequences[0]}-{sequences[-1]}" if contiguous else "镜头 " + "、".join(str(value) for value in sequences)
+    )
 
 
 def item_record(kind: str, item: Any, impact: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -179,15 +184,18 @@ def build_report(db: Session, asset_project_id: str, *, persist: bool = True) ->
         "items": items,
         "affected_shot_ids": affected_ids,
         "affected_shot_count": len(affected_ids),
-        "shot_range": _shot_range({"shot_id": shot_id, "sequence": index + 1} for index, shot_id in enumerate(affected_ids)),
+        "shot_range": _shot_range(
+            {"shot_id": shot_id, "sequence": index + 1} for index, shot_id in enumerate(affected_ids)
+        ),
         "capability_warnings": sorted({item["capability_warning"] for item in items if item["capability_warning"]}),
         "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
     # 重新计算真实序列范围（上面的占位 sequence 不可靠）。
-    sequence_by_shot = {
-        str(shot.id): int(shot.sequence or 0)
-        for shot in db.query(Shot).filter(Shot.id.in_(affected_ids)).all()
-    } if affected_ids else {}
+    sequence_by_shot = (
+        {str(shot.id): int(shot.sequence or 0) for shot in db.query(Shot).filter(Shot.id.in_(affected_ids)).all()}
+        if affected_ids
+        else {}
+    )
     report["shot_range"] = _shot_range(
         {"shot_id": shot_id, "sequence": sequence_by_shot.get(shot_id, 0)} for shot_id in affected_ids
     )
@@ -267,7 +275,6 @@ def mark_reference_success(
 ) -> None:
     current = _paths(kind, item)
     next_paths = [str(path)] if path else current
-    changed = next_paths != current
     item.reference_images = json.dumps(next_paths, ensure_ascii=False)
     if kind == "scene":
         item.baseline_image_path = str(path or item.baseline_image_path or "")
@@ -346,7 +353,9 @@ def build_manifest_for_shot(
     manifest: list[dict[str, Any]] = []
     character_ids = _json_list(shot.character_asset_ids)
     if character_ids:
-        for item in db.query(Character).filter(Character.project_id == asset_project_id, Character.id.in_(character_ids)).all():
+        for item in (
+            db.query(Character).filter(Character.project_id == asset_project_id, Character.id.in_(character_ids)).all()
+        ):
             for path in _paths("character", item):
                 manifest.append(
                     {
@@ -361,7 +370,11 @@ def build_manifest_for_shot(
                     }
                 )
     if shot.scene_asset_id:
-        item = db.query(SceneAsset).filter(SceneAsset.project_id == asset_project_id, SceneAsset.id == shot.scene_asset_id).first()
+        item = (
+            db.query(SceneAsset)
+            .filter(SceneAsset.project_id == asset_project_id, SceneAsset.id == shot.scene_asset_id)
+            .first()
+        )
         if item:
             for path in _paths("scene", item):
                 manifest.append(
@@ -449,9 +462,13 @@ def ensure_generation_gate(
         wanted = set(str(value) for value in shot_ids)
         scoped = {
             **report,
-            "items": [item for item in report.get("items", []) if wanted.intersection(item.get("affected_shot_ids", []))],
+            "items": [
+                item for item in report.get("items", []) if wanted.intersection(item.get("affected_shot_ids", []))
+            ],
         }
-        scoped["affected_shot_ids"] = sorted({shot_id for item in scoped["items"] for shot_id in item.get("affected_shot_ids", [])})
+        scoped["affected_shot_ids"] = sorted(
+            {shot_id for item in scoped["items"] for shot_id in item.get("affected_shot_ids", [])}
+        )
     return blocking_report(scoped, allow_degraded=allow_degraded)
 
 

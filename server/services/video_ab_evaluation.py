@@ -15,8 +15,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from services.atomic_json import atomic_write_json, atomic_write_text
 
@@ -372,9 +373,7 @@ def _normalize_result(
     )
     batch_id = _string(record.get("batch_id", default_batch_id), f"results[{index}].batch_id")
     if batch_id != default_batch_id:
-        raise VideoABEvaluationError(
-            f"results[{index}] 的 batch_id={batch_id} 与评估批次 {default_batch_id} 不一致"
-        )
+        raise VideoABEvaluationError(f"results[{index}] 的 batch_id={batch_id} 与评估批次 {default_batch_id} 不一致")
     plan_hash = _string(
         record.get("execution_plan_hash", record.get("plan_hash")),
         f"results[{index}].execution_plan_hash",
@@ -382,8 +381,7 @@ def _normalize_result(
     expected_plan_hash = str(shots_by_id[shot_id]["execution_plan_hash"])
     if plan_hash != expected_plan_hash:
         raise VideoABEvaluationError(
-            f"镜头 {shot_id} 的策略 {strategy_id} 使用了不同执行计划: "
-            f"{plan_hash} != {expected_plan_hash}"
+            f"镜头 {shot_id} 的策略 {strategy_id} 使用了不同执行计划: {plan_hash} != {expected_plan_hash}"
         )
     metrics = _normalize_metrics(record)
     elapsed_ms = _required_int(
@@ -444,7 +442,9 @@ def _metric_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
     reviewed = manual_counts["accepted"] + manual_counts["rejected"]
     rates = {
-        "structural_pass_rate": _round_rate(_rate(sum(value is True for value in structural_known), len(structural_known))),
+        "structural_pass_rate": _round_rate(
+            _rate(sum(value is True for value in structural_known), len(structural_known))
+        ),
         "first_frame_match_score": _round_rate(
             _rate(sum(first_frame_values), len(first_frame_values)) if first_frame_values else None
         ),
@@ -522,12 +522,7 @@ def _execution_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "cost_by_currency": [costs[key] for key in sorted(costs)],
         "provider_model_pairs": [
             {"provider": provider, "model": model}
-            for provider, model in sorted(
-                {
-                    (str(item["provider"]), str(item["model"]))
-                    for item in records
-                }
-            )
+            for provider, model in sorted({(str(item["provider"]), str(item["model"])) for item in records})
         ],
     }
 
@@ -611,7 +606,11 @@ def build_evaluation_report(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     plan_fingerprint = _canonical_json_hash(
         [
-            {"shot_id": item["shot_id"], "shot_type": item["shot_type"], "execution_plan_hash": item["execution_plan_hash"]}
+            {
+                "shot_id": item["shot_id"],
+                "shot_type": item["shot_type"],
+                "execution_plan_hash": item["execution_plan_hash"],
+            }
             for item in sorted(shots, key=lambda item: item["shot_id"])
         ]
     )
@@ -690,8 +689,7 @@ def render_markdown_report(report: Mapping[str, Any]) -> str:
         metrics = item["overall"]["metrics"]
         execution = item["overall"]["execution"]
         cost_text = "; ".join(
-            f"{entry['cost_micro']} micro {entry['currency']}"
-            for entry in execution["cost_by_currency"]
+            f"{entry['cost_micro']} micro {entry['currency']}" for entry in execution["cost_by_currency"]
         ) or ("成本未知" if execution["cost_unknown_count"] else "0")
         elapsed = execution["elapsed_ms_mean"]
         lines.append(
@@ -759,9 +757,7 @@ def render_markdown_report(report: Mapping[str, Any]) -> str:
     for item in report["results"]:
         cost = item["cost"]
         cost_text = (
-            f"{cost['cost_micro']} micro {cost['currency']}"
-            if cost["cost_known"]
-            else f"成本未知 ({cost['currency']})"
+            f"{cost['cost_micro']} micro {cost['currency']}" if cost["cost_known"] else f"成本未知 ({cost['currency']})"
         )
         manual = item["manual_review"]["status"]
         output_path = str(item["output_path"] or "（空）").replace("|", "\\|")

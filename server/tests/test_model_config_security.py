@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import socket
+import stat
 import sys
 import tempfile
 import unittest
@@ -14,9 +14,8 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from services import model_config_service
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class ModelConfigSecurityTests(unittest.TestCase):
@@ -97,7 +96,13 @@ class ModelConfigSecurityTests(unittest.TestCase):
                     patch.object(model_config_service.socket, "getaddrinfo", return_value=public_dns),
                 ):
                     model_config_service._save_raw(
-                        {"script": {"protocol": "openai-chat", "api_key": "old-key", "base_url": "https://old.example.test/v1"}}
+                        {
+                            "script": {
+                                "protocol": "openai-chat",
+                                "api_key": "old-key",
+                                "base_url": "https://old.example.test/v1",
+                            }
+                        }
                     )
                     model_config_service.settings.OPENAI_API_KEY = "old-key"
 

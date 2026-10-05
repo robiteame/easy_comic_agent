@@ -3,15 +3,22 @@ import base64  # noqa: F401  (kept for reference-asset data URLs)
 import logging
 import re
 import time
+from io import BytesIO
 
 from PIL import Image
-from io import BytesIO
 
 from config import settings
 from services import usage_service
-from services.job_debug import record_api_request, record_api_result
+from services.consistency_metrics import combine_report, payload_metrics
 from services.consistency_service import ConsistencyService
+from services.job_debug import record_api_request, record_api_result
+from services.prompt_budget import assemble_prompt, dedupe_terms, ensure_critical_fields, remove_conflicting_terms
 from services.providers.base import ImageRequest, ReferenceAsset
+from services.providers.capability_matrix import (
+    CapabilityDowngradeRequiredError,
+    capability_report,
+    payload_control_types,
+)
 from services.providers.endpoint import (
     KNOWN_PROTOCOLS,
     EndpointConfig,
@@ -20,19 +27,12 @@ from services.providers.endpoint import (
 )
 from services.providers.image_placeholder import PlaceholderImageAdapter
 from services.providers.registry import UnknownProtocolError, get_adapter
-from services.providers.capability_matrix import (
-    CapabilityDowngradeRequiredError,
-    capability_report,
-    payload_control_types,
-)
 from services.providers.usage import (
     CAPABILITY_IMAGE,
     ERROR_CODE_PROVIDER_CALL_FAILED,
     adapter_usage_for_request,
 )
 from services.reference_asset_service import ReferenceAssetService
-from services.consistency_metrics import combine_report, payload_metrics
-from services.prompt_budget import assemble_prompt, dedupe_terms, ensure_critical_fields, remove_conflicting_terms
 from services.security import atomic_write_bytes, safe_path, validate_identifier
 from services.storage_service import StorageQuotaExceeded, StorageService
 from services.style_templates import style_prompt_params
@@ -84,7 +84,7 @@ class ImageService:
             if capabilities is None or not getattr(capabilities, "reference_images", False):
                 continue
             endpoint = image_protocol_defaults(protocol)
-            if not str(endpoint.api_key or '').strip():
+            if not str(endpoint.api_key or "").strip():
                 continue
             return endpoint
         return None
@@ -119,9 +119,7 @@ class ImageService:
             # Lightweight plugin/test adapters may not require endpoint state.
             return adapter_cls()
 
-    def _upgrade_to_reference_provider(
-        self, adapter, endpoint: EndpointConfig
-    ) -> tuple[object, EndpointConfig, str]:
+    def _upgrade_to_reference_provider(self, adapter, endpoint: EndpointConfig) -> tuple[object, EndpointConfig, str]:
         """当前 Provider 不支持参考图时，优先切换到已配置的参考图 Provider。
 
         返回 (adapter, endpoint, provider_source)。找不到可用替代时原样返回，
@@ -168,7 +166,9 @@ class ImageService:
         """
         validated_assets = list(reference_assets or [])
         if not validated_assets and reference_images:
-            validated_assets = [ReferenceAsset(url=value, type="reference_image", role="reference_image") for value in reference_images]
+            validated_assets = [
+                ReferenceAsset(url=value, type="reference_image", role="reference_image") for value in reference_images
+            ]
         validated_assets = [item for item in validated_assets if item.url]
         requires_references = bool(validated_assets)
         adapter, endpoint = self._resolve_route(provider_override)
@@ -177,7 +177,7 @@ class ImageService:
             adapter, endpoint, provider_source = self._upgrade_to_reference_provider(adapter, endpoint)
         capabilities = adapter.capabilities
         references_unsupported = requires_references and not getattr(capabilities, "reference_images", False)
-        reference_warning = ''
+        reference_warning = ""
         if references_unsupported:
             reference_warning = (
                 f"图像 Provider {endpoint.protocol}/{endpoint.model or 'default'} 不支持参考图，"
@@ -214,7 +214,9 @@ class ImageService:
             "provider": endpoint.protocol,
             "model": endpoint.model,
             "provider_source": provider_source,
-            "reference_mode": ("multi_reference" if len(sent_assets) > 1 else "reference") if sent_assets else "text_only",
+            "reference_mode": ("multi_reference" if len(sent_assets) > 1 else "reference")
+            if sent_assets
+            else "text_only",
             "references_validated": len(validated_assets),
             "references_sent": len(sent_assets),
             "references_sent_detail": sent_detail,
@@ -383,7 +385,9 @@ class ImageService:
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
         ref_dir = safe_path(self.output_dir, safe_project_id, "scenes", create_parent=True)
-        safe_key = scene.get("id") or scene.get("scene_group_key") or scene.get("location") or scene.get("name", "scene")
+        safe_key = (
+            scene.get("id") or scene.get("scene_group_key") or scene.get("location") or scene.get("name", "scene")
+        )
         safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(safe_key)).strip("_") or "scene"
         scene_dir = ref_dir / safe_name
         scene_dir.mkdir(parents=True, exist_ok=True)
@@ -437,7 +441,15 @@ class ImageService:
         self._write_image(project_id, image_path, image_data)
         return str(image_path)
 
-    def _seedream_payload(self, model: str, prompt: str, negative_prompt: str, seed: int, size: str, reference_images: list[str] | None = None) -> dict:
+    def _seedream_payload(
+        self,
+        model: str,
+        prompt: str,
+        negative_prompt: str,
+        seed: int,
+        size: str,
+        reference_images: list[str] | None = None,
+    ) -> dict:
         """兼容保留：sop 校验脚本使用。实际载荷由 ark-seedream 适配器构造。"""
         from services.providers.image_ark_seedream import ArkSeedreamImageAdapter
 
@@ -519,7 +531,12 @@ class ImageService:
             if isinstance(appearance, dict):
                 fields.append(("character_appearance", ", ".join(str(value) for value in appearance.values() if value)))
             if char_card.get("reference_images"):
-                fields.append(("character_identity_lock", "preserve identity from the approved character three-view reference sheet"))
+                fields.append(
+                    (
+                        "character_identity_lock",
+                        "preserve identity from the approved character three-view reference sheet",
+                    )
+                )
             if char_card.get("wardrobe_lock"):
                 fields.append(("wardrobe", char_card["wardrobe_lock"]))
             emotion = shot.get("emotion", "neutral")
@@ -530,57 +547,87 @@ class ImageService:
 
         # --- 3. 场景、构图和首帧参考说明 ---
         if shot.get("scene_reference_images"):
-            fields.append(("scene_reference", "scene baseline/reference assets are loaded for environment, props, lighting and perspective"))
+            fields.append(
+                (
+                    "scene_reference",
+                    "scene baseline/reference assets are loaded for environment, props, lighting and perspective",
+                )
+            )
         if shot.get("character_reference_images"):
-            fields.append(("character_reference", "character three-view reference assets are loaded for identity, outfit, face and hairstyle"))
+            fields.append(
+                (
+                    "character_reference",
+                    "character three-view reference assets are loaded for identity, outfit, face and hairstyle",
+                )
+            )
         if shot.get("continuity_reference_path"):
-            fields.append(("continuity_reference", "previous shot final frame reference anchors eye-line, pose, axis and depth continuity"))
-        fields.extend([
-            ("scene", shot.get("scene_description", "")),
-            ("approved_storyboard", shot.get("storyboard_prompt", "")),
-        ])
+            fields.append(
+                (
+                    "continuity_reference",
+                    "previous shot final frame reference anchors eye-line, pose, axis and depth continuity",
+                )
+            )
+        fields.extend(
+            [
+                ("scene", shot.get("scene_description", "")),
+                ("approved_storyboard", shot.get("storyboard_prompt", "")),
+            ]
+        )
 
         # --- 4. 动作、情绪与镜头语言 ---
-        fields.extend([
-            ("character_action", shot.get("character_action", "")),
-            ("shot_type", self._camera_prompt(shot.get("shot_type", "medium"))),
-            ("camera_angle", self._angle_prompt(shot.get("camera_angle", "正面"))),
-            ("camera_movement", f"camera movement: {shot.get('camera_movement', '静止')}"),
-            ("visual_notes", shot.get("visual_notes", "")),
-            ("finish", "finished production keyframe, expressive human acting, clean composition, high detail"),
-        ])
+        fields.extend(
+            [
+                ("character_action", shot.get("character_action", "")),
+                ("shot_type", self._camera_prompt(shot.get("shot_type", "medium"))),
+                ("camera_angle", self._angle_prompt(shot.get("camera_angle", "正面"))),
+                ("camera_movement", f"camera movement: {shot.get('camera_movement', '静止')}"),
+                ("visual_notes", shot.get("visual_notes", "")),
+                ("finish", "finished production keyframe, expressive human acting, clean composition, high detail"),
+            ]
+        )
 
         # --- 5. 连续性规则和低优先级 SOP ---
         fields.append(("identity_policy", "NON-NEGOTIABLE identity and style consistency policy"))
         if shot.get("reference_weights"):
             weights = shot.get("reference_weights") or {}
-            fields.append(("reference_weights",
-                f"apply locked reference weights: environment/style {float(weights.get('environment') or 0.45):.2f}, character/action {float(weights.get('action') or 0.30):.2f}"
-            ))
+            fields.append(
+                (
+                    "reference_weights",
+                    f"apply locked reference weights: environment/style {float(weights.get('environment') or 0.45):.2f}, character/action {float(weights.get('action') or 0.30):.2f}",
+                )
+            )
         if shot.get("reference_assets"):
-            roles = ", ".join(str(item.get("role", "")) for item in shot.get("reference_assets", []) if isinstance(item, dict))
+            roles = ", ".join(
+                str(item.get("role", "")) for item in shot.get("reference_assets", []) if isinstance(item, dict)
+            )
             fields.append(("reference_roles", f"mandatory persisted reference assets drive these roles: {roles}"))
         if shot.get("continuity_profile"):
             profile = shot.get("continuity_profile") or {}
-            fields.append(("continuity_rules",
-                "locked continuity controls: "
-                f"{', '.join(profile.get('editing_logic', []))}; "
-                f"OpenPose {profile.get('openpose_lock', 'unsupported')}; "
-                f"Depth {profile.get('depth_lock', 'unsupported')}; "
-                f"LUT {profile.get('lut', 'project_scene_lut_locked')}; "
-                f"{profile.get('ambient_audio_policy', '')}"
-            ))
+            fields.append(
+                (
+                    "continuity_rules",
+                    "locked continuity controls: "
+                    f"{', '.join(profile.get('editing_logic', []))}; "
+                    f"OpenPose {profile.get('openpose_lock', 'unsupported')}; "
+                    f"Depth {profile.get('depth_lock', 'unsupported')}; "
+                    f"LUT {profile.get('lut', 'project_scene_lut_locked')}; "
+                    f"{profile.get('ambient_audio_policy', '')}",
+                )
+            )
             blocking = profile.get("character_blocking") or {}
             if blocking:
                 order = blocking.get("character_order_left_to_right") or []
-                fields.append(("blocking",
-                    "locked character blocking: "
-                    f"left-to-right order {', '.join(order) if order else 'single subject'}; "
-                    f"{blocking.get('axis_line', '180-degree axis locked')}; "
-                    f"eye-line {blocking.get('eye_line_target', 'locked')}; "
-                    f"{blocking.get('camera_movement_limit', '')}; "
-                    f"{blocking.get('skin_light_integration', '')}"
-                ))
+                fields.append(
+                    (
+                        "blocking",
+                        "locked character blocking: "
+                        f"left-to-right order {', '.join(order) if order else 'single subject'}; "
+                        f"{blocking.get('axis_line', '180-degree axis locked')}; "
+                        f"eye-line {blocking.get('eye_line_target', 'locked')}; "
+                        f"{blocking.get('camera_movement_limit', '')}; "
+                        f"{blocking.get('skin_light_integration', '')}",
+                    )
+                )
         if shot.get("consistency_context"):
             fields.append(("consistency_context", shot["consistency_context"]))
         if shot.get("skill_prompt_append"):
@@ -644,7 +691,9 @@ class ImageService:
         candidates: list[tuple[str, str, str]] = []
         for asset in shot.get("reference_assets") or []:
             if isinstance(asset, dict) and asset.get("path"):
-                candidates.append((str(asset.get("type") or "reference_image"), str(asset.get("role") or ""), str(asset["path"])))
+                candidates.append(
+                    (str(asset.get("type") or "reference_image"), str(asset.get("role") or ""), str(asset["path"]))
+                )
         for path in shot.get("scene_reference_images") or []:
             if path:
                 candidates.append(("scene_baseline", "environment_props_lighting_perspective", str(path)))

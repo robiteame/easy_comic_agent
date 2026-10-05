@@ -24,7 +24,6 @@ from services.providers.endpoint import get_endpoint
 from services.tts_service import TTSService
 from services.video_service import SeedanceVideoService
 
-
 RUN_ID = uuid.uuid4().hex[:8]
 DIAGNOSTIC_PROJECT_ID = f"api_diagnostics_{RUN_ID}"
 DIAGNOSTIC_SHOT_ID = f"diagnostic_single_shot_{RUN_ID}"
@@ -40,9 +39,7 @@ def _print_config() -> None:
         f"  SCRIPT protocol={script.protocol} base_url={script.base_url} model={script.model} "
         f"auth={script.auth_style} key_present={bool(script.api_key)}"
     )
-    print(
-        f"  SCRIPT_FALLBACK base_url={fallback.base_url} model={fallback.model} key_present={bool(fallback.api_key)}"
-    )
+    print(f"  SCRIPT_FALLBACK base_url={fallback.base_url} model={fallback.model} key_present={bool(fallback.api_key)}")
     print(
         f"  VIDEO protocol={video.protocol} base_url={video.base_url} model={video.model} "
         f"key_present={bool(video.api_key)}"
@@ -57,11 +54,7 @@ def _print_config() -> None:
 async def _check_mimo_storyboard() -> dict:
     script_endpoint = get_endpoint("script")
     # 多模态分镜优先用端点配置的 vision 模型，缺省回落到端点主模型 / 旧 MIMO 字段。
-    vision_model = (
-        script_endpoint.param("vision_model")
-        or script_endpoint.model
-        or settings.MIMO_MULTIMODAL_MODEL
-    )
+    vision_model = script_endpoint.param("vision_model") or script_endpoint.model or settings.MIMO_MULTIMODAL_MODEL
     result = await LLMService().call_json(
         "你是漫剧编导，只输出 JSON，不要 Markdown。",
         """
@@ -151,7 +144,9 @@ async def _check_seedance(story: dict) -> dict[str, str]:
     print(f"SEEDDANCE_REFERENCE_MANIFEST_OK loaded={len(reference_manifest)}")
     print(f"SEEDDANCE_REFERENCE_PAYLOAD_MODE {result.get('reference_payload_mode', '')}")
     if result.get("reference_payload_mode") != "first_frame_reference":
-        raise RuntimeError(f"Seedance did not use first_frame reference payload: {result.get('reference_payload_mode')}")
+        raise RuntimeError(
+            f"Seedance did not use first_frame reference payload: {result.get('reference_payload_mode')}"
+        )
     return result
 
 

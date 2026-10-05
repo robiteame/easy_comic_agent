@@ -59,7 +59,10 @@ assert.equal(debugFilterMatches(progress, 'api'), false)
 assert.equal(debugFilterMatches(event({ level: 'error' }), 'error'), true)
 
 const merged = mergeDebugEvents([result, progress], [request, request])
-assert.deepEqual(merged.map((item) => item.id), ['progress', 'request', 'result'])
+assert.deepEqual(
+  merged.map((item) => item.id),
+  ['progress', 'request', 'result'],
+)
 
 assert.deepEqual(promptSections({ system: 'A', user: 'B' }), [
   { label: '系统提示词', content: 'A' },

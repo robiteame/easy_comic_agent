@@ -39,7 +39,9 @@ class PostProductionPlanTests(unittest.TestCase):
             clips = [root / "a.mp4", root / "b.mp4"]
             with patch.object(FFmpegService, "_run", new=fake_run):
                 asyncio.run(FFmpegService()._concat_clips(clips, root, [boundary.to_dict()], [3.0, 2.0]))
-        filter_complex = next(arg for index, arg in enumerate(captured[0]) if captured[0][index - 1] == "-filter_complex")
+        filter_complex = next(
+            arg for index, arg in enumerate(captured[0]) if captured[0][index - 1] == "-filter_complex"
+        )
         self.assertIn("xfade=transition=dissolve", filter_complex)
         self.assertNotIn("concat=n=2:v=1:a=1", filter_complex)
 
@@ -74,7 +76,9 @@ class PostProductionPlanTests(unittest.TestCase):
                         [root / "a.mp4", root / "b.mp4"], root, [boundary.to_dict()], [3.0, 2.0]
                     )
                 )
-        filter_complex = next(arg for index, arg in enumerate(captured[0]) if captured[0][index - 1] == "-filter_complex")
+        filter_complex = next(
+            arg for index, arg in enumerate(captured[0]) if captured[0][index - 1] == "-filter_complex"
+        )
         self.assertIn("duration=0.720", filter_complex)
         self.assertIn("color=white@1", filter_complex)
 
@@ -96,9 +100,7 @@ class PostProductionPlanTests(unittest.TestCase):
                 {
                     "id": "sub1",
                     "enabled": True,
-                    "cues": [
-                        {"start_ms": 1500, "end_ms": 2600, "text": "越界字幕", "character_name": "小明"}
-                    ],
+                    "cues": [{"start_ms": 1500, "end_ms": 2600, "text": "越界字幕", "character_name": "小明"}],
                 }
             ],
         }

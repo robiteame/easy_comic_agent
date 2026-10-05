@@ -22,8 +22,6 @@ if str(_SERVER_DIR) not in sys.path:
 
 # 必须先于 services/config 导入，保证 settings 绑定测试沙箱目录，
 # 不污染同批运行的其它模块（参考图 allowed_roots 校验依赖 OUTPUT_DIR）。
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from services.post_production_plan import build_post_production_plan  # noqa: E402
 from services.story_timing import (  # noqa: E402
     ProviderDurationCapability,
@@ -36,6 +34,7 @@ from services.story_timing import (  # noqa: E402
     split_shot,
 )
 from services.video_service import VideoService  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _fixed_5s_provider() -> ProviderDurationCapability:
@@ -223,7 +222,14 @@ class LegacyDataCompatibilityTests(unittest.TestCase):
 
     def test_post_production_keeps_legacy_durations_without_plan(self) -> None:
         shots = [
-            {"shot_id": "s1", "sequence": 1, "duration": 3.0, "scene_group_id": "scene-a", "dialogue": "", "transition": "cut"},
+            {
+                "shot_id": "s1",
+                "sequence": 1,
+                "duration": 3.0,
+                "scene_group_id": "scene-a",
+                "dialogue": "",
+                "transition": "cut",
+            },
             {"shot_id": "s2", "sequence": 2, "duration": 2.0, "scene_group_id": "scene-a", "dialogue": ""},
         ]
 
@@ -305,7 +311,9 @@ class PlanConsumptionTests(unittest.TestCase):
         }
         plan = StoryTimingPlan(target_duration_s=4.2, provider=_fixed_5s_provider())
 
-        with_plan = plan.validate_timeline([shot], media_durations_ms={"/video/trim_0001.mp4": 5000}, require_target=False)
+        with_plan = plan.validate_timeline(
+            [shot], media_durations_ms={"/video/trim_0001.mp4": 5000}, require_target=False
+        )
         without_plan = plan.validate_timeline(
             [{key: value for key, value in shot.items() if key != "execution_plan"}],
             media_durations_ms={"/video/trim_0001.mp4": 5000},

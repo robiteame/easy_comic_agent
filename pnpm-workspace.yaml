@@ -2,7 +2,11 @@ packages:
   - client
 
 allowBuilds:
+  # core-js 的 postinstall 仅打印赞助横幅,无需执行。
+  core-js: false
   electron: true
   # 仅用于 squirrel.windows 打包目标（本仓库使用 nsis），无需其安装脚本。
   electron-winstaller: false
   esbuild: true
+  # lefthook 的 postinstall 负责把 git hooks 入口写入 .git/hooks,需要执行。
+  lefthook: true

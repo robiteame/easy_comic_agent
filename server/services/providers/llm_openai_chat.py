@@ -13,7 +13,7 @@ from __future__ import annotations
 from openai import AsyncOpenAI
 
 from services.providers.base import BaseAdapter, LLMCapabilities
-from services.providers.usage import CAPABILITY_LLM, UsageMetadata, usage_from_chat_response
+from services.providers.usage import UsageMetadata, usage_from_chat_response
 
 
 class OpenAIChatAdapter(BaseAdapter):
@@ -83,9 +83,7 @@ class OpenAIChatAdapter(BaseAdapter):
         max_tokens: int,
     ):
         if self.capabilities.json_mode == "unsupported":
-            return await self.complete(
-                messages=messages, model=model, temperature=temperature, max_tokens=max_tokens
-            )
+            return await self.complete(messages=messages, model=model, temperature=temperature, max_tokens=max_tokens)
         try:
             return await self.client.chat.completions.create(
                 model=model,
@@ -98,6 +96,4 @@ class OpenAIChatAdapter(BaseAdapter):
             if "response_format" not in str(exc):
                 raise
             # 服务端不支持 response_format 时降级为纯文本补全重试。
-            return await self.complete(
-                messages=messages, model=model, temperature=temperature, max_tokens=max_tokens
-            )
+            return await self.complete(messages=messages, model=model, temperature=temperature, max_tokens=max_tokens)

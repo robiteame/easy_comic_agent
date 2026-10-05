@@ -7,13 +7,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
-
-from services.shot_dialogue import parse_shot_dialogue
-from services.story_timing import ShotExecutionPlan
+from typing import Any
 
 from config import settings
+from services.story_timing import ShotExecutionPlan
 
 
 class SubtitleValidationError(ValueError):
@@ -31,7 +30,7 @@ class SubtitleCueData:
     client_id: str = ""
     order_index: int = 0
 
-    def clamp(self) -> "SubtitleCueData":
+    def clamp(self) -> SubtitleCueData:
         self.start_ms = max(0, int(self.start_ms))
         self.end_ms = max(0, int(self.end_ms))
         return self
@@ -39,20 +38,13 @@ class SubtitleCueData:
 
 # --- 时间码 -----------------------------------------------------------------
 
-_SRT_TIME = re.compile(
-    r"^(?P<h>\d{1,3}):(?P<m>\d{1,2}):(?P<s>\d{1,2})[,.](?P<ms>\d{1,3})$"
-)
+_SRT_TIME = re.compile(r"^(?P<h>\d{1,3}):(?P<m>\d{1,2}):(?P<s>\d{1,2})[,.](?P<ms>\d{1,3})$")
 _ARROW_SPLIT = re.compile(r"\s*-->\s*")
 
 
 def _ms_from_match(match: re.Match) -> int:
     ms = match.group("ms").ljust(3, "0")
-    return (
-        int(match.group("h")) * 3_600_000
-        + int(match.group("m")) * 60_000
-        + int(match.group("s")) * 1_000
-        + int(ms)
-    )
+    return int(match.group("h")) * 3_600_000 + int(match.group("m")) * 60_000 + int(match.group("s")) * 1_000 + int(ms)
 
 
 def format_srt_time(total_ms: int) -> str:
@@ -95,9 +87,7 @@ def validate_cue_text(text: str) -> str:
     if not stripped:
         raise SubtitleValidationError("字幕文本不能为空")
     if len(value) > settings.MAX_SUBTITLE_CUE_CHARS:
-        raise SubtitleValidationError(
-            f"字幕文本超过 {settings.MAX_SUBTITLE_CUE_CHARS} 字符上限"
-        )
+        raise SubtitleValidationError(f"字幕文本超过 {settings.MAX_SUBTITLE_CUE_CHARS} 字符上限")
     if _FORBIDDEN_CHARS.search(value):
         raise SubtitleValidationError("字幕文本包含非法控制字符")
     return value
@@ -133,12 +123,11 @@ def validate_cues(cues: Iterable[SubtitleCueData]) -> list[SubtitleCueData]:
 
 # --- SRT ---------------------------------------------------------------------
 
+
 def serialize_srt(cues: Sequence[SubtitleCueData]) -> str:
     blocks: list[str] = []
     for index, cue in enumerate(cues, start=1):
-        blocks.append(
-            f"{index}\n{format_srt_time(cue.start_ms)} --> {format_srt_time(cue.end_ms)}\n{cue.text}\n"
-        )
+        blocks.append(f"{index}\n{format_srt_time(cue.start_ms)} --> {format_srt_time(cue.end_ms)}\n{cue.text}\n")
     return "\n".join(blocks)
 
 
@@ -152,7 +141,11 @@ def parse_srt(content: str) -> list[SubtitleCueData]:
             continue
         # 序号行可选：有些导出器省略。找到时间码行即认定为字幕块。
         time_index = next(
-            (i for i, line in enumerate(lines) if _ARROW_SPLIT.search(line) and _SRT_TIME.match(_ARROW_SPLIT.split(line)[0].strip())),
+            (
+                i
+                for i, line in enumerate(lines)
+                if _ARROW_SPLIT.search(line) and _SRT_TIME.match(_ARROW_SPLIT.split(line)[0].strip())
+            ),
             None,
         )
         if time_index is None:
@@ -171,6 +164,7 @@ def parse_srt(content: str) -> list[SubtitleCueData]:
 
 
 # --- VTT ---------------------------------------------------------------------
+
 
 def serialize_vtt(cues: Sequence[SubtitleCueData]) -> str:
     lines = ["WEBVTT", ""]
@@ -199,7 +193,11 @@ def parse_vtt(content: str) -> list[SubtitleCueData]:
             if not any(_ARROW_SPLIT.search(line) for line in lines):
                 continue
         time_index = next(
-            (i for i, line in enumerate(lines) if _ARROW_SPLIT.search(line) and _SRT_TIME.match(_ARROW_SPLIT.split(line)[0].strip().replace(",", "."))),
+            (
+                i
+                for i, line in enumerate(lines)
+                if _ARROW_SPLIT.search(line) and _SRT_TIME.match(_ARROW_SPLIT.split(line)[0].strip().replace(",", "."))
+            ),
             None,
         )
         if time_index is None:
@@ -312,7 +310,7 @@ def _plan_timed_lines(shot: ShotDialogueInput, lines: Sequence[DialogueLineInput
         )
 
     if len(timings) == len(lines):
-        return [merge(line, timing) for line, timing in zip(lines, timings)]
+        return [merge(line, timing) for line, timing in zip(lines, timings, strict=True)]
     # 句数与计划不一致（计划只覆盖部分句子）时按文本匹配，匹配不上的保留原值。
     by_text = {str(item.text or "").strip(): item for item in timings}
     return [
@@ -489,7 +487,7 @@ class SubtitleStyle:
     position: str = "bottom"
     safe_margin: int = 54
 
-    def scaled(self, width: int, height: int) -> "SubtitleStyle":
+    def scaled(self, width: int, height: int) -> SubtitleStyle:
         """font_size / safe_margin 以画面短边 1080 像素为基准，按实际分辨率等比缩放。
 
         竖版 1080p（1080×1920）与横版 1080p（1920×1080）的短边都是 1080，
@@ -524,7 +522,13 @@ def build_ass_document(style: SubtitleStyle, cues: Sequence[SubtitleCueData], wi
         f"{-1 if scaled.bold else 0},0,0,0,100,100,0,0,1,{max(0, scaled.outline_width)},0,"
         f"{alignment},{margin_h},{margin_h},{margin_v},1"
     )
-    lines = [header, style_line, "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
+    lines = [
+        header,
+        style_line,
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
     for cue in cues:
         name = _escape_ass_text(cue.character_name)
         lines.append(

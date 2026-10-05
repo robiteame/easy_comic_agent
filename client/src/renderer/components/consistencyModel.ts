@@ -35,7 +35,9 @@ const REFERENCE_STATUS_LABELS: Record<ConsistencyStatus | 'unknown', string> = {
 }
 
 export function normalizeReferenceStatus(value: unknown): ConsistencyStatus | 'unknown' {
-  const status = String(value || '').trim().toLowerCase()
+  const status = String(value || '')
+    .trim()
+    .toLowerCase()
   return (Object.keys(REFERENCE_STATUS_LABELS) as Array<ConsistencyStatus | 'unknown'>).includes(status as any)
     ? (status as ConsistencyStatus | 'unknown')
     : 'unknown'
@@ -56,7 +58,9 @@ export function consistencyImpactText(report?: ConsistencyReport | null): string
 }
 
 export function blockingReferenceItems(items: readonly ConsistencyReportItem[] | undefined): ConsistencyReportItem[] {
-  return (items || []).filter((item) => ['failed', 'unsupported', 'stale'].includes(normalizeReferenceStatus(item.status)))
+  return (items || []).filter((item) =>
+    ['failed', 'unsupported', 'stale'].includes(normalizeReferenceStatus(item.status)),
+  )
 }
 
 export function consistencyReportSummary(report?: ConsistencyReport | null): string {

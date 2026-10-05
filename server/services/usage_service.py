@@ -20,11 +20,12 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, Iterator
+from typing import Any
 
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
@@ -39,10 +40,8 @@ from services.pricing_service import (
     COST_SOURCE_UNKNOWN,
 )
 from services.providers.usage import (
-    CAPABILITIES,
     CAPABILITY_BASE_UNITS,
     CAPABILITY_LABELS,
-    CAPABILITY_PRICING_UNITS,
     ERROR_CODE_PROVIDER_CALL_FAILED,
     UsageMetadata,
     unknown_usage,
@@ -101,7 +100,7 @@ class UsageScope:
     job_id: str = ""
     job_type: str = ""
 
-    def merged(self, **kwargs: Any) -> "UsageScope":
+    def merged(self, **kwargs: Any) -> UsageScope:
         values = {field: getattr(self, field) for field in self.__dataclass_fields__}  # type: ignore[attr-defined]
         for key, value in kwargs.items():
             if key in values and value not in (None, ""):
@@ -255,9 +254,7 @@ def record_metadata(
     db = SessionLocal()
     try:
         resolved = resolve_scope(db, scope)
-        key = _clip(dedupe_key) or _clip(
-            f"{resolved.job_key or 'manual'}:{effective.capability}:{uuid.uuid4().hex}"
-        )
+        key = _clip(dedupe_key) or _clip(f"{resolved.job_key or 'manual'}:{effective.capability}:{uuid.uuid4().hex}")
         cost, known, source, price = _price_outcome(db, effective, status=normalized_status)
         now = datetime.utcnow()
         db.execute(text("BEGIN IMMEDIATE"))
@@ -532,11 +529,7 @@ def finalize_job(job_key: str, status: str, *, job_id: str = "") -> int:
         }
         if job_id:
             values[UsageRecord.job_id] = _clip(job_id)
-        updated = (
-            db.query(UsageRecord)
-            .filter(UsageRecord.job_key == job_key)
-            .update(values, synchronize_session=False)
-        )
+        updated = db.query(UsageRecord).filter(UsageRecord.job_key == job_key).update(values, synchronize_session=False)
         db.commit()
         return int(updated or 0)
     finally:
@@ -566,8 +559,17 @@ def bind_job_id(job_key: str, job_id: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _filters(query, *, project_id: str = "", series_id: str = "", shot_id: str = "", job_id: str = "",
-             job_key: str = "", capability: str = "", job_type: str = ""):
+def _filters(
+    query,
+    *,
+    project_id: str = "",
+    series_id: str = "",
+    shot_id: str = "",
+    job_id: str = "",
+    job_key: str = "",
+    capability: str = "",
+    job_type: str = "",
+):
     if project_id:
         query = query.filter(UsageRecord.project_id == project_id)
     if series_id:

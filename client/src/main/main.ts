@@ -1,11 +1,11 @@
 ﻿import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
-import { spawn, type ChildProcess } from 'child_process'
-import { existsSync, mkdirSync } from 'fs'
-import { randomBytes } from 'crypto'
-import http from 'http'
-import net from 'net'
-import path from 'path'
-import { pathToFileURL } from 'url'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync, mkdirSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import http from 'node:http'
+import net from 'node:net'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { isComicAgentHealthResponse } from './backendHealth'
 import { backendFailurePageUrl } from './failurePage'
 
@@ -50,7 +50,8 @@ function createWindow(failure?: { detail: string; hint: string }) {
 
   if (process.platform === 'win32') {
     // Win11 下启用 acrylic 材质，配合透明窗口形成桌面透视毛玻璃观感。
-    ;(winOpts as Electron.BrowserWindowConstructorOptions & { backgroundMaterial?: string }).backgroundMaterial = 'acrylic'
+    ;(winOpts as Electron.BrowserWindowConstructorOptions & { backgroundMaterial?: string }).backgroundMaterial =
+      'acrylic'
   } else if (process.platform === 'darwin') {
     // macOS（26+）上透明窗口不渲染默认标题栏的红绿灯按钮；hiddenInset 让按钮
     // 以悬浮形式绘制在透明内容之上，玻璃观感与窗口控制两者兼得。
@@ -66,8 +67,7 @@ function createWindow(failure?: { detail: string; hint: string }) {
   const appEntryUrl = pathToFileURL(path.join(__dirname, '../dist/index.html')).toString()
   // The backend failure page is loaded programmatically (loadURL does not
   // fire will-navigate), so the guard stays closed to every other origin.
-  const isAllowedRendererUrl = (url: string) =>
-    url === appEntryUrl || url.startsWith('http://127.0.0.1:5173/')
+  const isAllowedRendererUrl = (url: string) => url === appEntryUrl || url.startsWith('http://127.0.0.1:5173/')
   const rejectUnexpectedNavigation = (event: Electron.Event, url: string) => {
     const allowed = isAllowedRendererUrl(url)
     if (!allowed) event.preventDefault()
@@ -133,22 +133,19 @@ function probeEndpoint(
       settled = true
       resolve(result)
     }
-    const request = http.get(
-      { hostname: BACKEND_HOST, port, path: pathname, headers },
-      (response) => {
-        let body = ''
-        response.setEncoding('utf8')
-        response.on('data', (chunk: string) => {
-          body += chunk
-          if (body.length > 8192) {
-            response.destroy()
-            finish(null)
-          }
-        })
-        response.on('end', () => finish({ statusCode: response.statusCode || 0, body }))
-        response.on('error', () => finish(null))
-      },
-    )
+    const request = http.get({ hostname: BACKEND_HOST, port, path: pathname, headers }, (response) => {
+      let body = ''
+      response.setEncoding('utf8')
+      response.on('data', (chunk: string) => {
+        body += chunk
+        if (body.length > 8192) {
+          response.destroy()
+          finish(null)
+        }
+      })
+      response.on('end', () => finish({ statusCode: response.statusCode || 0, body }))
+      response.on('error', () => finish(null))
+    })
     request.setTimeout(timeoutMs, () => {
       request.destroy()
       finish(null)
@@ -168,12 +165,7 @@ async function probeBackend(port: number, timeoutMs = 1200): Promise<boolean> {
   if (!health || !healthStatusOk || !isComicAgentHealthResponse(health.body)) return false
 
   if (BACKEND_AUTH_TOKEN) {
-    const authenticated = await probeEndpoint(
-      port,
-      '/',
-      { 'X-Comic-Agent-Token': BACKEND_AUTH_TOKEN },
-      timeoutMs,
-    )
+    const authenticated = await probeEndpoint(port, '/', { 'X-Comic-Agent-Token': BACKEND_AUTH_TOKEN }, timeoutMs)
     return Boolean(authenticated && authenticated.statusCode >= 200 && authenticated.statusCode < 300)
   }
   return true
@@ -276,9 +268,7 @@ async function startBackendUnchecked() {
   const configuredPython = process.env.COMIC_AGENT_PYTHON?.trim()
   // Priority: explicit override (debug escape hatch) > bundled runtime >
   // system Python (legacy fallback when the bundle is missing).
-  const systemCandidates = process.platform === 'win32'
-    ? ['python.exe', 'python']
-    : ['python3', 'python']
+  const systemCandidates = process.platform === 'win32' ? ['python.exe', 'python'] : ['python3', 'python']
   const candidates = configuredPython
     ? [configuredPython]
     : app.isPackaged
@@ -371,27 +361,28 @@ if (gotSingleInstanceLock) {
   })
 }
 
-if (gotSingleInstanceLock) app.whenReady().then(async () => {
-  Menu.setApplicationMenu(null)
-  let backendFailure: { detail: string; hint: string } | undefined
-  if (app.isPackaged) {
-    try {
-      await startBackend()
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      const bundledMissing = !existsSync(path.join(process.resourcesPath, 'python'))
-      backendFailure = {
-        detail,
-        hint: bundledMissing
-          ? '安装包似乎缺少自带的 Python 运行时，已尝试回退到系统 Python。\n可设置 COMIC_AGENT_PYTHON 指向 Python 3.11+ 并确认其已安装全部依赖，或在故障页点击“重试启动”。'
-          : '可在下方点击“重试启动”，或设置 COMIC_AGENT_PYTHON 指向 Python 3.11+ 后重试。',
+if (gotSingleInstanceLock)
+  app.whenReady().then(async () => {
+    Menu.setApplicationMenu(null)
+    let backendFailure: { detail: string; hint: string } | undefined
+    if (app.isPackaged) {
+      try {
+        await startBackend()
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        const bundledMissing = !existsSync(path.join(process.resourcesPath, 'python'))
+        backendFailure = {
+          detail,
+          hint: bundledMissing
+            ? '安装包似乎缺少自带的 Python 运行时，已尝试回退到系统 Python。\n可设置 COMIC_AGENT_PYTHON 指向 Python 3.11+ 并确认其已安装全部依赖，或在故障页点击“重试启动”。'
+            : '可在下方点击“重试启动”，或设置 COMIC_AGENT_PYTHON 指向 Python 3.11+ 后重试。',
+        }
       }
     }
-  }
-  // A failed backend must not open the workbench: the SPA would sit on a
-  // dead API. Show the dedicated failure page (retry / copy / quit) instead.
-  createWindow(backendFailure)
-})
+    // A failed backend must not open the workbench: the SPA would sit on a
+    // dead API. Show the dedicated failure page (retry / copy / quit) instead.
+    createWindow(backendFailure)
+  })
 
 app.on('before-quit', stopBackend)
 

@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { ExclamationCircleOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import type React from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ExclamationCircleOutlined } from '@ant-design/icons'
 import Alert from 'antd/es/alert'
 import Button from 'antd/es/button'
 import Modal from 'antd/es/modal'
@@ -100,13 +101,7 @@ export const TaskEstimateModal: React.FC<TaskEstimateModalProps> = ({ open, requ
         <Button key="cancel" onClick={onCancel}>
           取消
         </Button>,
-        <Button
-          key="confirm"
-          type="primary"
-          danger={blocked}
-          disabled={loading || blocked}
-          onClick={onConfirm}
-        >
+        <Button key="confirm" type="primary" danger={blocked} disabled={loading || blocked} onClick={onConfirm}>
           {blocked ? '预算不足，无法执行' : '确认执行'}
         </Button>,
       ]}
@@ -156,9 +151,7 @@ export const TaskEstimateModal: React.FC<TaskEstimateModalProps> = ({ open, requ
             </dd>
             <dt>预计耗时</dt>
             <dd>
-              {estimate.estimated_seconds === null
-                ? '暂无法估算'
-                : formatDurationText(estimate.estimated_seconds)}
+              {estimate.estimated_seconds === null ? '暂无法估算' : formatDurationText(estimate.estimated_seconds)}
               <em className="estimate-hint">{durationSourceLabel(estimate.duration_source)}</em>
             </dd>
             <dt>预算状态</dt>
@@ -214,7 +207,9 @@ export const TaskEstimateModal: React.FC<TaskEstimateModalProps> = ({ open, requ
                 {estimate.unknown_components.map((item, index) => (
                   <li key={item.capability + '-' + index}>
                     {item.label}
-                    {item.provider || item.model ? '（' + [item.provider, item.model].filter(Boolean).join(' / ') + '）' : ''}
+                    {item.provider || item.model
+                      ? '（' + [item.provider, item.model].filter(Boolean).join(' / ') + '）'
+                      : ''}
                     ：{item.reason || unknownCostReason(estimate.unknown_components)}
                   </li>
                 ))}

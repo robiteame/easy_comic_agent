@@ -217,8 +217,7 @@ def _video_preflight_issues() -> list[str]:
         return issues
     if not str(endpoint.model or "").strip():
         issues.append(
-            f"视频协议 {endpoint.protocol} 未配置模型名（model），"
-            "请在「系统设置 → 模型服务」选择账号实际可用的模型"
+            f"视频协议 {endpoint.protocol} 未配置模型名（model），请在「系统设置 → 模型服务」选择账号实际可用的模型"
         )
     # 模型级能力判断优先；测试替身/未声明 effective_capabilities 的适配器回落类级声明。
     effective = getattr(adapter_cls, "effective_capabilities", None)

@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ApiOutlined,
   ArrowLeftOutlined,
@@ -22,7 +23,6 @@ import Switch from 'antd/es/switch'
 import { projectApi, settingsApi } from '../services/api'
 import PricingConfigPanel from './PricingConfigPanel'
 import {
-  DEFAULT_AGENT_CONFIG,
   DEFAULT_TEMPLATE,
   SYSTEM_PROMPT_MAX_LENGTH,
   cloneTemplate,
@@ -34,13 +34,7 @@ import {
 import { STYLE_TEMPLATES_UPDATED_EVENT } from '../constants/events'
 import { STYLE_DESCRIPTIONS, STYLE_OPTIONS } from '../constants/styleTemplates'
 import { useProjectStore } from '../stores/projectStore'
-import {
-  applyThemeToDocument,
-  getInitialTheme,
-  notifyThemeChanged,
-  THEME_OPTIONS,
-  type AppTheme,
-} from '../theme'
+import { applyThemeToDocument, getInitialTheme, notifyThemeChanged, THEME_OPTIONS, type AppTheme } from '../theme'
 
 const { TextArea } = Input
 const { Password } = Input
@@ -85,7 +79,7 @@ const AUDIO_MODE_OPTIONS = [
   { value: 'auto', label: '智能 auto（特写台词镜头用原生，其余 TTS）' },
 ]
 
-const SHOT_AUDIO_MODE_OPTIONS = [
+const _SHOT_AUDIO_MODE_OPTIONS = [
   { value: '', label: '继承全局设置' },
   { value: 'tts', label: 'TTS 配音合成' },
   { value: 'native', label: '原生音频（需模型支持）' },
@@ -96,8 +90,14 @@ const SHOT_AUDIO_MODE_OPTIONS = [
 const VENDOR_PRESETS: Record<ModelCategory, { label: string; patch: ModelConfig }[]> = {
   script: [
     { label: 'OpenAI', patch: { base_url: 'https://api.openai.com/v1', model: 'gpt-4o', auth_style: 'bearer' } },
-    { label: 'DeepSeek V4.1 Flash', patch: { base_url: 'https://api.deepseek.com', model: 'deepseek-flash', auth_style: 'bearer' } },
-    { label: '小米 MiMo', patch: { base_url: 'https://token-plan-cn.xiaomimimo.com/v1', model: 'mimo-v2.5', auth_style: 'api-key-header' } },
+    {
+      label: 'DeepSeek V4.1 Flash',
+      patch: { base_url: 'https://api.deepseek.com', model: 'deepseek-flash', auth_style: 'bearer' },
+    },
+    {
+      label: '小米 MiMo',
+      patch: { base_url: 'https://token-plan-cn.xiaomimimo.com/v1', model: 'mimo-v2.5', auth_style: 'api-key-header' },
+    },
     { label: '硅基流动', patch: { base_url: 'https://api.siliconflow.cn/v1', model: '', auth_style: 'bearer' } },
   ],
   image: [
@@ -235,11 +235,23 @@ const VENDOR_PRESETS: Record<ModelCategory, { label: string; patch: ModelConfig 
   voice: [
     {
       label: '小米 MiMo TTS',
-      patch: { protocol: 'mimo-tts', base_url: 'https://token-plan-cn.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', voice: '冰糖', format: 'wav' },
+      patch: {
+        protocol: 'mimo-tts',
+        base_url: 'https://token-plan-cn.xiaomimimo.com/v1',
+        model: 'mimo-v2.5-tts',
+        voice: '冰糖',
+        format: 'wav',
+      },
     },
     {
       label: '腾讯云 TTS',
-      patch: { protocol: 'tencent-tts', base_url: 'https://tts.tencentcloudapi.com', model: '', voice: '101001', format: 'wav' },
+      patch: {
+        protocol: 'tencent-tts',
+        base_url: 'https://tts.tencentcloudapi.com',
+        model: '',
+        voice: '101001',
+        format: 'wav',
+      },
     },
     {
       label: '阿里百炼 CosyVoice',
@@ -282,7 +294,8 @@ const TAB_ITEMS: { key: SettingsTab; label: string; desc: string; icon: React.Re
 ]
 
 const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
-  const { projectId, parentProjectId, projectType, style, platform, outputFormat, resolution, setProject } = useProjectStore()
+  const { projectId, parentProjectId, projectType, style, platform, outputFormat, resolution, setProject } =
+    useProjectStore()
   const [activeTab, setActiveTab] = useState<SettingsTab>('appearance')
   const [appTheme, setAppTheme] = useState<AppTheme>(() => getInitialTheme())
   const [styleTemplates, setStyleTemplates] = useState<StyleOption[]>(STYLE_OPTIONS)
@@ -326,7 +339,9 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
     setGlobalDefaultSkillId(result.global_default_template_id || templates[0].id)
     setProjectBindings(result.project_bindings || {})
     setEpisodeBindings(result.episode_bindings || {})
-    const initial = templates.find((item: SkillTemplate) => item.id === (result.global_default_template_id || 'default')) || templates[0]
+    const initial =
+      templates.find((item: SkillTemplate) => item.id === (result.global_default_template_id || 'default')) ||
+      templates[0]
     setActiveSkillId(initial.id)
     setDraftSkill(cloneTemplate(initial))
   }
@@ -539,7 +554,9 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
         <div className="settings-page-head">
           <div>
             <div className="asset-board-title">系统设置</div>
-            <div className="asset-board-note">画风模板、模型 API 与子 Agent Skill 方案集中管理，保存后只影响后续新生成素材。</div>
+            <div className="asset-board-note">
+              画风模板、模型 API 与子 Agent Skill 方案集中管理，保存后只影响后续新生成素材。
+            </div>
           </div>
           <Button icon={<ArrowLeftOutlined />} onClick={onBack}>
             返回工作区
@@ -601,7 +618,11 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
                         onClick={() => void updateProjectField('style', item.value)}
                       >
                         <strong>{item.label}</strong>
-                        <span>{item.custom ? item.keywords || '自定义模板' : STYLE_DESCRIPTIONS[item.value] || item.keywords || '预设模板'}</span>
+                        <span>
+                          {item.custom
+                            ? item.keywords || '自定义模板'
+                            : STYLE_DESCRIPTIONS[item.value] || item.keywords || '预设模板'}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -630,7 +651,12 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
                       placeholder="例如：过曝、凌乱笔触、文字、水印"
                     />
                   </div>
-                  <Button type="primary" icon={<SaveOutlined />} loading={savingStyleTemplate} onClick={() => void handleSaveCustomStyle()}>
+                  <Button
+                    type="primary"
+                    icon={<SaveOutlined />}
+                    loading={savingStyleTemplate}
+                    onClick={() => void handleSaveCustomStyle()}
+                  >
                     保存为自定义模板
                   </Button>
                 </section>
@@ -677,9 +703,16 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
                 <div className="settings-models-head">
                   <div>
                     <div className="settings-section-title">模型与 API 自定义配置</div>
-                    <div className="asset-board-note">分别配置剧本、图像、视频、配音四类生成模型的接口地址、密钥与模型名，保存后新任务自动加载最新配置。</div>
+                    <div className="asset-board-note">
+                      分别配置剧本、图像、视频、配音四类生成模型的接口地址、密钥与模型名，保存后新任务自动加载最新配置。
+                    </div>
                   </div>
-                  <Button type="primary" icon={<SaveOutlined />} loading={savingModel} onClick={() => void handleSaveModelConfig()}>
+                  <Button
+                    type="primary"
+                    icon={<SaveOutlined />}
+                    loading={savingModel}
+                    onClick={() => void handleSaveModelConfig()}
+                  >
                     保存全部配置
                   </Button>
                 </div>
@@ -705,7 +738,9 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
                     discoveredModels={discoveredModels.image}
                     discovering={discoveringCategory === 'image'}
                     onDiscover={handleDiscoverModels}
-                    extraFields={[{ key: 'image_size', label: '出图尺寸', type: 'text', placeholder: '例如 1440x2560' }]}
+                    extraFields={[
+                      { key: 'image_size', label: '出图尺寸', type: 'text', placeholder: '例如 1440x2560' },
+                    ]}
                   />
                   <ModelConfigCard
                     title="视频生成模型"
@@ -743,14 +778,26 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
                 <div className="settings-section-title">子 Agent Skill 配置</div>
                 <div className="skill-template-toolbar">
                   <Select value={activeSkillId} onChange={handleSelectSkillTemplate} options={skillOptions} />
-                  <Input value={draftSkill.name} onChange={(event) => setDraftSkill({ ...draftSkill, name: event.target.value })} />
-                  <Button type="primary" icon={<SaveOutlined />} loading={savingSkill} onClick={() => void handleSaveSkillTemplate(false)}>
+                  <Input
+                    value={draftSkill.name}
+                    onChange={(event) => setDraftSkill({ ...draftSkill, name: event.target.value })}
+                  />
+                  <Button
+                    type="primary"
+                    icon={<SaveOutlined />}
+                    loading={savingSkill}
+                    onClick={() => void handleSaveSkillTemplate(false)}
+                  >
                     保存
                   </Button>
                   <Button icon={<ReloadOutlined />} onClick={handleResetSkillTemplate}>
                     重置
                   </Button>
-                  <Button icon={<CopyOutlined />} loading={savingSkill} onClick={() => void handleSaveSkillTemplate(true)}>
+                  <Button
+                    icon={<CopyOutlined />}
+                    loading={savingSkill}
+                    onClick={() => void handleSaveSkillTemplate(true)}
+                  >
                     另存为模板
                   </Button>
                   <Button icon={<UploadOutlined />} onClick={() => skillImportRef.current?.click()}>
@@ -856,7 +903,11 @@ function CapabilityBadges({
     if (capabilities.requires_credentials === false) badges.push('免密钥（本地占位图）')
   }
   if (category === 'video') {
-    badges.push(capabilities.reference_image ? `首帧参考：${capabilities.reference_mode || 'first_frame_only'}` : '不支持首帧参考图')
+    badges.push(
+      capabilities.reference_image
+        ? `首帧参考：${capabilities.reference_mode || 'first_frame_only'}`
+        : '不支持首帧参考图',
+    )
     if (capabilities.fixed_duration) badges.push(`固定时长 ${capabilities.fixed_duration}s（超长镜头需拆分）`)
     badges.push(capabilities.native_audio ? '原生音频' : '无声视频（对白走 TTS 配音链路）')
   }
@@ -938,7 +989,11 @@ function ModelConfigCard({
               key={preset.label}
               type="button"
               className="settings-template-chip"
-              onClick={() => Object.entries(preset.patch).forEach(([field, value]) => onChange(category, field, value))}
+              onClick={() =>
+                Object.entries(preset.patch).forEach(([field, value]) => {
+                  onChange(category, field, value)
+                })
+              }
             >
               <strong>{preset.label}</strong>
               <span>{String(preset.patch.base_url || preset.patch.protocol || '快捷填充')}</span>
@@ -987,21 +1042,24 @@ function ModelConfigCard({
         />
       </div>
       <div className="model-discovery-row">
-        <Button
-          icon={<ReloadOutlined />}
-          loading={discovering}
-          onClick={() => onDiscover(category)}
-        >
+        <Button icon={<ReloadOutlined />} loading={discovering} onClick={() => onDiscover(category)}>
           获取可用模型
         </Button>
-        <span>{discoveredModels.length ? `已发现 ${discoveredModels.length} 个模型` : '输入地址和密钥后，从服务端读取模型列表'}</span>
+        <span>
+          {discoveredModels.length
+            ? `已发现 ${discoveredModels.length} 个模型`
+            : '输入地址和密钥后，从服务端读取模型列表'}
+        </span>
       </div>
       <div className="settings-field">
         <span>模型名称</span>
         <AutoComplete
           value={config.model || ''}
           open={modelDropdownOpen && discoveredModels.length > 0}
-          options={discoveredModels.map((item) => ({ value: item.id, label: item.label === item.id ? item.id : `${item.label} · ${item.id}` }))}
+          options={discoveredModels.map((item) => ({
+            value: item.id,
+            label: item.label === item.id ? item.id : `${item.label} · ${item.id}`,
+          }))}
           onChange={(value) => onChange(category, 'model', value)}
           onFocus={() => {
             if (discoveredModels.length > 0) setModelDropdownOpen(true)
@@ -1009,7 +1067,11 @@ function ModelConfigCard({
           onOpenChange={setModelDropdownOpen}
           onSelect={() => setModelDropdownOpen(false)}
           placeholder={discoveredModels.length ? '搜索或输入模型名称' : '可手动输入模型名称'}
-          filterOption={(inputValue, option) => String(option?.value || '').toLowerCase().includes(inputValue.toLowerCase())}
+          filterOption={(inputValue, option) =>
+            String(option?.value || '')
+              .toLowerCase()
+              .includes(inputValue.toLowerCase())
+          }
         />
       </div>
       {showAudioMode && selectedModel ? (
@@ -1108,7 +1170,10 @@ function AgentSkillPanel({
           onChange={(value) => update('style_template_id', value)}
           options={[
             { value: '', label: '继承项目画风' },
-            ...styleTemplates.map((item) => ({ value: item.value, label: item.custom ? `${item.label}（自定义）` : item.label })),
+            ...styleTemplates.map((item) => ({
+              value: item.value,
+              label: item.custom ? `${item.label}（自定义）` : item.label,
+            })),
           ]}
         />
       </div>
@@ -1125,7 +1190,11 @@ function AgentSkillPanel({
           onChange={(event) => update('custom_style_keywords', event.target.value)}
         />
       </div>
-      <SystemPromptField agentKey={agentKey} value={agent.system_prompt} onChange={(value) => update('system_prompt', value)} />
+      <SystemPromptField
+        agentKey={agentKey}
+        value={agent.system_prompt}
+        onChange={(value) => update('system_prompt', value)}
+      />
       <div className="settings-field">
         <span>镜头构图规范默认参数</span>
         <TextArea
@@ -1134,13 +1203,40 @@ function AgentSkillPanel({
           onChange={(event) => update('camera_composition', event.target.value)}
         />
       </div>
-      <ToggleRow label="TTS 过滤指令话术" checked={agent.filter_tts_instruction_text} onChange={(value) => update('filter_tts_instruction_text', value)} />
-      <ToggleRow label="强制引用人物/场景基准图" checked={agent.force_character_scene_references} onChange={(value) => update('force_character_scene_references', value)} />
-      <ToggleRow label="Prompt 自动拼装" checked={agent.prompt_auto_assembly} onChange={(value) => update('prompt_auto_assembly', value)} />
-      <div className="skill-toggle-row"><span>OpenPose / Depth 控制</span><span>未接入（unsupported）</span></div>
-      <ToggleRow label="镜头续帧连贯逻辑" checked={agent.continuity_enabled} onChange={(value) => update('continuity_enabled', value)} />
-      <WeightField label="参考图画风权重" value={agent.style_reference_weight} onChange={(value) => update('style_reference_weight', value)} />
-      <WeightField label="动作权重" value={agent.action_reference_weight} onChange={(value) => update('action_reference_weight', value)} />
+      <ToggleRow
+        label="TTS 过滤指令话术"
+        checked={agent.filter_tts_instruction_text}
+        onChange={(value) => update('filter_tts_instruction_text', value)}
+      />
+      <ToggleRow
+        label="强制引用人物/场景基准图"
+        checked={agent.force_character_scene_references}
+        onChange={(value) => update('force_character_scene_references', value)}
+      />
+      <ToggleRow
+        label="Prompt 自动拼装"
+        checked={agent.prompt_auto_assembly}
+        onChange={(value) => update('prompt_auto_assembly', value)}
+      />
+      <div className="skill-toggle-row">
+        <span>OpenPose / Depth 控制</span>
+        <span>未接入（unsupported）</span>
+      </div>
+      <ToggleRow
+        label="镜头续帧连贯逻辑"
+        checked={agent.continuity_enabled}
+        onChange={(value) => update('continuity_enabled', value)}
+      />
+      <WeightField
+        label="参考图画风权重"
+        value={agent.style_reference_weight}
+        onChange={(value) => update('style_reference_weight', value)}
+      />
+      <WeightField
+        label="动作权重"
+        value={agent.action_reference_weight}
+        onChange={(value) => update('action_reference_weight', value)}
+      />
     </div>
   )
 }
@@ -1191,13 +1287,25 @@ function SystemPromptField({
         >
           恢复默认提示词
         </Button>
-        {overLimit ? <span className="skill-system-prompt-error">提示词去空白后超过 {SYSTEM_PROMPT_MAX_LENGTH} 字符，保存会被拒绝</span> : null}
+        {overLimit ? (
+          <span className="skill-system-prompt-error">
+            提示词去空白后超过 {SYSTEM_PROMPT_MAX_LENGTH} 字符，保存会被拒绝
+          </span>
+        ) : null}
       </div>
     </div>
   )
 }
 
-function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+function ToggleRow({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string
+  checked: boolean
+  onChange: (value: boolean) => void
+}) {
   return (
     <div className="skill-toggle-row">
       <span>{label}</span>

@@ -111,12 +111,15 @@ const App: React.FC = () => {
         role="main"
         aria-label="主工作台"
       >
-        <LeftSidebar
-          collapsed={sidebarCollapsed}
-          onToggleCollapsed={() => setSidebarCollapsed((prev) => !prev)}
-        />
+        <LeftSidebar collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((prev) => !prev)} />
         {settingsPageOpen ? (
-          <React.Suspense fallback={<section className="main-workspace lazy-page-status" role="status">正在加载系统设置...</section>}>
+          <React.Suspense
+            fallback={
+              <section className="main-workspace lazy-page-status" role="status">
+                正在加载系统设置...
+              </section>
+            }
+          >
             <SystemSettingsPage onBack={() => setSettingsPageOpen(false)} />
           </React.Suspense>
         ) : (

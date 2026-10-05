@@ -18,16 +18,15 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from agent import output_schemas  # noqa: E402
+from agent.nodes import script_parser, storyboard_gen  # noqa: E402
 from agent.output_schemas import (  # noqa: E402
     LLMOutputError,
     parse_script_output,
     parse_storyboard_output,
 )
-from agent.nodes import script_parser, storyboard_gen  # noqa: E402
 from config import settings  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _script_payload(**overrides) -> dict:
@@ -81,9 +80,7 @@ class TopLevelStructureTests(unittest.TestCase):
         self.assertEqual([item.name for item in parsed.characters], ["林夏", "顾言"])
 
     def test_mimo_character_name_mapping_is_normalized(self) -> None:
-        payload = _script_payload(
-            characters={"林夏": {"personality": "勇敢"}, "顾言": "戴眼镜"}
-        )
+        payload = _script_payload(characters={"林夏": {"personality": "勇敢"}, "顾言": "戴眼镜"})
         parsed = parse_script_output(payload)
         self.assertEqual([item.name for item in parsed.characters], ["林夏", "顾言"])
 
@@ -145,7 +142,7 @@ class FieldNormalizationTests(unittest.TestCase):
             {
                 "shots": [
                     {"duration": -12},
-                    {"duration": 10 ** 9},
+                    {"duration": 10**9},
                     {"duration": float("inf")},
                     {"duration": float("nan")},
                 ]

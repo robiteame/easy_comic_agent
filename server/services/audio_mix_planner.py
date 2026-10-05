@@ -19,8 +19,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
 SAMPLE_RATE = 44100
 
@@ -263,17 +263,14 @@ def plan_audio_mix(
         # amix duration=first 以第一个输入为准：主音轨必须排在对白轨之前，
         # 否则整条混音会被最短的对白轨提前截断。
         statements.append(
-            f"{main_label}" + "".join(f"[{label}]" for label in dialogue_labels)
+            f"{main_label}"
+            + "".join(f"[{label}]" for label in dialogue_labels)
             + f"amix=inputs={len(dialogue_labels) + 1}:duration=first:normalize=0[voicepre]"
         )
     else:
         statements.append(f"{main_label}anull[voicepre]")
 
-    duck_tracks = [
-        track
-        for track in other_tracks
-        if _clamp(track.duck_amount_db, -48.0, 0.0) < -0.01
-    ]
+    duck_tracks = [track for track in other_tracks if _clamp(track.duck_amount_db, -48.0, 0.0) < -0.01]
     duck_count = len(duck_tracks)
 
     # voice 一分为 (1 + duck_count) 份：主输出 + 每条 duck 轨一个 sidechain 源。

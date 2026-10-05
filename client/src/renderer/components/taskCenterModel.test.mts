@@ -91,7 +91,10 @@ assert.equal(normalizeJob({ scope: 'project:p1' }), null, '缺少 id 的任务�
 assert.equal(normalizeJobList('nope').length, 0, '非数组输入应返回空列表')
 assert.equal(normalizeJobList([{ id: 'a' }, null, 'x']).length, 1, '列表里的脏数据应被逐个丢弃')
 
-const withoutRunToken = normalizeJob({ id: 'x', status: 'running', run_token: 'secret' }) as unknown as Record<string, unknown>
+const withoutRunToken = normalizeJob({ id: 'x', status: 'running', run_token: 'secret' }) as unknown as Record<
+  string,
+  unknown
+>
 assert.equal('run_token' in withoutRunToken, false, 'DTO 归一化不得保留 run token 之类的内部字段')
 
 const clamped = makeJob({ progress: 250 })
@@ -131,9 +134,35 @@ assert.equal(applyJobEvent(untouched, null), untouched, '空事件不应改变�
 
 // --- 筛选与排序 -----------------------------------------------------------
 
-const failed = makeJob({ id: 'job-failed', status: 'failed', status_label: '失败', can_retry: true, project_id: 'p2', job_type: 'shot_video', error_message: '视频生成失败', updated_at: '2025-01-01T09:30:00' })
-const interrupted = makeJob({ id: 'job-interrupted', status: 'interrupted', status_label: '已中断', can_retry: true, can_resume: true, project_id: 'p1', job_type: 'storyboard', updated_at: '2025-01-01T09:40:00' })
-const completed = makeJob({ id: 'job-done', status: 'completed', status_label: '已完成', progress: 100, project_id: 'p1', job_type: 'render', updated_at: '2025-01-01T09:50:00' })
+const failed = makeJob({
+  id: 'job-failed',
+  status: 'failed',
+  status_label: '失败',
+  can_retry: true,
+  project_id: 'p2',
+  job_type: 'shot_video',
+  error_message: '视频生成失败',
+  updated_at: '2025-01-01T09:30:00',
+})
+const interrupted = makeJob({
+  id: 'job-interrupted',
+  status: 'interrupted',
+  status_label: '已中断',
+  can_retry: true,
+  can_resume: true,
+  project_id: 'p1',
+  job_type: 'storyboard',
+  updated_at: '2025-01-01T09:40:00',
+})
+const completed = makeJob({
+  id: 'job-done',
+  status: 'completed',
+  status_label: '已完成',
+  progress: 100,
+  project_id: 'p1',
+  job_type: 'render',
+  updated_at: '2025-01-01T09:50:00',
+})
 const all = [running, failed, interrupted, completed]
 
 assert.equal(filterJobs(all, { ...DEFAULT_FILTERS, projectId: 'p1' }).length, 3, '项目筛选应只保留该项目任务')
@@ -215,26 +244,48 @@ assert.equal(formatRelativeTime('2024-12-30T12:00:00', now), '12-30')
 assert.equal(progressText(makeJob({ progress: 37 })), '37%')
 assert.equal(progressText(makeJob({ status: 'completed', progress: 0 })), '100%')
 assert.equal(errorSummary(failed).startsWith('job_failed'), false)
-assert.equal(errorSummary(makeJob({ error_code: 'provider_error', error_message: '模型不可用' })), 'API 调用失败：模型不可用')
 assert.equal(
-  errorSummary(makeJob({ error_code: 'provider_quota_exceeded', error_code_label: '额度不足', error_message: 'AccountHasArrears' })),
+  errorSummary(makeJob({ error_code: 'provider_error', error_message: '模型不可用' })),
+  'API 调用失败：模型不可用',
+)
+assert.equal(
+  errorSummary(
+    makeJob({
+      error_code: 'provider_quota_exceeded',
+      error_code_label: '额度不足',
+      error_message: 'AccountHasArrears',
+    }),
+  ),
   '额度不足：AccountHasArrears',
   '服务端标签优先于前端兜底映射',
 )
 
 // --- 失败类别：标签 / 色调 / 归一化 / 筛选 / 统计 --------------------------
 
-assert.equal(errorCategoryLabel(makeJob({ error_code: 'provider_rate_limited', error_message: '429' })), '触发限流', '缺服务端标签时用前端兜底映射')
+assert.equal(
+  errorCategoryLabel(makeJob({ error_code: 'provider_rate_limited', error_message: '429' })),
+  '触发限流',
+  '缺服务端标签时用前端兜底映射',
+)
 assert.equal(errorCodeTone('provider_quota_exceeded'), 'warn', '额度/限流类用警示色调')
 assert.equal(errorCodeTone('provider_invalid_request'), 'danger', '参数/鉴权/调用失败用错误色调')
 assert.equal(errorCodeTone('dependency_failed'), 'muted', '环境/业务类用弱化色调')
-assert.equal(effectiveErrorCode(makeJob({ status: 'failed', error_code: '' })), 'job_failed', '历史空错误码按 job_failed 参与筛选统计')
+assert.equal(
+  effectiveErrorCode(makeJob({ status: 'failed', error_code: '' })),
+  'job_failed',
+  '历史空错误码按 job_failed 参与筛选统计',
+)
 
 const withDetail = makeJob({
   error_code: 'provider_quota_exceeded',
   error_code_label: '额度不足',
   error_message: 'Volcano Ark: AccountHasArrears',
-  error_detail: { summary: '火山方舟账户欠费，余额不足', suggestion: '前往火山方舟控制台充值后重试', source: 'llm', model: 'mimo' },
+  error_detail: {
+    summary: '火山方舟账户欠费，余额不足',
+    suggestion: '前往火山方舟控制台充值后重试',
+    source: 'llm',
+    model: 'mimo',
+  },
 })
 assert.equal(errorHeadline(withDetail), '火山方舟账户欠费，余额不足', 'LLM 摘要优先作为失败原因首行')
 assert.equal(errorHeadline(makeJob({ error_message: '原始错误' })), '原始错误', '无分析结果时回落原始短消息')
@@ -252,7 +303,10 @@ assert.equal(
   '按失败类别筛选：命中类别保留',
 )
 assert.equal(
-  filterJobs([makeJob({ id: 'legacy', status: 'failed', error_code: '' })], { ...DEFAULT_FILTERS, errorCodes: ['job_failed'] }).length,
+  filterJobs([makeJob({ id: 'legacy', status: 'failed', error_code: '' })], {
+    ...DEFAULT_FILTERS,
+    errorCodes: ['job_failed'],
+  }).length,
   1,
   '空错误码的失败任务按 job_failed 命中「其他失败」筛选',
 )
@@ -273,7 +327,14 @@ assert.deepEqual(
 // --- 查询参数 / 重连 / ARIA / 跳转 ---------------------------------------
 
 assert.deepEqual(queryFromFilters(DEFAULT_FILTERS), { page: 1, page_size: 50 })
-const params = queryFromFilters({ ...DEFAULT_FILTERS, projectId: 'p1', statuses: ['failed'], jobTypes: ['render'], onlyActive: true, search: ' x ' })
+const params = queryFromFilters({
+  ...DEFAULT_FILTERS,
+  projectId: 'p1',
+  statuses: ['failed'],
+  jobTypes: ['render'],
+  onlyActive: true,
+  search: ' x ',
+})
 assert.equal(params.project_id, 'p1')
 assert.deepEqual(params.status, ['failed'])
 assert.deepEqual(params.job_type, ['render'])
@@ -362,7 +423,10 @@ try {
     20,
     '同一时刻不同格式的更新不得被误判为过期事件',
   )
-  const missingTime = sortJobs([makeJob({ id: 'job-a', updated_at: '2025-01-01T10:05:00Z' }), makeJob({ id: 'job-b', updated_at: null })], 'updated')
+  const missingTime = sortJobs(
+    [makeJob({ id: 'job-a', updated_at: '2025-01-01T10:05:00Z' }), makeJob({ id: 'job-b', updated_at: null })],
+    'updated',
+  )
   assert.equal(missingTime[0].id, 'job-a', '缺少时间戳的任务沉底')
 } finally {
   process.env.TZ = ORIGINAL_TZ
@@ -379,7 +443,8 @@ const truncationJob = makeJob({
   job_type: 'pipeline',
   can_retry: true,
   error_code: 'llm_output_truncated',
-  error_message: '模型输出超过最大长度并被截断（finish_reason=length，输出 4096/16384 tokens）；请增加输出额度或按场次分段解析',
+  error_message:
+    '模型输出超过最大长度并被截断（finish_reason=length，输出 4096/16384 tokens）；请增加输出额度或按场次分段解析',
   current_step: 'parse_script',
 })
 
@@ -397,15 +462,8 @@ assert.ok(
   '截断必须出现在失败原因筛选项中',
 )
 assert.equal(errorCodeTone('llm_output_truncated'), 'danger', '截断属于需要用户处理的调用类失败')
-assert.equal(
-  errorCategoryLabel(truncationJob),
-  '模型输出超长被截断',
-  '任务卡片显示截断类别，而不是回退到「任务失败」',
-)
-assert.ok(
-  errorHeadline(truncationJob).includes('被截断'),
-  '失败首行文案保留截断诊断信息',
-)
+assert.equal(errorCategoryLabel(truncationJob), '模型输出超长被截断', '任务卡片显示截断类别，而不是回退到「任务失败」')
+assert.ok(errorHeadline(truncationJob).includes('被截断'), '失败首行文案保留截断诊断信息')
 assert.equal(
   filterJobs([truncationJob], { ...DEFAULT_FILTERS, errorCodes: ['llm_output_truncated'] }).length,
   1,

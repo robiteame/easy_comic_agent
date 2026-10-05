@@ -24,8 +24,6 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from db import SessionLocal, init_db  # noqa: E402
 from models import BackgroundJob  # noqa: E402
 from services import error_analysis_service, job_center, task_registry  # noqa: E402
@@ -41,6 +39,7 @@ from services.job_types import (  # noqa: E402
     classify_error_code,
     error_code_label,
 )
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class _FakeLLM:
@@ -102,9 +101,7 @@ class ErrorAnalysisServiceTests(unittest.TestCase):
         error_analysis_service._in_flight.clear()
         error_analysis_service._pending_fingerprints.clear()
         # 测试环境默认禁用 LLM 分析（见 test_environment），本组用例显式开启。
-        self.llm_toggle = patch.object(
-            error_analysis_service.settings, "ERROR_ANALYSIS_LLM_ENABLED", True
-        )
+        self.llm_toggle = patch.object(error_analysis_service.settings, "ERROR_ANALYSIS_LLM_ENABLED", True)
         self.llm_toggle.start()
 
     def tearDown(self) -> None:
@@ -163,9 +160,10 @@ class ErrorAnalysisServiceTests(unittest.TestCase):
                 "suggestion": "前往控制台充值后重试该任务",
             }
         )
-        with patch.object(error_analysis_service, "llm_service", fake), patch(
-            "services.error_analysis_service.publish_job_event"
-        ) as publish:
+        with (
+            patch.object(error_analysis_service, "llm_service", fake),
+            patch("services.error_analysis_service.publish_job_event") as publish,
+        ):
             self.run_analysis(job.id)
             publish.assert_called_once()
             event_type, payload = publish.call_args[0]
@@ -186,7 +184,14 @@ class ErrorAnalysisServiceTests(unittest.TestCase):
             error_code="provider_rate_limited",
             error="Seedance 创建任务失败: 429 TooManyRequests",
         )
-        fake = _FakeLLM(result={"category": "provider_quota_exceeded", "confidence": 0.8, "summary": "疑似欠费", "suggestion": "充值"})
+        fake = _FakeLLM(
+            result={
+                "category": "provider_quota_exceeded",
+                "confidence": 0.8,
+                "summary": "疑似欠费",
+                "suggestion": "充值",
+            }
+        )
         with patch.object(error_analysis_service, "llm_service", fake):
             self.run_analysis(job.id)
         refreshed = self.reload(job.id)
@@ -268,7 +273,9 @@ class TriggerWiringTests(unittest.TestCase):
         self.assertTrue(task_registry.claim(key, "project:p-wire-1"))
         token = task_registry.snapshot(key)["run_token"]
         with patch("services.error_analysis_service.schedule_failure_analysis") as schedule:
-            self.assertTrue(task_registry.finish(key, "failed", "Seedance 创建任务失败: 429 TooManyRequests", run_token=token))
+            self.assertTrue(
+                task_registry.finish(key, "failed", "Seedance 创建任务失败: 429 TooManyRequests", run_token=token)
+            )
             schedule.assert_called_once()
         job = self.db.query(BackgroundJob).filter(BackgroundJob.idempotency_key == key).first()
         self.assertEqual(job.error_code, "provider_rate_limited", "规则细分码在落库时即生效")
@@ -349,7 +356,13 @@ class DtoExposureTests(unittest.TestCase):
 
     def test_dto暴露标签与分析结果(self) -> None:
         detail = json.dumps(
-            {"summary": "账户欠费", "suggestion": "充值后重试", "source": "llm", "model": "m", "analyzed_at": "2026-01-01T00:00:00"}
+            {
+                "summary": "账户欠费",
+                "suggestion": "充值后重试",
+                "source": "llm",
+                "model": "m",
+                "analyzed_at": "2026-01-01T00:00:00",
+            }
         )
         job = self._job(error_detail=detail)
         dto = job_dto(job)

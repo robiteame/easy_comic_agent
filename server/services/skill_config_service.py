@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import re
 from datetime import datetime
 from typing import Any
@@ -9,7 +8,6 @@ from typing import Any
 from config import settings
 from services.atomic_json import atomic_write_json, path_lock, read_json_file
 from services.prompts import sanitize_system_prompt
-
 
 DEFAULT_AGENT_CONFIG: dict[str, Any] = {
     # Style belongs to the project/request. A Skill only overrides it when the
@@ -174,7 +172,9 @@ def agent_prompt_append(skill_config: dict[str, Any] | None, agent: str) -> str:
     return ", ".join(str(part).strip() for part in parts if str(part or "").strip())
 
 
-def apply_agent_config_to_shot(shot_data: dict[str, Any], skill_config: dict[str, Any] | None, agent: str = "storyboard_agent") -> None:
+def apply_agent_config_to_shot(
+    shot_data: dict[str, Any], skill_config: dict[str, Any] | None, agent: str = "storyboard_agent"
+) -> None:
     config = _agent_config(skill_config, agent)
     metadata = resolve_effective_style(shot_data.get("style") or shot_data.get("effective_style"), skill_config, agent)
     shot_data.update(metadata)

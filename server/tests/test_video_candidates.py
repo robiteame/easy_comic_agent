@@ -12,22 +12,22 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from agent.checkpoints import CheckpointStore  # noqa: E402
 from agent.contracts import (  # noqa: E402
     QUALITY_STRATEGIES,
     QualityProfileName,
     VideoCandidateRecord,
-    VideoCandidateStatus,
     select_video_candidate,
 )
 from api.routes import shot as shot_route  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
 from models import Project, Shot, ShotVideoCandidate  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
-def _candidate(candidate_id: str, *, score: float, passed: bool | None = True, status: str = "succeeded", duration: int = 100) -> dict:
+def _candidate(
+    candidate_id: str, *, score: float, passed: bool | None = True, status: str = "succeeded", duration: int = 100
+) -> dict:
     return {
         "candidate_id": candidate_id,
         "shot_id": "candidate-shot",
@@ -59,7 +59,6 @@ class QualityCandidateCountTests(unittest.TestCase):
 
         self.assertEqual(inspect.signature(shot_route._run_single_shot_video).parameters["candidate_count"].default, 1)
 
-
     def test_video_worker_passes_profile_candidate_count(self) -> None:
         from agent import shot_work
 
@@ -76,7 +75,12 @@ class QualityCandidateCountTests(unittest.TestCase):
                 patch.object(
                     shot_work,
                     "_db_artifact",
-                    return_value={"shot_id": "candidate-shot", "shot_version": 1, "stage": "video_generation", "status": "succeeded"},
+                    return_value={
+                        "shot_id": "candidate-shot",
+                        "shot_version": 1,
+                        "stage": "video_generation",
+                        "status": "succeeded",
+                    },
                 ),
             ):
                 asyncio.run(
@@ -135,7 +139,6 @@ class _CandidatePersistenceMixin:
         self.db.close()
 
 
-
 class CandidatePersistenceTests(_CandidatePersistenceMixin, unittest.TestCase):
     def test_checkpoint_saves_success_and_failure_candidates_independently(self) -> None:
         success = _candidate("candidate-success", score=1.0)
@@ -183,15 +186,32 @@ class CandidatePersistenceTests(_CandidatePersistenceMixin, unittest.TestCase):
         first_batch_a = shot_route._video_candidate_media_id("shot_v1", 1, batch_id="batch-a")
         first_batch_b = shot_route._video_candidate_media_id("shot_v1", 1, batch_id="batch-b")
         self.assertEqual(len({first_id, second_id, retry_id}), 3)
-        self.assertEqual(len({first_path, second_path, retry_path, retry_batch_a, retry_batch_b, retry_candidate_two, first_batch_a, first_batch_b}), 8)
+        self.assertEqual(
+            len(
+                {
+                    first_path,
+                    second_path,
+                    retry_path,
+                    retry_batch_a,
+                    retry_batch_b,
+                    retry_candidate_two,
+                    first_batch_a,
+                    first_batch_b,
+                }
+            ),
+            8,
+        )
         self.assertTrue(retry_batch_b.endswith("_c1"))
 
     def test_seed_override_is_distinct_for_each_candidate(self) -> None:
         seeds = {
-            int.from_bytes(__import__("hashlib").sha256(f"123:2:{batch}:retry".encode()).digest()[:4], "big") % (2**31 - 1)
+            int.from_bytes(__import__("hashlib").sha256(f"123:2:{batch}:retry".encode()).digest()[:4], "big")
+            % (2**31 - 1)
             for batch in ("batch-a", "batch-b")
         }
         self.assertEqual(len(seeds), 2)
+
+
 class CandidateGenerationTests(_CandidatePersistenceMixin, unittest.TestCase):
     def test_three_candidates_finish_before_official_video_is_replaced(self) -> None:
         project = Project(id="candidate-generation-project", title="Candidate generation")
@@ -238,7 +258,9 @@ class CandidateGenerationTests(_CandidatePersistenceMixin, unittest.TestCase):
                     "video_path": str(video),
                     "frame_path": str(frame),
                     "generation_report": {"provider": "candidate-provider", "model": "candidate-model"},
-                    "reference_manifest": [{"type": "approved_storyboard_first_frame", "path": "story.png", "sent": True}],
+                    "reference_manifest": [
+                        {"type": "approved_storyboard_first_frame", "path": "story.png", "sent": True}
+                    ],
                 }
             finally:
                 active -= 1
@@ -250,7 +272,11 @@ class CandidateGenerationTests(_CandidatePersistenceMixin, unittest.TestCase):
             patch.object(shot_route, "ensure_generation_gate", return_value={}),
             patch.object(shot_route, "_ensure_scene_baselines", new=AsyncMock()),
             patch.object(shot_route, "_materialize_control_references"),
-            patch.object(shot_route, "_prepare_shot_audio", new=AsyncMock(return_value={"audio_path": "", "native_routed": False})),
+            patch.object(
+                shot_route,
+                "_prepare_shot_audio",
+                new=AsyncMock(return_value={"audio_path": "", "native_routed": False}),
+            ),
             patch.object(shot_route, "_progress", new=AsyncMock()),
             patch.object(shot_route, "validate_video_file", side_effect=fake_validate),
             patch.object(shot_route, "_generate_shot_video", side_effect=fake_generate),
@@ -301,11 +327,13 @@ class FailedCandidateRetryTests(_CandidatePersistenceMixin, unittest.TestCase):
             self.assertEqual(kwargs["candidate_count"], 1)
             self.assertTrue(kwargs["strict_structural_selection"])
             self.assertEqual(kwargs["retry_of_candidate_id"], "failed-attempt")
-            shot_route._save_video_candidate({
-                **_candidate("retry-attempt", score=1.0),
-                "shot_id": "retry-shot",
-                "retry_of_candidate_id": "failed-attempt",
-            })
+            shot_route._save_video_candidate(
+                {
+                    **_candidate("retry-attempt", score=1.0),
+                    "shot_id": "retry-shot",
+                    "retry_of_candidate_id": "failed-attempt",
+                }
+            )
             return {"selected_video_candidate_id": "retry-attempt"}
 
         with patch.object(shot_route, "_run_single_shot_video", side_effect=fake_generate):
@@ -343,11 +371,13 @@ class CandidateVersionConflictTests(_CandidatePersistenceMixin, unittest.TestCas
         )
         self.db.add_all([project, shot])
         self.db.commit()
-        shot_route._save_video_candidate({
-            **_candidate("stale-db-candidate", score=1.0),
-            "shot_id": shot.id,
-            "shot_version": 1,
-        })
+        shot_route._save_video_candidate(
+            {
+                **_candidate("stale-db-candidate", score=1.0),
+                "shot_id": shot.id,
+                "shot_version": 1,
+            }
+        )
         self.db.expire_all()
         current = self.db.get(Shot, shot.id)
         selection = select_video_candidate(

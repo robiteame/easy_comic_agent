@@ -2,12 +2,11 @@ import hashlib
 import json
 import re
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
-from pathlib import Path
-
-from services.style_templates import style_template
 from services.shot_dialogue import dialogue_plain_text, parse_shot_dialogue
+from services.style_templates import style_template
 
 CONTINUITY_MODES = (
     "independent",
@@ -107,7 +106,12 @@ class ConsistencyService:
         item = deepcopy(character)
         name = item.get("name") or f"character_{index + 1}"
         appearance = item.get("appearance") if isinstance(item.get("appearance"), dict) else {}
-        default_outfit = item.get("default_outfit") or appearance.get("default_outfit") or appearance.get("outfit") or "locked default outfit"
+        default_outfit = (
+            item.get("default_outfit")
+            or appearance.get("default_outfit")
+            or appearance.get("outfit")
+            or "locked default outfit"
+        )
         item["default_outfit"] = default_outfit
         item["wardrobe_lock"] = item.get("wardrobe_lock") or (
             f"Prompt preference for {name}: keep wardrobe near {default_outfit}; this is not a model hard constraint."
@@ -122,7 +126,9 @@ class ConsistencyService:
     def enrich_scene(self, scene: dict[str, Any], index: int = 0) -> dict[str, Any]:
         item = deepcopy(scene)
         location = item.get("location") or item.get("name") or f"scene_{index + 1}"
-        time_of_day = item.get("time_of_day") or self._guess_time_of_day(" ".join(str(item.get(key, "")) for key in ("location", "actions", "description")))
+        time_of_day = item.get("time_of_day") or self._guess_time_of_day(
+            " ".join(str(item.get(key, "")) for key in ("location", "actions", "description"))
+        )
         scene_type = self._guess_scene_type(location)
         group_key = item.get("scene_group_key") or f"{self._slug(location)}-{self._slug(time_of_day)}"
         profile = self._build_scene_profile(item, group_key, time_of_day, scene_type, index)
@@ -180,7 +186,9 @@ class ConsistencyService:
             previous_shot=previous_shot,
         )
         previous_reference_path = str(continuity_profile.get("continuity_reference_path") or "")
-        reference_assets = self._reference_assets(scene_refs, char_refs, previous_reference_path, weights, continuity_profile)
+        reference_assets = self._reference_assets(
+            scene_refs, char_refs, previous_reference_path, weights, continuity_profile
+        )
 
         parts = [
             self.SCENE_SOP,
@@ -194,15 +202,25 @@ class ConsistencyService:
             self._continuity_sentence(continuity_profile),
         ]
         if scene_refs:
-            parts.append("Scene baseline/reference assets are available for Provider input when the Capability Matrix reports multi-reference support; otherwise the request report will mark them not sent.")
+            parts.append(
+                "Scene baseline/reference assets are available for Provider input when the Capability Matrix reports multi-reference support; otherwise the request report will mark them not sent."
+            )
         if char_refs:
-            parts.append("Character three-view references are available for Provider input when the Capability Matrix reports multi-reference support; otherwise the request report will mark them not sent.")
+            parts.append(
+                "Character three-view references are available for Provider input when the Capability Matrix reports multi-reference support; otherwise the request report will mark them not sent."
+            )
         if continuity_profile.get("continuity_reference_used"):
-            parts.append("Previous shot last frame is used only because continuity_mode is continuous_action; no pose/depth control is implied.")
+            parts.append(
+                "Previous shot last frame is used only because continuity_mode is continuous_action; no pose/depth control is implied."
+            )
         elif continuity_profile.get("continuity_reference_reason"):
-            parts.append(f"No previous-shot image continuity is used ({continuity_profile['continuity_reference_reason']}).")
+            parts.append(
+                f"No previous-shot image continuity is used ({continuity_profile['continuity_reference_reason']})."
+            )
         if for_video:
-            parts.append("Video prompt preference: begin from the approved storyboard frame when supported, then keep scene and character cues visually coherent.")
+            parts.append(
+                "Video prompt preference: begin from the approved storyboard frame when supported, then keep scene and character cues visually coherent."
+            )
 
         for char in selected_characters:
             wardrobe = char.get("wardrobe_lock", "")
@@ -342,17 +360,42 @@ class ConsistencyService:
 
     def _has_reverse_shot_cue(self, shot: dict[str, Any], previous_shot: dict[str, Any]) -> bool:
         text = f"{self._shot_continuity_text(previous_shot)} {self._shot_continuity_text(shot)}"
-        return bool(re.search(r"reverse[_ -]?shot|over[- ]?the[- ]?shoulder|正反打|反打|对切|视线切换|互相凝视", text, re.I))
+        return bool(
+            re.search(r"reverse[_ -]?shot|over[- ]?the[- ]?shoulder|正反打|反打|对切|视线切换|互相凝视", text, re.I)
+        )
 
     def _has_continuous_action_cue(self, shot: dict[str, Any], previous_shot: dict[str, Any]) -> bool:
         text = f"{self._shot_continuity_text(previous_shot)} {self._shot_continuity_text(shot)}"
-        if re.search(r"continuous[_ -]?action|match[- ]?on[- ]?action|连续动作|动作连续|动作衔接|同一动作|接续动作", text, re.I):
+        if re.search(
+            r"continuous[_ -]?action|match[- ]?on[- ]?action|连续动作|动作连续|动作衔接|同一动作|接续动作", text, re.I
+        ):
             return True
         previous_action = self._shot_continuity_text(previous_shot)
         current_action = self._shot_continuity_text(shot)
         motion_words = (
-            "跑", "追", "冲", "跳", "摔", "落", "转身", "走", "打", "挥", "拥抱", "推", "拉",
-            "run", "chase", "jump", "fall", "turn", "walk", "fight", "hug", "push", "pull",
+            "跑",
+            "追",
+            "冲",
+            "跳",
+            "摔",
+            "落",
+            "转身",
+            "走",
+            "打",
+            "挥",
+            "拥抱",
+            "推",
+            "拉",
+            "run",
+            "chase",
+            "jump",
+            "fall",
+            "turn",
+            "walk",
+            "fight",
+            "hug",
+            "push",
+            "pull",
         )
         return any(word in previous_action and word in current_action for word in motion_words)
 
@@ -407,15 +450,21 @@ class ConsistencyService:
             "manual_storyboard_approval_required_before_video": True,
         }
 
-    def _build_scene_profile(self, scene: dict[str, Any], group_key: str, time_of_day: str, scene_type: str, index: int) -> dict[str, Any]:
+    def _build_scene_profile(
+        self, scene: dict[str, Any], group_key: str, time_of_day: str, scene_type: str, index: int
+    ) -> dict[str, Any]:
         indoor = scene_type == "indoor"
         return {
             "scene_group_key": group_key,
             "time_of_day": time_of_day,
             "scene_type": scene_type,
             "color_temperature": self._color_temperature(time_of_day, indoor),
-            "light_source_direction": "camera-left 35 degrees, slightly above eye level" if indoor else "sun direction fixed from upper camera-left",
-            "light_intensity": "soft medium" if indoor else ("low blue night ambience" if time_of_day == "night" else "bright soft daylight"),
+            "light_source_direction": "camera-left 35 degrees, slightly above eye level"
+            if indoor
+            else "sun direction fixed from upper camera-left",
+            "light_intensity": "soft medium"
+            if indoor
+            else ("low blue night ambience" if time_of_day == "night" else "bright soft daylight"),
             "weather": "locked clear weather unless script explicitly changes weather",
             "atmosphere": scene.get("emotion") or "neutral narrative atmosphere",
             "spatial_perspective": f"locked {scene.get('camera_suggestion') or 'medium'} perspective grid, axis line stable",
@@ -438,7 +487,9 @@ class ConsistencyService:
         )
 
     def _build_prop_lock(self, scene: dict[str, Any]) -> str:
-        description = scene.get("actions") or scene.get("description") or scene.get("visual_prompt") or "baseline set dressing"
+        description = (
+            scene.get("actions") or scene.get("description") or scene.get("visual_prompt") or "baseline set dressing"
+        )
         return (
             "Prop lock: preserve all visible set dressing from the baseline image, including position, scale, count and orientation. "
             f"Script-described baseline props: {self._clean_text(description)[:260]}."
@@ -575,18 +626,26 @@ class ConsistencyService:
         dialogue_text = dialogue_plain_text(parse_shot_dialogue(shot.get("dialogue")))
         text = " ".join([dialogue_text, str(shot.get("character_action", "")), str(shot.get("scene_description", ""))])
         for name in character_order[1:] + character_order[:1]:
-            if name and re.search(rf"\b(?:toward|to|looks at|faces|watching|gazes at)\s+{re.escape(name)}\b", text, re.I):
+            if name and re.search(
+                rf"\b(?:toward|to|looks at|faces|watching|gazes at)\s+{re.escape(name)}\b", text, re.I
+            ):
                 return f"maintain gaze toward {name} when they are the spoken-to or acted-on subject"
         for name in character_order[1:] + character_order[:1]:
             if name and name in text:
                 return f"maintain gaze toward {name} when they are the spoken-to or acted-on subject"
         if len(character_order) >= 2:
-            return f"{character_order[0]} gaze anchors toward {character_order[1]} unless the script names another subject"
+            return (
+                f"{character_order[0]} gaze anchors toward {character_order[1]} unless the script names another subject"
+            )
         return "maintain gaze toward the next shot core subject or the established off-screen point"
 
     def _allows_reposition(self, shot: dict[str, Any]) -> bool:
-        text = " ".join(str(shot.get(key, "")) for key in ("character_action", "scene_description", "visual_notes")).lower()
-        return bool(re.search(r"reposition|switch places|cross axis|crosses the line|turns around|walks past|exit|enter", text))
+        text = " ".join(
+            str(shot.get(key, "")) for key in ("character_action", "scene_description", "visual_notes")
+        ).lower()
+        return bool(
+            re.search(r"reposition|switch places|cross axis|crosses the line|turns around|walks past|exit|enter", text)
+        )
 
     def _reference_assets(
         self,
@@ -598,11 +657,39 @@ class ConsistencyService:
     ) -> list[dict[str, Any]]:
         assets: list[dict[str, Any]] = []
         for path in scene_refs:
-            assets.append({"type": "scene_baseline", "path": path, "role": "environment_props_lighting_perspective", "weight_policy": "text_only_policy", "required": True})
+            assets.append(
+                {
+                    "type": "scene_baseline",
+                    "path": path,
+                    "role": "environment_props_lighting_perspective",
+                    "weight_policy": "text_only_policy",
+                    "required": True,
+                }
+            )
         for path in char_refs:
-            assets.append({"type": "character_three_view", "path": path, "role": "identity_outfit_face_body_hair", "weight_policy": "text_only_policy", "required": True})
-        if previous_reference_path and continuity_profile.get("continuity_reference_used") and continuity_profile.get("continuity_mode") == "continuous_action":
-            assets.append({"type": "continuity_frame", "path": previous_reference_path, "role": "eye_line_axis_motion", "weight_policy": "text_only_policy", "required": False})
+            assets.append(
+                {
+                    "type": "character_three_view",
+                    "path": path,
+                    "role": "identity_outfit_face_body_hair",
+                    "weight_policy": "text_only_policy",
+                    "required": True,
+                }
+            )
+        if (
+            previous_reference_path
+            and continuity_profile.get("continuity_reference_used")
+            and continuity_profile.get("continuity_mode") == "continuous_action"
+        ):
+            assets.append(
+                {
+                    "type": "continuity_frame",
+                    "path": previous_reference_path,
+                    "role": "eye_line_axis_motion",
+                    "weight_policy": "text_only_policy",
+                    "required": False,
+                }
+            )
         # 没有姿态/深度控制模型，不产出 openpose/depth 类参考资产；
         # 伪造这两类图只会误导下游与展示层。
         return assets

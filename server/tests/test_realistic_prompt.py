@@ -17,10 +17,9 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from services.image_service import ImageService  # noqa: E402
 from services.style_templates import STYLE_TEMPLATES, style_prompt_params, style_template  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 POSITIVE_CONFLICT_WORDS = ("comic", "anime", "cartoon", "chibi", "cel shading", "illustration")
 REQUIRED_POSITIVE_TERMS = (
@@ -51,7 +50,11 @@ class RealisticTemplateTests(unittest.TestCase):
         for field in ("prompt_prefix", "video_prompt", "character_reference_prompt", "scene_baseline_prompt"):
             text = template[field].lower()
             for term in REQUIRED_POSITIVE_TERMS:
-                if field == "scene_baseline_prompt" and term in {"natural human anatomy", "natural skin texture", "realistic fabric"}:
+                if field == "scene_baseline_prompt" and term in {
+                    "natural human anatomy",
+                    "natural skin texture",
+                    "realistic fabric",
+                }:
                     continue  # 场景基准图不涉及人体/服装词
                 self.assertIn(term, text, f"{field} 缺少写实正向词 {term}")
 

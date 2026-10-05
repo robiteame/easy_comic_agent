@@ -197,11 +197,7 @@ class PriceResolution:
 
 
 def _rows_for(db: Session, capability: str) -> list[PricingConfig]:
-    return (
-        db.query(PricingConfig)
-        .filter(PricingConfig.capability == capability)
-        .all()
-    )
+    return db.query(PricingConfig).filter(PricingConfig.capability == capability).all()
 
 
 def _rank(row: PricingConfig, provider: str, model: str) -> int:
@@ -352,7 +348,7 @@ def list_pricing(db: Session) -> dict[str, Any]:
     grouped: dict[str, list[dict[str, Any]]] = {capability: [] for capability in CAPABILITIES}
     for row in rows:
         grouped.setdefault(str(row.capability), []).append(_row_dto(row))
-    for capability, items in grouped.items():
+    for _capability, items in grouped.items():
         items.sort(key=lambda item: (item["provider"], item["model"]))
     capabilities = []
     for capability in CAPABILITIES:

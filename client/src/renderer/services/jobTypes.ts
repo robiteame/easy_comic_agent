@@ -8,14 +8,7 @@
 
 import type { JobCostDto, JobStatsCostDto } from './costTypes'
 
-export type JobStatus =
-  | 'queued'
-  | 'running'
-  | 'cancelling'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'interrupted'
+export type JobStatus = 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
 
 export type JobType =
   | 'script_pipeline'

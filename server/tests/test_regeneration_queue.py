@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import sys
 import asyncio
 import json
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -11,14 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-from db import SessionLocal, init_db  # noqa: E402
-from main import app  # noqa: E402
-from models import BackgroundJob, Project, Shot  # noqa: E402
-from services import regeneration_queue  # noqa: E402
-from services import task_registry  # noqa: E402
 from api.routes import shot as shot_route  # noqa: E402
+from db import SessionLocal, init_db  # noqa: E402
+from models import BackgroundJob, Project, Shot  # noqa: E402
+from services import (
+    regeneration_queue,  # noqa: E402
+    task_registry,  # noqa: E402
+)
 from services.shot_version_service import create_version  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class SelectiveRegenerationQueueTests(unittest.TestCase):
@@ -176,7 +177,10 @@ class SelectiveRegenerationQueueTests(unittest.TestCase):
                 force_confirmed=True,
                 version_map={shot.id: 1},
             )
-        with patch.object(shot_route, "regenerate_shot", fake_storyboard), patch.object(shot_route, "generate_shot_video", fake_video):
+        with (
+            patch.object(shot_route, "regenerate_shot", fake_storyboard),
+            patch.object(shot_route, "generate_shot_video", fake_video),
+        ):
             asyncio.run(regeneration_queue._run_item(submission.items[0]["id"]))
             video_id = next(item["id"] for item in submission.items if item["stage"] == "video")
             asyncio.run(regeneration_queue._run_item(video_id))
@@ -221,8 +225,14 @@ class SelectiveRegenerationQueueTests(unittest.TestCase):
             return {"id": shot_id}
 
         async def run():
-            with patch.object(shot_route, "regenerate_shot", lambda shot_id, data, db: fake_stage("storyboard", shot_id, db)), \
-                patch.object(shot_route, "generate_shot_video", lambda shot_id, data, db: fake_stage("video", shot_id, db)):
+            with (
+                patch.object(
+                    shot_route, "regenerate_shot", lambda shot_id, data, db: fake_stage("storyboard", shot_id, db)
+                ),
+                patch.object(
+                    shot_route, "generate_shot_video", lambda shot_id, data, db: fake_stage("video", shot_id, db)
+                ),
+            ):
                 submission = regeneration_queue.submit(
                     self.db,
                     "queue-project",

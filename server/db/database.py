@@ -33,6 +33,8 @@ def _configure_sqlite(dbapi_connection, _connection_record) -> None:
         cursor.execute("PRAGMA busy_timeout=30000")
     finally:
         cursor.close()
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -254,9 +256,21 @@ def _backfill_video_candidate_contract() -> None:
 
     with engine.begin() as conn:
         conn.execute(text("UPDATE shot_video_candidates SET path = video_path WHERE path = '' AND video_path <> ''"))
-        conn.execute(text("UPDATE shot_video_candidates SET last_frame_path = tail_frame_path WHERE last_frame_path = '' AND tail_frame_path <> ''"))
-        conn.execute(text("UPDATE shot_video_candidates SET recipe_hash = execution_plan_hash WHERE recipe_hash = '' AND execution_plan_hash <> ''"))
-        conn.execute(text("UPDATE shot_video_candidates SET metrics = structural_metrics WHERE metrics IN ('', '{}') AND structural_metrics NOT IN ('', '{}')"))
+        conn.execute(
+            text(
+                "UPDATE shot_video_candidates SET last_frame_path = tail_frame_path WHERE last_frame_path = '' AND tail_frame_path <> ''"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE shot_video_candidates SET recipe_hash = execution_plan_hash WHERE recipe_hash = '' AND execution_plan_hash <> ''"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE shot_video_candidates SET metrics = structural_metrics WHERE metrics IN ('', '{}') AND structural_metrics NOT IN ('', '{}')"
+            )
+        )
 
 
 def _backfill_background_job_metadata() -> None:
@@ -272,9 +286,11 @@ def _backfill_background_job_metadata() -> None:
     if "background_jobs" not in inspector.get_table_names():
         return
     with engine.begin() as conn:
-        rows = conn.execute(
-            text("SELECT id, idempotency_key, scope, job_type, project_id, attempt FROM background_jobs")
-        ).mappings().all()
+        rows = (
+            conn.execute(text("SELECT id, idempotency_key, scope, job_type, project_id, attempt FROM background_jobs"))
+            .mappings()
+            .all()
+        )
         for row in rows:
             key = parse_job_key(str(row["idempotency_key"] or ""))
             scope_parts = str(row["scope"] or "").split(":")
@@ -306,33 +322,65 @@ def _ensure_sqlite_indexes() -> None:
 
     with engine.begin() as conn:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shots_project_sequence ON shots (project_id, sequence)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_projects_parent_type ON projects (parent_project_id, project_type)"))
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_projects_parent_type ON projects (parent_project_id, project_type)")
+        )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_projects_updated_at ON projects (updated_at DESC)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_background_jobs_scope_status ON background_jobs (scope, status)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_background_jobs_status_updated ON background_jobs (status, updated_at)"))
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_background_jobs_scope_status ON background_jobs (scope, status)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_background_jobs_status_updated ON background_jobs (status, updated_at)")
+        )
         # 任务中心默认按 updated_at DESC 排序，并按项目 / 类型筛选。
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_background_jobs_project_updated ON background_jobs (project_id, updated_at)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_background_jobs_type_updated ON background_jobs (job_type, updated_at)"))
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_background_jobs_project_updated ON background_jobs (project_id, updated_at)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_background_jobs_type_updated ON background_jobs (job_type, updated_at)")
+        )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_background_jobs_updated_at ON background_jobs (updated_at)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_background_jobs_queue_batch ON background_jobs (queue_batch_id, queue_position)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_background_jobs_queue_stage ON background_jobs (queue_stage, status)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_background_jobs_queue_shot ON background_jobs (queue_shot_id)"))
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_background_jobs_queue_batch ON background_jobs (queue_batch_id, queue_position)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_background_jobs_queue_stage ON background_jobs (queue_stage, status)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_background_jobs_queue_shot ON background_jobs (queue_shot_id)")
+        )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_background_jobs_scope ON background_jobs (scope)"))
         # 成本与预算：任务中心按 job_id / job_key 反查成本，统计页按项目 + 时间聚合。
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_usage_records_project_created ON usage_records (project_id, created_at)"))
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_usage_records_project_created ON usage_records (project_id, created_at)"
+            )
+        )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_usage_records_job_key ON usage_records (job_key)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_usage_records_series_created ON usage_records (series_id, created_at)"))
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_usage_records_series_created ON usage_records (series_id, created_at)")
+        )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_budget_reservations_status ON budget_reservations (status)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shot_versions_shot_number ON shot_versions (shot_id, number)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shot_versions_project ON shot_versions (project_id)"))
         # 质量审核：按镜头 + 阶段取最新一轮，按项目聚合门禁状态。
         conn.execute(
-            text("CREATE INDEX IF NOT EXISTS ix_quality_reviews_shot_stage_created ON quality_reviews (shot_id, stage, created_at)")
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_quality_reviews_shot_stage_created ON quality_reviews (shot_id, stage, created_at)"
+            )
         )
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_quality_reviews_project_stage ON quality_reviews (project_id, stage)"))
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_quality_reviews_project_stage ON quality_reviews (project_id, stage)")
+        )
         # 字幕 / 音频工作台：列表按项目读取，字幕条目按轨道 + 顺序读取。
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_subtitle_tracks_project ON subtitle_tracks (project_id)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_subtitle_cues_track_order ON subtitle_cues (track_id, order_index)"))
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_subtitle_cues_track_order ON subtitle_cues (track_id, order_index)")
+        )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_subtitle_cues_project ON subtitle_cues (project_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_audio_tracks_project_kind ON audio_tracks (project_id, kind)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_audio_tracks_project ON audio_tracks (project_id)"))
@@ -423,9 +471,11 @@ def _repair_project_tree() -> int:
     if "projects" not in inspect(engine).get_table_names():
         return 0
     with engine.begin() as conn:
-        rows = conn.execute(
-            text("SELECT id, parent_project_id, project_type, episode_number FROM projects")
-        ).mappings().all()
+        rows = (
+            conn.execute(text("SELECT id, parent_project_id, project_type, episode_number FROM projects"))
+            .mappings()
+            .all()
+        )
         if not rows:
             return 0
         types = {

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import atexit
 import inspect
 import json
-import atexit
 import shutil
 import sys
 import tempfile
@@ -19,9 +19,8 @@ from config import settings
 from services.consistency_service import ConsistencyService
 from services.ffmpeg_service import FFmpegService
 from services.image_service import ImageService
-from services.video_service import SeedanceVideoService
 from services.providers.video_ark_seedance import ArkSeedanceVideoAdapter
-
+from services.video_service import SeedanceVideoService
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -93,9 +92,15 @@ def main() -> None:
     atexit.register(shutil.rmtree, fixture_root, ignore_errors=True)
     consistency = ConsistencyService()
 
-    morning_scene = consistency.enrich_scene({"location": "classroom", "time_of_day": "morning", "actions": "desks by window"}, 0)
-    same_morning_scene = consistency.enrich_scene({"location": "classroom", "time_of_day": "morning", "actions": "desks by window"}, 1)
-    night_scene = consistency.enrich_scene({"location": "classroom", "time_of_day": "night", "actions": "desks by moonlight"}, 2)
+    morning_scene = consistency.enrich_scene(
+        {"location": "classroom", "time_of_day": "morning", "actions": "desks by window"}, 0
+    )
+    same_morning_scene = consistency.enrich_scene(
+        {"location": "classroom", "time_of_day": "morning", "actions": "desks by window"}, 1
+    )
+    night_scene = consistency.enrich_scene(
+        {"location": "classroom", "time_of_day": "night", "actions": "desks by moonlight"}, 2
+    )
     checks.append(
         _assert(
             morning_scene["scene_group_key"] == same_morning_scene["scene_group_key"],
@@ -111,7 +116,16 @@ def main() -> None:
         )
     )
     scene_profile = morning_scene["consistency_profile"]
-    locked_scene_fields = {"color_temperature", "light_source_direction", "light_intensity", "weather", "atmosphere", "spatial_perspective", "axis_rule", "lut"}
+    locked_scene_fields = {
+        "color_temperature",
+        "light_source_direction",
+        "light_intensity",
+        "weather",
+        "atmosphere",
+        "spatial_perspective",
+        "axis_rule",
+        "lut",
+    }
     checks.append(
         _assert(
             locked_scene_fields.issubset(scene_profile),
@@ -121,7 +135,8 @@ def main() -> None:
     )
     checks.append(
         _assert(
-            "Prop lock:" in morning_scene["prop_lock"] and "position, scale, count and orientation" in morning_scene["prop_lock"],
+            "Prop lock:" in morning_scene["prop_lock"]
+            and "position, scale, count and orientation" in morning_scene["prop_lock"],
             "scene_baseline_prop_lock",
             morning_scene["prop_lock"],
         )
@@ -146,14 +161,20 @@ def main() -> None:
     config = consistency.project_config()
     checks.append(
         _assert(
-            config["rules_override_single_shot_customization"] and config["manual_storyboard_approval_required_before_video"],
+            config["rules_override_single_shot_customization"]
+            and config["manual_storyboard_approval_required_before_video"],
             "project_sop_config_gates",
             json.dumps(config, ensure_ascii=False),
         )
     )
 
-    character_a = consistency.enrich_character({"id": "char1", "name": "Xia", "appearance": {"default_outfit": "uniform"}, "reference_images": ["char_a.png"]}, 0)
-    character_b = consistency.enrich_character({"id": "char2", "name": "Bo", "appearance": {"default_outfit": "hoodie"}, "reference_images": ["char_b.png"]}, 1)
+    character_a = consistency.enrich_character(
+        {"id": "char1", "name": "Xia", "appearance": {"default_outfit": "uniform"}, "reference_images": ["char_a.png"]},
+        0,
+    )
+    character_b = consistency.enrich_character(
+        {"id": "char2", "name": "Bo", "appearance": {"default_outfit": "hoodie"}, "reference_images": ["char_b.png"]}, 1
+    )
     checks.append(
         _assert(
             not character_a.get("lora_profile")
@@ -164,7 +185,9 @@ def main() -> None:
         )
     )
 
-    morning_scene.update({"id": "scene1", "baseline_image_path": "scene_base.png", "reference_images": ["scene_base.png"]})
+    morning_scene.update(
+        {"id": "scene1", "baseline_image_path": "scene_base.png", "reference_images": ["scene_base.png"]}
+    )
     generation_shot = {
         "shot_id": "shot1",
         "shot_type": "medium",
@@ -204,9 +227,18 @@ def main() -> None:
     )
     checks.append(
         _assert(
-            any(asset["type"] == "scene_baseline" and asset["required"] for asset in generation_context["reference_assets"])
-            and any(asset["type"] == "character_three_view" and asset["required"] for asset in generation_context["reference_assets"])
-            and any(asset["type"] == "continuity_frame" and asset["required"] for asset in generation_context["reference_assets"]),
+            any(
+                asset["type"] == "scene_baseline" and asset["required"]
+                for asset in generation_context["reference_assets"]
+            )
+            and any(
+                asset["type"] == "character_three_view" and asset["required"]
+                for asset in generation_context["reference_assets"]
+            )
+            and any(
+                asset["type"] == "continuity_frame" and asset["required"]
+                for asset in generation_context["reference_assets"]
+            ),
             "persisted_reference_assets_required",
             ",".join(asset["type"] for asset in generation_context["reference_assets"]),
         )
@@ -221,10 +253,13 @@ def main() -> None:
     )
 
     image_service = ImageService()
-    image_prompt, _ = image_service._build_prompt({**generation_shot, **generation_context}, [character_a, character_b], {})
+    image_prompt, _ = image_service._build_prompt(
+        {**generation_shot, **generation_context}, [character_a, character_b], {}
+    )
     checks.append(
         _assert(
-            "locked character blocking" in image_prompt and "scene baseline/reference assets are loaded" in image_prompt,
+            "locked character blocking" in image_prompt
+            and "scene baseline/reference assets are loaded" in image_prompt,
             "image_prompt_contains_sop_context",
             image_prompt[:220],
         )
@@ -236,7 +271,9 @@ def main() -> None:
         {"type": "character_three_view", "path": "char_a.png", "loaded": True},
         {"type": "continuity_frame", "path": "previous_last.png", "loaded": True},
     ]
-    video_prompt = video_service._build_prompt({**generation_shot, **generation_context}, [character_a, character_b], {"scene1": morning_scene})
+    video_prompt = video_service._build_prompt(
+        {**generation_shot, **generation_context}, [character_a, character_b], {"scene1": morning_scene}
+    )
     checks.append(
         _assert(
             "locked character blocking" in video_prompt
@@ -278,7 +315,8 @@ def main() -> None:
     not_reusable = _shot(status="storyboard_approved", video_path="video.mp4")
     checks.append(
         _assert(
-            shot_route._can_reuse_existing_video(reusable, False) and not shot_route._can_reuse_existing_video(not_reusable, False),
+            shot_route._can_reuse_existing_video(reusable, False)
+            and not shot_route._can_reuse_existing_video(not_reusable, False),
             "stale_video_reuse_gate",
             "status must be video_done",
         )
@@ -296,7 +334,13 @@ def main() -> None:
             "confirmed revoked, media paths preserved with stale marker",
         )
     )
-    previous = _shot(sequence=1, scene_group_id="classroom-morning", scene_asset_id="sceneA", storyboard_path="prev_story.png", last_frame_path="prev_last.png")
+    previous = _shot(
+        sequence=1,
+        scene_group_id="classroom-morning",
+        scene_asset_id="sceneA",
+        storyboard_path="prev_story.png",
+        last_frame_path="prev_last.png",
+    )
     current = _shot(sequence=2, scene_group_id="classroom-morning", scene_asset_id="sceneB")
     other = _shot(sequence=2, scene_group_id="street-night", scene_asset_id="sceneC")
     checks.append(
@@ -311,7 +355,10 @@ def main() -> None:
     render_shots = [
         {"scene_group_id": "classroom-morning", "continuity_profile": generation_context["continuity_profile"]},
         {"scene_group_id": "classroom-morning", "continuity_profile": generation_context["continuity_profile"]},
-        {"scene_group_id": "street-night", "continuity_profile": {**generation_context["continuity_profile"], "lut": "night_lut"}},
+        {
+            "scene_group_id": "street-night",
+            "continuity_profile": {**generation_context["continuity_profile"], "lut": "night_lut"},
+        },
     ]
     _apply_post_profiles(render_shots)
     ffmpeg = FFmpegService()

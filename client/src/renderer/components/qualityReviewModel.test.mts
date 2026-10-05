@@ -69,10 +69,7 @@ test('gateLine describes threshold, policy and retries', () => {
 
 test('hasUndetected is true for degraded rows or rows listing unsupported dimensions', () => {
   assert.equal(hasUndetected(reviewRow({ degraded: true })), true)
-  assert.equal(
-    hasUndetected(reviewRow({ unsupported_dimensions: ['角色身份一致性'] })),
-    true,
-  )
+  assert.equal(hasUndetected(reviewRow({ unsupported_dimensions: ['角色身份一致性'] })), true)
   assert.equal(hasUndetected(reviewRow()), false)
 })
 
@@ -94,8 +91,13 @@ test('qualityBadgeFor surfaces unsupported before pass and null when unreviewed'
 
   const unsupported = qualityBadgeFor({
     storyboard: {
-      verdict: 'unsupported', passed: false, overall_score: 0.8, attempt: 1,
-      degraded: false, issues_count: 1, unsupported: ['角色身份一致性'],
+      verdict: 'unsupported',
+      passed: false,
+      overall_score: 0.8,
+      attempt: 1,
+      degraded: false,
+      issues_count: 1,
+      unsupported: ['角色身份一致性'],
     },
   })
   assert.equal(unsupported?.label, '未检测')
@@ -103,16 +105,26 @@ test('qualityBadgeFor surfaces unsupported before pass and null when unreviewed'
 
   const failed = qualityBadgeFor({
     storyboard: {
-      verdict: 'failed', passed: false, overall_score: 0.4, attempt: 1,
-      degraded: false, issues_count: 2, unsupported: [],
+      verdict: 'failed',
+      passed: false,
+      overall_score: 0.4,
+      attempt: 1,
+      degraded: false,
+      issues_count: 2,
+      unsupported: [],
     },
   })
   assert.equal(failed?.label, '质量未通过')
 
   const passed = qualityBadgeFor({
     storyboard: {
-      verdict: 'passed', passed: true, overall_score: 0.9, attempt: 1,
-      degraded: false, issues_count: 0, unsupported: [],
+      verdict: 'passed',
+      passed: true,
+      overall_score: 0.9,
+      attempt: 1,
+      degraded: false,
+      issues_count: 0,
+      unsupported: [],
     },
   })
   assert.equal(passed?.label, '质检通过')

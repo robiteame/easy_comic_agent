@@ -73,7 +73,10 @@ test('导入配置读取 system_prompt：完整方案与单 Agent 文件都保�
   assert.equal(singleAgent!.storyboard_agent.system_prompt, CUSTOM_SCRIPT_PROMPT)
 
   // 缺少 system_prompt 的旧文件导入后回落空串（= 使用默认提示词）。
-  const legacyFile = importSkillTemplate({ script_agent: { camera_composition: 'wide shot' }, storyboard_agent: {} }, current)
+  const legacyFile = importSkillTemplate(
+    { script_agent: { camera_composition: 'wide shot' }, storyboard_agent: {} },
+    current,
+  )
   assert.ok(legacyFile)
   assert.equal(legacyFile!.script_agent.system_prompt, '')
   assert.equal(legacyFile!.storyboard_agent.system_prompt, '')

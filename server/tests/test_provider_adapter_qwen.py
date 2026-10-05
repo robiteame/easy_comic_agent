@@ -12,12 +12,11 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from services.providers.base import ImageRequest  # noqa: E402
 from services.providers.endpoint import EndpointConfig, normalize_protocol, settings_defaults  # noqa: E402
 from services.providers.image_qwen import QwenImageAdapter  # noqa: E402
 from services.providers.registry import get_adapter  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class _FakeResponse:
@@ -101,9 +100,7 @@ class QwenImageAdapterTests(unittest.TestCase):
         self.adapter = QwenImageAdapter(_endpoint())
 
     def test_payload_uses_native_dashscope_shape(self) -> None:
-        payload = self.adapter._payload(
-            ImageRequest(prompt="一只猫", negative_prompt="文字", seed=7, size="1440x2560")
-        )
+        payload = self.adapter._payload(ImageRequest(prompt="一只猫", negative_prompt="文字", seed=7, size="1440x2560"))
         self.assertEqual(payload["model"], "qwen-image-plus")
         self.assertEqual(payload["input"], {"prompt": "一只猫"})
         self.assertEqual(payload["parameters"]["negative_prompt"], "文字")
@@ -120,7 +117,9 @@ class QwenImageAdapterTests(unittest.TestCase):
             )
         )
         payload = adapter._compatible_payload(ImageRequest(prompt="一只猫", size="1440*2560"))
-        self.assertEqual(adapter._compatible_url(), "https://dashscope.aliyuncs.com/compatible-mode/v1/images/generations")
+        self.assertEqual(
+            adapter._compatible_url(), "https://dashscope.aliyuncs.com/compatible-mode/v1/images/generations"
+        )
         self.assertEqual(payload["model"], "qwen-image-3.0")
         self.assertEqual(payload["prompt"], "一只猫")
         self.assertEqual(payload["size"], "1440x2560")

@@ -17,13 +17,7 @@ import { create } from 'zustand'
 
 import { mergeDebugEvents } from '../components/progressDebugModel.ts'
 
-import type {
-  JobActionResult,
-  JobDebugEvent,
-  JobDetailDto,
-  JobDto,
-  JobEvent,
-} from '../services/jobTypes.ts'
+import type { JobActionResult, JobDebugEvent, JobDetailDto, JobDto, JobEvent } from '../services/jobTypes.ts'
 import { createJobsWebSocket, describeJobApiError, jobApi } from '../services/api.ts'
 import {
   ACTIVE_STATUSES,
@@ -257,29 +251,26 @@ function openSocket(): void {
 
   let next: SocketLike
   try {
-    next = socketFactory(
-      (payload) => handleSocketMessage(epoch, payload),
-      {
-        onOpen: () => {
-          if (epoch !== socketEpoch) return
-          useTaskStore.setState({ connectionState: 'open', reconnectAttempt: 0, error: '' })
-          // 重连（以及首次连接）后都必须重新取一次 REST 快照：只靠增量事件无法
-          // 保证断线期间发生的状态变化被补齐。
-          void useTaskStore.getState().sync({ silent: true })
-        },
-        onClose: () => {
-          if (epoch !== socketEpoch) return
-          useTaskStore.setState({ connectionState: 'closed' })
-          scheduleReconnect()
-        },
-        onError: () => {
-          if (epoch !== socketEpoch) return
-          useTaskStore.setState({ connectionState: 'error' })
-          scheduleReconnect()
-        },
+    next = socketFactory((payload) => handleSocketMessage(epoch, payload), {
+      onOpen: () => {
+        if (epoch !== socketEpoch) return
+        useTaskStore.setState({ connectionState: 'open', reconnectAttempt: 0, error: '' })
+        // 重连（以及首次连接）后都必须重新取一次 REST 快照：只靠增量事件无法
+        // 保证断线期间发生的状态变化被补齐。
+        void useTaskStore.getState().sync({ silent: true })
       },
-    )
-  } catch (error) {
+      onClose: () => {
+        if (epoch !== socketEpoch) return
+        useTaskStore.setState({ connectionState: 'closed' })
+        scheduleReconnect()
+      },
+      onError: () => {
+        if (epoch !== socketEpoch) return
+        useTaskStore.setState({ connectionState: 'error' })
+        scheduleReconnect()
+      },
+    })
+  } catch (_error) {
     useTaskStore.setState({ connectionState: 'error' })
     scheduleReconnect()
     return
@@ -298,7 +289,7 @@ function closeSocket(): void {
   current.onmessage = null
   try {
     current.close()
-  } catch (error) {
+  } catch (_error) {
     // 关闭失败不影响状态清理
   }
 }
@@ -391,8 +382,7 @@ export const useTaskStore = create<TaskStoreState>((set, get) => ({
 
   requestResume: (jobId) => runJobAction(jobId, () => jobApi.resume(jobId), '已从已有产物继续执行'),
 
-  requestDelete: (jobId) =>
-    runJobAction(jobId, () => jobApi.remove(jobId), '任务记录已清理', { dropLocalJob: true }),
+  requestDelete: (jobId) => runJobAction(jobId, () => jobApi.remove(jobId), '任务记录已清理', { dropLocalJob: true }),
 
   cleanupHistory: async () => {
     const filters = get().filters

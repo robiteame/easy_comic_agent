@@ -52,9 +52,7 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
         {STATUS_CANCELLING, STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED, STATUS_INTERRUPTED}
     ),
     # cancelling 只允许收敛到终态：由持有 run token 的协程或作用域取消负责。
-    STATUS_CANCELLING: frozenset(
-        {STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED, STATUS_INTERRUPTED}
-    ),
+    STATUS_CANCELLING: frozenset({STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED, STATUS_INTERRUPTED}),
     STATUS_COMPLETED: frozenset(),
     STATUS_FAILED: frozenset(),
     STATUS_CANCELLED: frozenset(),
@@ -269,7 +267,23 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ERROR_CODE_INVALID_REQUEST,
         ("400", "invalid parameter", "invalidparameter", "badrequest", "参数错误", "参数无效", "参数不合法"),
     ),
-    (ERROR_CODE_PROVIDER, ("provider", "供应商", "connection", "connect", "http", "500", "502", "503", "504", "404", "internal server", "服务端错误")),
+    (
+        ERROR_CODE_PROVIDER,
+        (
+            "provider",
+            "供应商",
+            "connection",
+            "connect",
+            "http",
+            "500",
+            "502",
+            "503",
+            "504",
+            "404",
+            "internal server",
+            "服务端错误",
+        ),
+    ),
     (ERROR_CODE_STORAGE, ("disk", "storage", "no space", "磁盘", "存储")),
 )
 

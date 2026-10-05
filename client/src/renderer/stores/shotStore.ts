@@ -73,7 +73,7 @@ interface ShotState {
   reorderShots: (newOrder: string[]) => void
 }
 
-export const useShotStore = create<ShotState>((set, get) => ({
+export const useShotStore = create<ShotState>((set, _get) => ({
   shots: [],
   selectedShotId: null,
   isGenerating: false,
@@ -120,15 +120,12 @@ export const useShotStore = create<ShotState>((set, get) => ({
 
   addShot: (shot) => set((state) => ({ shots: [...state.shots, shot] })),
 
-  removeShot: (id) =>
-    set((state) => ({ shots: state.shots.filter((s) => s.id !== id) })),
+  removeShot: (id) => set((state) => ({ shots: state.shots.filter((s) => s.id !== id) })),
 
   reorderShots: (newOrder) =>
     set((state) => {
       const shotMap = new Map(state.shots.map((s) => [s.id, s]))
-      const reordered = newOrder
-        .map((id) => shotMap.get(id))
-        .filter(Boolean) as Shot[]
+      const reordered = newOrder.map((id) => shotMap.get(id)).filter(Boolean) as Shot[]
       return { shots: reordered }
     }),
 }))

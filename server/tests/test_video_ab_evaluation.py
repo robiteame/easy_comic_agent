@@ -14,16 +14,15 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from config import settings  # noqa: E402
 from services.video_ab_evaluation import (  # noqa: E402
-    STRATEGY_ORDER,
     SHOT_TYPE_ORDER,
+    STRATEGY_ORDER,
     VideoABEvaluationError,
     build_evaluation_report,
     load_evaluation_payload,
 )
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 FIXTURE_PATH = _SERVER_DIR / "tests" / "fixtures" / "video_ab_evaluation" / "fixture.json"
 CLI_PATH = _SERVER_DIR / "scripts" / "video_ab_evaluate.py"
@@ -103,9 +102,7 @@ class VideoABFixtureFlowTests(unittest.TestCase):
     def test_incomplete_strategy_matrix_is_rejected(self) -> None:
         payload = copy.deepcopy(load_evaluation_payload(FIXTURE_PATH))
         payload["results"] = [
-            item
-            for item in payload["results"]
-            if not (item["shot_id"] == "cross_001" and item["strategy_id"] == "D")
+            item for item in payload["results"] if not (item["shot_id"] == "cross_001" and item["strategy_id"] == "D")
         ]
 
         with self.assertRaisesRegex(VideoABEvaluationError, "四策略必须覆盖同一批镜头"):

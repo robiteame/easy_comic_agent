@@ -97,7 +97,9 @@ def main() -> int:
             return 0
 
         for shot, version in plan:
-            print(f"[可恢复] 项目 {shot.project_id} 镜头 {shot.sequence} ({shot.id}) ← 版本 #{version.number} ({version.id})")
+            print(
+                f"[可恢复] 项目 {shot.project_id} 镜头 {shot.sequence} ({shot.id}) ← 版本 #{version.number} ({version.id})"
+            )
         for shot, reason in skipped:
             print(f"[跳过]   项目 {shot.project_id} 镜头 {shot.sequence} ({shot.id}): {reason}")
 

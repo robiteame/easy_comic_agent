@@ -21,14 +21,13 @@ _SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from test_environment import TEST_ROOT  # noqa: F401,E402
-
 from fastapi.testclient import TestClient  # noqa: E402
 
 from config import settings  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
-from models import BackgroundJob, Character, Project, SceneAsset, Shot  # noqa: E402
 from main import app  # noqa: E402
+from models import BackgroundJob, Character, Project, SceneAsset, Shot  # noqa: E402
+from test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _post_json(client: TestClient, url: str, body: str):
@@ -87,7 +86,12 @@ class ProjectDtoValidationTests(ValidationTestCase):
         self.assertEqual(response.status_code, 422)
 
     def test_unknown_output_format_and_resolution_are_rejected(self) -> None:
-        for field, value in (("output_format", "21:9"), ("output_format", "9-16"), ("resolution", "8k"), ("resolution", "1080")):
+        for field, value in (
+            ("output_format", "21:9"),
+            ("output_format", "9-16"),
+            ("resolution", "8k"),
+            ("resolution", "1080"),
+        ):
             with self.subTest(field=field, value=value):
                 response = self.client.post("/api/project", json={"title": "x", field: value})
                 self.assertEqual(response.status_code, 422)
@@ -125,9 +129,13 @@ class ProjectDtoValidationTests(ValidationTestCase):
                 self.assertEqual(response.status_code, 422)
 
     def test_style_and_parent_identifier_formats_are_validated(self) -> None:
-        self.assertEqual(self.client.post("/api/project", json={"title": "x", "style": "../etc/passwd"}).status_code, 422)
+        self.assertEqual(
+            self.client.post("/api/project", json={"title": "x", "style": "../etc/passwd"}).status_code, 422
+        )
         self.assertEqual(self.client.post("/api/project", json={"title": "x", "style": ""}).status_code, 422)
-        self.assertEqual(self.client.post("/api/project", json={"title": "x", "parent_project_id": "../outside"}).status_code, 422)
+        self.assertEqual(
+            self.client.post("/api/project", json={"title": "x", "parent_project_id": "../outside"}).status_code, 422
+        )
 
     def test_update_rejects_invalid_values_without_writing(self) -> None:
         project_id = self.create_project()
@@ -215,7 +223,9 @@ class ScriptDtoValidationTests(ValidationTestCase):
         too_long = "p" * (settings.MAX_GENERATION_PROMPT_CHARS + 1)
         self.assertEqual(self.client.post("/api/script/generate", json={"prompt": too_long}).status_code, 422)
         self.assertEqual(self.client.post("/api/script/generate", json={"prompt": "   "}).status_code, 422)
-        self.assertEqual(self.client.post("/api/script/generate", json={"prompt": "ok", "target_duration": 0}).status_code, 422)
+        self.assertEqual(
+            self.client.post("/api/script/generate", json={"prompt": "ok", "target_duration": 0}).status_code, 422
+        )
 
 
 class ShotDtoValidationTests(ValidationTestCase):
@@ -402,7 +412,7 @@ class AssetDtoValidationTests(ValidationTestCase):
         )
         self.assertEqual(response.status_code, 422)
         response = self.client.put(
-            f"/api/asset/shot/../escape",
+            "/api/asset/shot/../escape",
             json={"project_id": self.project_id},
         )
         self.assertNotEqual(response.status_code, 200)

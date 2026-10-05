@@ -86,7 +86,14 @@ test('时间码格式化', () => {
 test('轨道片段：对白轨使用镜头区间，普通轨含延迟，循环轨铺满全片', () => {
   const clips = buildTrackClips(
     [
-      makeTrack({ id: 'd1', kind: 'dialogue', shot_id: 's2', shot_span: { start_ms: 2000, end_ms: 5000 }, delay_ms: 100, source_duration_ms: 2500 }),
+      makeTrack({
+        id: 'd1',
+        kind: 'dialogue',
+        shot_id: 's2',
+        shot_span: { start_ms: 2000, end_ms: 5000 },
+        delay_ms: 100,
+        source_duration_ms: 2500,
+      }),
       makeTrack({ id: 'm1', kind: 'music', start_ms: 1000, delay_ms: 500 }),
       makeTrack({ id: 'a1', kind: 'ambient', loop: true, start_ms: 0 }),
     ],

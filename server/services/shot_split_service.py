@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import uuid
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -105,11 +105,7 @@ def persist_split_shot(
         raise ShotSplitUnsafe("parts must be between 2 and 32")
 
     project = db.query(Project).filter(Project.id == project_id).first()
-    shot = (
-        db.query(Shot)
-        .filter(Shot.project_id == project_id, Shot.id == shot_id)
-        .first()
-    )
+    shot = db.query(Shot).filter(Shot.project_id == project_id, Shot.id == shot_id).first()
     if project is None or shot is None:
         raise ShotSplitNotFound(f"shot not found: {shot_id}")
 
@@ -149,12 +145,7 @@ def persist_split_shot(
 
     source = _shot_mapping(shot)
     source_plan = load_shot_execution_plan(source)
-    all_rows = (
-        db.query(Shot)
-        .filter(Shot.project_id == project_id)
-        .order_by(Shot.sequence, Shot.id)
-        .all()
-    )
+    all_rows = db.query(Shot).filter(Shot.project_id == project_id).order_by(Shot.sequence, Shot.id).all()
     existing_ids = {str(row.id) for row in all_rows}
     planned = split_shot(source, requested_parts, reason=str(reason or "自动恢复拆镜"))
     if len(planned) < requested_parts:
@@ -306,19 +297,28 @@ def _existing_operation_result(
     expected_parts: int | None = None,
     expected_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    rows = (
-        db.query(Shot)
-        .filter(Shot.project_id == project_id)
-        .order_by(Shot.sequence, Shot.id)
-        .all()
-    )
+    rows = db.query(Shot).filter(Shot.project_id == project_id).order_by(Shot.sequence, Shot.id).all()
     selected = [row for row in rows if _split_metadata(row).get("operation_id") == operation_id]
     selected.sort(key=lambda row: int(row.sequence or 0))
     selected_ids = [str(row.id) for row in selected]
     if expected_parts is not None and len(selected) != int(expected_parts):
-        return {"project_id": project_id, "source_shot_id": source_id, "shot_ids": [], "parts": 0, "versions": {}, "sequence": {}}
+        return {
+            "project_id": project_id,
+            "source_shot_id": source_id,
+            "shot_ids": [],
+            "parts": 0,
+            "versions": {},
+            "sequence": {},
+        }
     if expected_ids is not None and selected_ids != list(expected_ids):
-        return {"project_id": project_id, "source_shot_id": source_id, "shot_ids": [], "parts": 0, "versions": {}, "sequence": {}}
+        return {
+            "project_id": project_id,
+            "source_shot_id": source_id,
+            "shot_ids": [],
+            "parts": 0,
+            "versions": {},
+            "sequence": {},
+        }
     # Every marked part must still be pending/recoverable and carry the same
     # operation marker.  A partially edited or externally regenerated part is
     # not safe to silently accept as an idempotent replay.
@@ -328,7 +328,14 @@ def _existing_operation_result(
         or int(_split_metadata(row).get("requested_parts") or len(selected)) > len(selected)
         for row in selected
     ):
-        return {"project_id": project_id, "source_shot_id": source_id, "shot_ids": [], "parts": 0, "versions": {}, "sequence": {}}
+        return {
+            "project_id": project_id,
+            "source_shot_id": source_id,
+            "shot_ids": [],
+            "parts": 0,
+            "versions": {},
+            "sequence": {},
+        }
     return {
         "project_id": project_id,
         "source_shot_id": source_id,
@@ -393,7 +400,9 @@ def _profile_for_part(
     return profile
 
 
-def _apply_part(target: Shot, source: Mapping[str, Any], item: dict[str, Any], profile: dict[str, Any], *, sequence: int) -> None:
+def _apply_part(
+    target: Shot, source: Mapping[str, Any], item: dict[str, Any], profile: dict[str, Any], *, sequence: int
+) -> None:
     target.project_id = str(source.get("project_id") or target.project_id or "")
     target.sequence = sequence
     for field in _COPY_FIELDS:
@@ -408,7 +417,9 @@ def _apply_part(target: Shot, source: Mapping[str, Any], item: dict[str, Any], p
     target.estimated_speech_ms = int(item.get("estimated_speech_ms") or 0)
     target.emotion = str(item.get("emotion") or source.get("emotion") or "neutral")
     target.transition = str(item.get("transition") or source.get("transition") or "cut")
-    target.characters_in_scene = json.dumps(item.get("characters_in_scene") or _json_value(source.get("characters_in_scene"), []), ensure_ascii=False)
+    target.characters_in_scene = json.dumps(
+        item.get("characters_in_scene") or _json_value(source.get("characters_in_scene"), []), ensure_ascii=False
+    )
     target.continuity_profile = json.dumps(profile, ensure_ascii=False)
     target.version = int(source.get("version") or 1) + 1 if target.id == str(source.get("id") or "") else 1
     target.confirmed = False

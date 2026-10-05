@@ -281,7 +281,10 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
     def _is_reference_to_video_model(self) -> bool:
         """r2v（参考生视频）模型，以模型级生效能力声明为准。"""
 
-        return str(getattr(self.effective_capabilities(self.endpoint.model), "reference_mode", "") or "") == "multi_reference"
+        return (
+            str(getattr(self.effective_capabilities(self.endpoint.model), "reference_mode", "") or "")
+            == "multi_reference"
+        )
 
     def _uses_media_input(self) -> bool:
         """Wan 2.7 / 3.0 新一代接口以 input.media 数组承载参考素材。"""
@@ -339,7 +342,7 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
                 proc.kill()
             await proc.communicate()
             raise
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             proc.kill()
             await proc.communicate()
             raise TimeoutError("提取百炼单帧超时") from exc

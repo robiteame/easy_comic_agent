@@ -20,13 +20,7 @@ export const RUNTIME_BUILD_SCRIPT_VERSION = 2
 export const MISSING_REQUIREMENTS_LOCK_SHA256 = 'missing'
 
 // 必须逐项比对且不允许缺失的字段。
-const MARKER_FIELDS = [
-  'schemaVersion',
-  'scriptVersion',
-  'asset',
-  'assetSha256',
-  'requirementsLockSha256',
-]
+const MARKER_FIELDS = ['schemaVersion', 'scriptVersion', 'asset', 'assetSha256', 'requirementsLockSha256']
 
 // 期望值必须是有效值(非空字符串或整数),否则一律视为不匹配,
 // 避免 undefined === undefined 之类的"假命中"。
@@ -49,7 +43,5 @@ export function createRuntimeMarker({ asset, assetSha256, requirementsLockSha256
 export function markerMatches(cached, expected) {
   if (!cached || typeof cached !== 'object' || Array.isArray(cached)) return false
   if (!expected || typeof expected !== 'object') return false
-  return MARKER_FIELDS.every(
-    (field) => isUsableExpectedValue(expected[field]) && cached[field] === expected[field],
-  )
+  return MARKER_FIELDS.every((field) => isUsableExpectedValue(expected[field]) && cached[field] === expected[field])
 }
