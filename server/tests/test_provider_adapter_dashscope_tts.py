@@ -8,16 +8,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import struct
-import sys
 import unittest
 import wave
 from io import BytesIO
-from pathlib import Path
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from services.providers.endpoint import (  # noqa: E402
     EndpointConfig,
@@ -30,7 +24,7 @@ from services.providers.tts_dashscope import (  # noqa: E402
     normalize_dashscope_voice,
 )
 from services.providers.usage import CAPABILITY_TTS  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class _FakeResponse:

@@ -7,15 +7,9 @@
 from __future__ import annotations
 
 import json
-import sys
 import threading
 import unittest
 import uuid
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from db import SessionLocal, init_db  # noqa: E402
 from models import CostEstimate, PricingConfig, Project, Shot, UsageRecord  # noqa: E402
@@ -34,7 +28,7 @@ from services.providers.usage import (  # noqa: E402
     usage_from_chat_response,
 )
 from services.providers.video_ark_seedance import ArkSeedanceVideoAdapter  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 init_db()
 

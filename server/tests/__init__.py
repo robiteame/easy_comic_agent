@@ -12,11 +12,4 @@ tests/conftest.py 相同，这里必须在任何测试模块导入 services/conf
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
-
-import test_environment  # noqa: E402,F401
+from tests.support import test_environment  # noqa: F401

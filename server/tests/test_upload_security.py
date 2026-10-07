@@ -1,18 +1,13 @@
 from __future__ import annotations
 
 import stat
-import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
 
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
-
 from services.security import validate_script_upload
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class DocxUploadSecurityTests(unittest.TestCase):

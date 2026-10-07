@@ -1,0 +1,96 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --green: #4f7fd8;
+  --green-deep: #345fba;
+  --green-soft: rgba(79, 127, 216, 0.13);
+  --green-ring: rgba(79, 127, 216, 0.15);
+  --green-request: rgba(79, 127, 216, 0.11);
+  --red-soft: rgba(178, 105, 105, 0.13);
+  --amber: #b89266;
+  --red: #b26969;
+  --paper: #ffffff;
+  --paper-soft: #fdfefe;
+  --glass: rgba(255, 255, 255, 0.72);
+  --glass-strong: rgba(255, 255, 255, 0.84);
+  --text: #27313a;
+  --text-secondary: #647385;
+  /* Auxiliary text remains readable on paper surfaces at WCAG AA contrast. */
+  --text-tertiary: #647385;
+  --text-quaternary: #5d6e80;
+  --line: #d7e1ec;
+  --line-soft: #e5edf5;
+  --cool-gray: #7f8e9f;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-body: 13px;
+  --font-label: 12px;
+  --font-meta: 11px;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 8px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+  --dur-slow: 320ms;
+  --soft-shadow: 0 1px 2px rgba(31, 37, 45, 0.06);
+
+  /* Compatibility aliases for existing component inline styles. */
+  --white: var(--paper);
+  --gray: var(--text-tertiary);
+  --orange: var(--amber);
+  --cream-soft: var(--paper-soft);
+}
+
+:root[data-theme='black'] {
+  --green: #78a2f2;
+  --green-deep: #9ab9ff;
+  --green-soft: rgba(120, 162, 242, 0.16);
+  --green-ring: rgba(120, 162, 242, 0.22);
+  --green-request: rgba(120, 162, 242, 0.14);
+  --red-soft: rgba(224, 131, 131, 0.15);
+  --amber: #d9aa70;
+  --red: #e08383;
+  --paper: #131820;
+  --paper-soft: #0f141b;
+  --glass: rgba(19, 24, 32, 0.74);
+  --glass-strong: rgba(25, 31, 41, 0.88);
+  --text: #edf3fb;
+  --text-secondary: #b4c0cf;
+  --text-tertiary: #8996a8;
+  --text-quaternary: #687586;
+  --line: #313b49;
+  --line-soft: #252d38;
+  --cool-gray: #98a5b7;
+  --soft-shadow: 0 16px 42px rgba(0, 0, 0, 0.26);
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+html {
+  background: transparent;
+}
+
+body {
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--font-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}

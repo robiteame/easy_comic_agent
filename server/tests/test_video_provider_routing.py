@@ -17,15 +17,10 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from PIL import Image  # noqa: E402
 
@@ -41,7 +36,7 @@ from services.providers.endpoint import EndpointConfig  # noqa: E402
 from services.providers.video_ark_seedance import ArkSeedanceVideoAdapter  # noqa: E402
 from services.providers.video_dashscope_wanx import DashscopeWanxVideoAdapter  # noqa: E402
 from services.video_service import VideoService  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 SEEDANCE_ENDPOINT = EndpointConfig(
     protocol="ark-seedance",

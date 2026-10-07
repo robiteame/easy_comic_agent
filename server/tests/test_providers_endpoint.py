@@ -2,22 +2,17 @@
 
 from __future__ import annotations
 
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
-
 from services import model_config_service
 from services.llm_service import LLMService
 from services.providers import UnknownProtocolError, get_adapter
 from services.providers.endpoint import EndpointConfig, get_endpoint
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _isolated_store():

@@ -2,13 +2,7 @@
 
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from services.story_timing import (  # noqa: E402
     ProviderDurationCapability,
@@ -16,7 +10,7 @@ from services.story_timing import (  # noqa: E402
     StoryTimingPlan,
     estimate_speech_ms,
 )
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class StoryTimingPlanTests(unittest.TestCase):

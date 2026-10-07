@@ -22,12 +22,6 @@ audio_path / last_frame_path 因历史缺陷被清空，但素材文件仍在
 from __future__ import annotations
 
 import argparse
-import sys
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from db import SessionLocal, init_db  # noqa: E402
 from models import Project, Shot, ShotVersion  # noqa: E402

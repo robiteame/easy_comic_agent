@@ -9,13 +9,8 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import sys
 import unittest
 from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from agent import graph  # noqa: E402
 from agent.contracts import (  # noqa: E402
@@ -31,7 +26,7 @@ from services.structural_validation import (  # noqa: E402
     validate_video_file,
     validate_video_sync,
 )
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 MEDIA_ROOT = TEST_ROOT / "video-quality-checks"

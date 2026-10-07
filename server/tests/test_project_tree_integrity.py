@@ -11,13 +11,7 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import unittest
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -29,7 +23,7 @@ from db import SessionLocal, engine, init_db  # noqa: E402
 from db.database import _repair_project_tree  # noqa: E402
 from main import app  # noqa: E402
 from models import BackgroundJob, Character, Project, SceneAsset, Shot  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _orphan_episode_count(db) -> int:

@@ -1,4 +1,4 @@
-import { test } from 'node:test'
+import { test } from 'vitest'
 
 import { expectRender } from '../test-support/ssrTestHelper.mts'
 import TaskEstimateModal from './TaskEstimateModal'

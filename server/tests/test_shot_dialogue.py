@@ -14,14 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from agent.output_schemas import parse_storyboard_output  # noqa: E402
 from models.shot import Shot  # noqa: E402
@@ -38,7 +33,7 @@ from services.shot_dialogue import (  # noqa: E402
 )
 from services.shot_version_service import apply_snapshot_to_shot, capture_snapshot  # noqa: E402
 from services.subtitle_service import DialogueLineInput, ShotDialogueInput, cues_from_shots  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 CHARACTERS = [
     {"name": "林夏", "voice_id": "voice_linxia"},

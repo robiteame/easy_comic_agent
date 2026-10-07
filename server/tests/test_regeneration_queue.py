@@ -2,14 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import unittest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from api.routes import shot as shot_route  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
@@ -19,7 +13,7 @@ from services import (
     task_registry,  # noqa: E402
 )
 from services.shot_version_service import create_version  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class SelectiveRegenerationQueueTests(unittest.TestCase):

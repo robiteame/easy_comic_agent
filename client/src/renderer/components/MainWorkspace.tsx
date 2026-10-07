@@ -41,6 +41,7 @@ import {
   requestProjectNavigation,
 } from '../services/projectNavigationGuard'
 import { isCurrentProjectAsyncSnapshot, isLatestResourceResponse } from '../services/asyncGuard'
+import { sampleActionDisabledReason, SAMPLE_PROJECT_DISABLED_REASON } from '../services/sampleProjectGuard'
 import { STYLE_DESCRIPTIONS, STYLE_OPTIONS } from '../constants/styleTemplates'
 import { PROJECTS_REFRESHED_EVENT, STYLE_TEMPLATES_UPDATED_EVENT } from '../constants/events'
 import { getWorkspacePanelAriaProps, getWorkspaceTabAriaProps, resolveWorkspaceTabFocus } from './workspaceTabs'
@@ -63,93 +64,14 @@ const OPEN_CREATE_PROJECT_EVENT = 'workspace:open-create-project'
 const OPEN_SHOT_CONFIG_EVENT = 'workspace:open-shot-config'
 const WORKSPACE_NAVIGATE_EVENT = 'workspace:navigate'
 
-type StyleOption = { value: string; label: string; keywords?: string; custom?: boolean }
-
-const STEP_LABELS: Record<string, string> = {
-  start: '开始',
-  parse_script: '剧本解析',
-  generate_storyboard: '分镜生成',
-  wait_asset_confirm: '等待素材确认',
-  generate_storyboard_images: '故事板生成',
-  wait_storyboard_approval: '等待故事板审核',
-  phase2_start: '进入第二阶段',
-  generate_voice: '配音生成',
-  generate_seedance_video: 'Seedance 视频',
-  compose_video: '视频合成',
-  quality_check: '结构检查（仅结构，非质量认证）',
-  rendering: '导出渲染',
-}
-
-const WORKSPACE_TABS = [
-  { id: 'script', label: '剧本编辑' },
-  { id: 'assets', label: '角色场景资产' },
-  { id: 'storyboard', label: '故事板预览' },
-  { id: 'review', label: '分镜审核' },
-  { id: 'av', label: '字幕与音频' },
-  { id: 'video', label: '成片预览' },
-] as const
-
-type WorkspaceTab = (typeof WORKSPACE_TABS)[number]['id']
-
-type ProjectOperation = {
-  key: string
-  token: number
-  projectId: string | null
-  projectEpoch: number
-  navigationIntent: number
-}
-
-function normalizeShot(shot: any) {
-  return {
-    id: shot.id || shot.shot_id || '',
-    project_id: shot.project_id || '',
-    sequence: Number(shot.sequence || 0),
-    shot_type: shot.shot_type || 'medium',
-    scene_description: shot.scene_description || '',
-    character_action: shot.character_action || '',
-    dialogue: shot.dialogue || '',
-    camera_angle: shot.camera_angle || '正面',
-    camera_movement: shot.camera_movement || '静止',
-    duration: Number(shot.duration || 3),
-    estimated_speech_ms: Number(shot.estimated_speech_ms || 0),
-    emotion: shot.emotion || 'neutral',
-    transition: shot.transition || 'cut',
-    visual_notes: shot.visual_notes || '',
-    image_path: shot.image_path || '',
-    storyboard_path: shot.storyboard_path || '',
-    video_path: shot.video_path || '',
-    audio_path: shot.audio_path || '',
-    status: shot.status || 'pending',
-    storyboard_status: shot.storyboard_status || 'pending',
-    version: Number(shot.version || 1),
-    confirmed: Boolean(shot.confirmed),
-    media_stale: Boolean(shot.media_stale),
-    consistency_status: shot.consistency_status || 'pending',
-    consistency_report: shot.consistency_report || {},
-    storyboard_reference_manifest: Array.isArray(shot.storyboard_reference_manifest)
-      ? shot.storyboard_reference_manifest
-      : [],
-    video_reference_manifest: Array.isArray(shot.video_reference_manifest) ? shot.video_reference_manifest : [],
-    reference_capability_warning: shot.reference_capability_warning || '',
-    quality_review: shot.quality_review || null,
-    characters_in_scene: Array.isArray(shot.characters_in_scene) ? shot.characters_in_scene : [],
-    scene_asset_id: shot.scene_asset_id || '',
-    character_asset_ids: Array.isArray(shot.character_asset_ids) ? shot.character_asset_ids : [],
-    scene_group_id: shot.scene_group_id || '',
-    consistency_context: shot.consistency_context || '',
-    reference_weights: shot.reference_weights || {},
-    continuity_profile: shot.continuity_profile || {},
-    continuity_reference_path: shot.continuity_reference_path || '',
-    pose_reference_path: shot.pose_reference_path || '',
-    depth_reference_path: shot.depth_reference_path || '',
-    last_frame_path: shot.last_frame_path || '',
-  }
-}
-
-function getStepLabel(step?: string) {
-  if (!step) return '处理中'
-  return STEP_LABELS[step] || '处理中'
-}
+import {
+  getStepLabel,
+  normalizeShot,
+  WORKSPACE_TABS,
+  type ProjectOperation,
+  type StyleOption,
+  type WorkspaceTab,
+} from './mainWorkspaceModel'
 
 const MainWorkspace: React.FC = () => {
   const {
@@ -184,10 +106,25 @@ const MainWorkspace: React.FC = () => {
     runMode,
     consistencyStatus,
     consistencyReport,
+    isSample,
   } = useProjectStore()
 
   // 提交前的成本估算闸门：所有会触发付费任务的入口都要先过一遍它。
   const estimateGate = useTaskEstimateGate()
+
+  // 示例项目守卫：真实调用外部模型 API 的操作置灰并给出原因（不是隐藏）。
+  // disabled 原生按钮不触发鼠标事件，Tooltip 需要包一层 span 才能显示。
+  const sampleStoryboardReason = sampleActionDisabledReason(isSample, 'storyboard')
+  const sampleVideoReason = sampleActionDisabledReason(isSample, 'video')
+  const sampleQueueReason = isSample ? SAMPLE_PROJECT_DISABLED_REASON : null
+  const wrapSampleTooltip = (element: React.ReactElement, reason: string | null) =>
+    reason ? (
+      <Tooltip title={reason}>
+        <span className="sample-disabled-action">{element}</span>
+      </Tooltip>
+    ) : (
+      element
+    )
 
   const [script, setScript] = useState('')
   const [newProjectTitle, setNewProjectTitle] = useState('')
@@ -452,6 +389,7 @@ const MainWorkspace: React.FC = () => {
       genre: projectDetail.genre,
       style: projectDetail.style || style,
       status: projectDetail.status,
+      isSample: Boolean(projectDetail.is_sample),
       consistencyStatus: projectDetail.consistency_report?.status || projectDetail.consistency_status || 'ready',
       consistencyReport: projectDetail.consistency_report || {},
       outputFormat: projectDetail.output_format || outputFormat,
@@ -1957,15 +1895,18 @@ const MainWorkspace: React.FC = () => {
                     : ''}
                 </div>
               </div>
-              <Button
-                type="primary"
-                size="small"
-                loading={generatingStoryboard}
-                disabled={!shots.length}
-                onClick={() => void handleGenerateStoryboard()}
-              >
-                批量生成分镜
-              </Button>
+              {wrapSampleTooltip(
+                <Button
+                  type="primary"
+                  size="small"
+                  loading={generatingStoryboard}
+                  disabled={!shots.length || Boolean(sampleStoryboardReason)}
+                  onClick={() => void handleGenerateStoryboard()}
+                >
+                  批量生成分镜
+                </Button>,
+                sampleStoryboardReason,
+              )}
             </div>
 
             {assetBoardReady || assetBoard ? (
@@ -2170,15 +2111,18 @@ const MainWorkspace: React.FC = () => {
                   >
                     退回调整
                   </Button>
-                  <Button
-                    type="primary"
-                    className="shot-video-action"
-                    loading={confirming}
-                    disabled={!selectedShot?.confirmed}
-                    onClick={handleGenerateSelectedShotVideo}
-                  >
-                    {selectedShot?.video_path ? '重新生成本镜头' : '生成本镜头视频'}
-                  </Button>
+                  {wrapSampleTooltip(
+                    <Button
+                      type="primary"
+                      className="shot-video-action"
+                      loading={confirming}
+                      disabled={!selectedShot?.confirmed || Boolean(sampleVideoReason)}
+                      onClick={handleGenerateSelectedShotVideo}
+                    >
+                      {selectedShot?.video_path ? '重新生成本镜头' : '生成本镜头视频'}
+                    </Button>,
+                    sampleVideoReason,
+                  )}
                 </div>
               </div>
             )}
@@ -2195,21 +2139,24 @@ const MainWorkspace: React.FC = () => {
               >
                 {workspaceTab === 'review' && storyboardReviewVisible && (
                   <div className="confirm-overlay">
-                    <Button
-                      type="primary"
-                      size="small"
-                      className="shot-video-action"
-                      icon={<CheckCircleOutlined />}
-                      loading={confirming}
-                      disabled={!selectedShot?.confirmed}
-                      onClick={handleGenerateSelectedShotVideo}
-                    >
-                      {selectedShot?.video_path
-                        ? '重新生成本镜头'
-                        : selectedShot?.confirmed
-                          ? '生成本镜头视频'
-                          : `审核后生成 ${approvedShotCount}/${shots.length}`}
-                    </Button>
+                    {wrapSampleTooltip(
+                      <Button
+                        type="primary"
+                        size="small"
+                        className="shot-video-action"
+                        icon={<CheckCircleOutlined />}
+                        loading={confirming}
+                        disabled={!selectedShot?.confirmed || Boolean(sampleVideoReason)}
+                        onClick={handleGenerateSelectedShotVideo}
+                      >
+                        {selectedShot?.video_path
+                          ? '重新生成本镜头'
+                          : selectedShot?.confirmed
+                            ? '生成本镜头视频'
+                            : `审核后生成 ${approvedShotCount}/${shots.length}`}
+                      </Button>,
+                      sampleVideoReason,
+                    )}
                     {allShotVideosReady && (
                       <Button
                         type="primary"
@@ -2442,15 +2389,18 @@ const MainWorkspace: React.FC = () => {
                       />
                       强制确认镜头
                     </label>
-                    <Button
-                      type="primary"
-                      size="small"
-                      loading={queueSubmitting}
-                      disabled={!queueSelectedIds.length}
-                      onClick={() => void submitSelectiveRegeneration()}
-                    >
-                      加入队列
-                    </Button>
+                    {wrapSampleTooltip(
+                      <Button
+                        type="primary"
+                        size="small"
+                        loading={queueSubmitting}
+                        disabled={!queueSelectedIds.length || Boolean(sampleQueueReason)}
+                        onClick={() => void submitSelectiveRegeneration()}
+                      >
+                        加入队列
+                      </Button>,
+                      sampleQueueReason,
+                    )}
                   </div>
                   <div className="thumb-strip">
                     {shots.map((shot, i) => {

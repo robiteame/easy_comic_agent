@@ -4,14 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from PIL import Image  # noqa: E402
 
@@ -27,7 +22,7 @@ from services.reference_readiness_service import (  # noqa: E402
     mark_reference_success,
     refresh_project_reference_state,
 )
-from test_environment import TEST_ROOT  # noqa: E402
+from tests.support.test_environment import TEST_ROOT  # noqa: E402
 
 
 def _image(path: Path) -> str:

@@ -1,12 +1,5 @@
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
-
 from agent.critic import build_final_report, critique_final
 
 

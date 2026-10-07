@@ -10,13 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 import unittest
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from agent import output_schemas  # noqa: E402
 from agent.nodes import script_parser, storyboard_gen  # noqa: E402
@@ -26,7 +20,7 @@ from agent.output_schemas import (  # noqa: E402
     parse_storyboard_output,
 )
 from config import settings  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _script_payload(**overrides) -> dict:

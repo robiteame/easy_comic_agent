@@ -8,13 +8,7 @@
 
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from api.routes import script as script_route  # noqa: E402
 from services.skill_config_service import (  # noqa: E402
@@ -23,7 +17,7 @@ from services.skill_config_service import (  # noqa: E402
     resolve_effective_style,
 )
 from services.style_templates import style_prompt_params, style_template  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 LEGACY_SKILL = {
     "script_agent": {**DEFAULT_AGENT_CONFIG, "style_template_id": "anime"},

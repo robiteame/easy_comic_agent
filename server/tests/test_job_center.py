@@ -17,16 +17,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import time
 import unittest
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -38,7 +32,7 @@ from services import job_actions, job_dispatch, task_registry  # noqa: E402
 from services.job_actions import RESUME_MODE, RETRY_MODE  # noqa: E402
 from services.job_dispatch import DispatchResult  # noqa: E402
 from services.job_types import can_transition, parse_job_key  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _write_media(relative: str, size: int = 2048) -> str:

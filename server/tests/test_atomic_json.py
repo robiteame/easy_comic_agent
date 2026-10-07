@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
 import threading
 import unittest
 import uuid
@@ -16,12 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
-
 from services import atomic_json, skill_config_service, style_templates  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _temp_files(directory: Path) -> list[str]:

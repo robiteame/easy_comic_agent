@@ -9,16 +9,11 @@ Provider 不支持参考图、局部失败保留成功、用户修改后的版�
 from __future__ import annotations
 
 import asyncio
-import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from PIL import Image  # noqa: E402
 

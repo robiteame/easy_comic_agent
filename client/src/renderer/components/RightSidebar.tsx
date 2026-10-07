@@ -17,21 +17,18 @@ import Input from 'antd/es/input'
 import InputNumber from 'antd/es/input-number'
 import message from 'antd/es/message'
 import Select from 'antd/es/select'
+import Tooltip from 'antd/es/tooltip'
 import { assetApi, renderApi, shotApi, toOutputUrl, type RenderCapabilities } from '../services/api'
 import { formatDialogueForEditor, parseDialogueFromEditor } from '../services/dialogueTimeline'
-import { optimisticShotFieldPatch, saveFailureRollbackPatch, type MediaStaleBackup } from '../services/shotEditGuard'
+import { optimisticShotFieldPatch, saveFailureRollbackPatch } from '../services/shotEditGuard'
+import { sampleActionDisabledReason } from '../services/sampleProjectGuard'
 import {
   notifyBudgetBlocked,
   notifyBudgetWarning,
   notifyProviderBlocked,
   useTaskEstimateGate,
 } from './TaskEstimateModal'
-import {
-  drainPendingSaves,
-  hasPendingChanges,
-  retirePendingSaveAfterFlush,
-  type PendingSaveEntry,
-} from '../services/shotSaveQueue'
+import { drainPendingSaves, hasPendingChanges, retirePendingSaveAfterFlush } from '../services/shotSaveQueue'
 import { registerProjectNavigationGuard } from '../services/projectNavigationGuard'
 import { useProjectStore } from '../stores/projectStore'
 import { useShotStore } from '../stores/shotStore'
@@ -40,51 +37,18 @@ const { TextArea } = Input
 const FlowGraph = React.lazy(() => import('./FlowGraph'))
 const ShotVersionHistory = React.lazy(() => import('./ShotVersionHistory'))
 
-// 镜头级音频路径覆盖：空=继承系统设置的全局 audio_mode。
-const SHOT_AUDIO_MODE_OPTIONS = [
-  { value: '', label: '继承全局设置' },
-  { value: 'tts', label: 'TTS 配音合成' },
-  { value: 'native', label: '原生音频（需模型支持）' },
-  { value: 'auto', label: '智能 auto' },
-]
-
-const stepLabels: Record<string, string> = {
-  generate_script: '剧本生成',
-  parse_script: '剧本解析',
-  generate_storyboard: '分镜列表',
-  wait_asset_confirm: '素材确认',
-  generate_storyboard_images: '故事板生成',
-  wait_storyboard_approval: '分镜审核',
-  phase2_start: '视频阶段',
-  generate_voice: '配音生成',
-  generate_seedance_video: '单镜视频',
-  compose_video: '视频合成',
-  quality_check: '结构检查（仅结构，非质量认证）',
-  rendering: '导出渲染',
-}
-
-interface RightSidebarProps {
-  collapsed: boolean
-  onToggleCollapsed: () => void
-}
-
-type ShotSaveEntry = PendingSaveEntry<Record<string, any>> & {
-  timer: number | null
-  projectId: string
-  shotId: string
-  // 乐观写入 store 的素材过期标记在保存失败时按此快照回滚（素材路径本身
-  // 从不被乐观清空，无需回滚）。
-  optimisticMediaStale: MediaStaleBackup | null
-  // 保存批次中普通镜头字段是否已成功落库（资产绑定失败不影响该结论）。
-  paramsPersisted: boolean
-}
-
-const shotSaveKey = (projectId: string, shotId: string) => `${projectId}:${shotId}`
+import {
+  SHOT_AUDIO_MODE_OPTIONS,
+  shotSaveKey,
+  stepLabels,
+  type RightSidebarProps,
+  type ShotSaveEntry,
+} from './rightSidebarModel'
 
 const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapsed }) => {
   const { updateShot, logs, isGenerating, currentStep, shots, videoPath, setGenerating, setProgress, appendLog } =
     useShotStore()
-  const { projectId, runMode, setProject } = useProjectStore()
+  const { projectId, runMode, setProject, isSample } = useProjectStore()
   const [assetBoard, setAssetBoard] = useState<{ characters: any[]; scenes: any[] }>({ characters: [], scenes: [] })
   const [shotExpanded, setShotExpanded] = useState(true)
   const [runtimeExpanded, setRuntimeExpanded] = useState(true)
@@ -100,6 +64,8 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
   const [renderCapabilities, setRenderCapabilities] = useState<RenderCapabilities | null>(null)
   // 提交前估算闸门：重新生成镜头会真实调用图像接口，需要先确认成本与耗时。
   const estimateGate = useTaskEstimateGate()
+  // 示例项目：重新生成故事板依赖图像 Provider，置灰并提示原因（不隐藏）。
+  const sampleStoryboardReason = sampleActionDisabledReason(isSample, 'storyboard')
   const shotDraftRef = useRef<Record<string, any>>({})
   const shotSaveEntriesRef = useRef(new Map<string, ShotSaveEntry>())
   const flushShotDraftRef = useRef<(projectId: string, shotId: string) => Promise<boolean>>(async () => true)
@@ -1063,31 +1029,56 @@ const RightSidebar: React.FC<RightSidebarProps> = ({ collapsed, onToggleCollapse
                       </Button>
                     </div>
 
-                    <Button
-                      type="primary"
-                      icon={<ReloadOutlined />}
-                      loading={regeneratingShot || loadingPrompt}
-                      // Editing invalidates the previous image by design, but
-                      // that must not make the regenerate action impossible.
-                      // The backend can generate a fresh storyboard from the
-                      // current draft without an existing reference file.
-                      disabled={selectedShot.confirmed}
-                      onClick={() => void regenerateCurrentShot()}
-                    >
-                      {selectedShot.status === 'needs_review' &&
-                      !String(shotDraft.visual_notes || '').includes('NON-NEGOTIABLE AGENT CONSISTENCY SOP')
-                        ? '回填全量 Prompt'
-                        : '按 Prompt 重新生成'}
-                    </Button>
-                    <Button
-                      icon={<ReloadOutlined />}
-                      loading={regeneratingShot || loadingPrompt}
-                      disabled={selectedShot.confirmed}
-                      title="关键镜头一次生成 2 个故事板候选，两个候选都会进入版本历史，可对比后选用"
-                      onClick={() => void regenerateCurrentShot(2)}
-                    >
-                      生成 2 个候选
-                    </Button>
+                    {sampleStoryboardReason ? (
+                      <Tooltip title={sampleStoryboardReason}>
+                        <span className="sample-disabled-action">
+                          <Button
+                            type="primary"
+                            icon={<ReloadOutlined />}
+                            disabled
+                            title="示例项目不支持重新生成故事板"
+                          >
+                            按 Prompt 重新生成
+                          </Button>
+                        </span>
+                      </Tooltip>
+                    ) : (
+                      <Button
+                        type="primary"
+                        icon={<ReloadOutlined />}
+                        loading={regeneratingShot || loadingPrompt}
+                        // Editing invalidates the previous image by design, but
+                        // that must not make the regenerate action impossible.
+                        // The backend can generate a fresh storyboard from the
+                        // current draft without an existing reference file.
+                        disabled={selectedShot.confirmed}
+                        onClick={() => void regenerateCurrentShot()}
+                      >
+                        {selectedShot.status === 'needs_review' &&
+                        !String(shotDraft.visual_notes || '').includes('NON-NEGOTIABLE AGENT CONSISTENCY SOP')
+                          ? '回填全量 Prompt'
+                          : '按 Prompt 重新生成'}
+                      </Button>
+                    )}
+                    {sampleStoryboardReason ? (
+                      <Tooltip title={sampleStoryboardReason}>
+                        <span className="sample-disabled-action">
+                          <Button icon={<ReloadOutlined />} disabled title="示例项目不支持重新生成故事板">
+                            生成 2 个候选
+                          </Button>
+                        </span>
+                      </Tooltip>
+                    ) : (
+                      <Button
+                        icon={<ReloadOutlined />}
+                        loading={regeneratingShot || loadingPrompt}
+                        disabled={selectedShot.confirmed}
+                        title="关键镜头一次生成 2 个故事板候选，两个候选都会进入版本历史，可对比后选用"
+                        onClick={() => void regenerateCurrentShot(2)}
+                      >
+                        生成 2 个候选
+                      </Button>
+                    )}
                   </>
                 )}
               </div>

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import { test } from 'vitest'
 import { formatDialogueForEditor, parseDialogueFromEditor } from './dialogueTimeline.ts'
 
 test('structured dialogue preserves speaker emotion and timing through editor text', () => {

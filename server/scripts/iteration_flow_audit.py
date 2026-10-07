@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.style_templates import STYLE_TEMPLATES, style_prompt_params
 

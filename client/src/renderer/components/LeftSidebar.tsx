@@ -215,6 +215,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
           title: '未命名项目',
           status: 'draft',
           characters: [],
+          isSample: false,
         })
         setShots([])
         selectShot(null)
@@ -247,6 +248,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ collapsed, onToggleCollapsed 
         genre: projectDetail.genre,
         style: projectDetail.style,
         status: projectDetail.status,
+        isSample: Boolean(projectDetail.is_sample),
         outputFormat: projectDetail.output_format,
         resolution: projectDetail.resolution,
         platform: projectDetail.platform,

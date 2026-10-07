@@ -8,6 +8,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { isComicAgentHealthResponse } from './backendHealth'
 import { backendFailurePageUrl } from './failurePage'
+import { setupUpdater } from './updater'
 
 let mainWindow: BrowserWindow | null = null
 let backendProcess: ChildProcess | null = null
@@ -382,6 +383,13 @@ if (gotSingleInstanceLock)
     // A failed backend must not open the workbench: the SPA would sit on a
     // dead API. Show the dedicated failure page (retry / copy / quit) instead.
     createWindow(backendFailure)
+
+    // Auto-update channel: silent check 10s after launch, then every 24h.
+    // Dev builds resolve to the disabled mode and never issue a request.
+    // Started after the window exists so the first broadcast has a listener;
+    // the getter re-reads mainWindow so rebuilt windows keep receiving state.
+    const updater = setupUpdater(() => mainWindow?.webContents ?? null)
+    updater.start()
   })
 
 app.on('before-quit', stopBackend)

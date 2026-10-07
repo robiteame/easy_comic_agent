@@ -12,8 +12,10 @@
     "lint:fix": "pnpm exec biome check --write client package.json",
     "lint:server": "ruff check server && ruff format --check server",
     "lint:server:fix": "ruff check --fix server && ruff format server",
+    "check:file-sizes": "node scripts/check-file-sizes.mjs",
     "typecheck": "pnpm --dir client run typecheck",
     "test": "pnpm --dir client run test:all",
+    "test:server:coverage": "server/.venv/bin/coverage run --source=server -m unittest discover -s server/tests -t server -p 'test_*.py' && server/.venv/bin/coverage report",
     "build": "pnpm --dir client run build"
   },
   "devDependencies": {

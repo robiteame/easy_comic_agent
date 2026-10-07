@@ -10,13 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-import sys
 import uuid
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import settings
 from services.llm_service import LLMService

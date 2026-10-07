@@ -3,7 +3,7 @@
 //
 // 用例只操作内存中的对象,不落盘,因此不会在 git 工作区留下构建产物。
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { test } from 'vitest'
 
 import {
   MISSING_REQUIREMENTS_LOCK_SHA256,

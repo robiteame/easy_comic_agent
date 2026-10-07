@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Integer, String, Text, text
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -56,6 +56,10 @@ class Project(Base):
     # 字幕/音频配置版本：工作台每次修改轨道或字幕条目时 +1；渲染任务记录
     # 渲染时的值，发布前比对不一致即丢弃成片，避免旧配置覆盖新修改。
     av_config_version = Column(Integer, default=0)
+    # 内置示例项目标记：数据由固定 JSON 落库、媒体为本地占位图，前端据此
+    # 禁用依赖外部 API Key 的操作。用户自建项目（含示例项目下新建的剧集）
+    # 恒为 False。
+    is_sample = Column(Boolean, default=False, server_default=text("0"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { test, beforeEach } from 'node:test'
+import { test, beforeEach } from 'vitest'
 
 import { useShotStore, type Shot } from './shotStore.ts'
 

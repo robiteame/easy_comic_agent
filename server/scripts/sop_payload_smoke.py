@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import json
 import shutil
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 from PIL import Image, ImageDraw
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from api.routes import shot as shot_route
 from api.routes.render import _apply_post_profiles

@@ -3,13 +3,7 @@
 from __future__ import annotations
 
 import json
-import sys
 import unittest
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from db import SessionLocal, init_db  # noqa: E402
 from models import Character, Project, SceneAsset, Shot, ShotVersion  # noqa: E402
@@ -18,7 +12,7 @@ from services.shot_split_service import (  # noqa: E402
     ShotSplitVersionConflict,
     persist_split_shot,
 )
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class PersistedShotSplitTests(unittest.TestCase):

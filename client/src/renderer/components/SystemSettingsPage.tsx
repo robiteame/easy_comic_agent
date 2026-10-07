@@ -7,6 +7,8 @@ import {
   CopyOutlined,
   DollarOutlined,
   ExperimentOutlined,
+  InfoCircleOutlined,
+  PlayCircleOutlined,
   ReloadOutlined,
   SaveOutlined,
   UploadOutlined,
@@ -18,13 +20,22 @@ import InputNumber from 'antd/es/input-number'
 import message from 'antd/es/message'
 import Segmented from 'antd/es/segmented'
 import Select from 'antd/es/select'
-import Slider from 'antd/es/slider'
-import Switch from 'antd/es/switch'
 import { projectApi, settingsApi } from '../services/api'
+import { useUpdateStore } from '../stores/updateStore'
+import { describeSettingsUpdate, updateModeHint } from './updaterViewModel'
+import { OPEN_WIZARD_EVENT } from './FirstRunWizard'
 import PricingConfigPanel from './PricingConfigPanel'
+import { SystemPromptField, ToggleRow, WeightField } from './systemSettingsControls'
+import {
+  buildConnectionTestPayload,
+  connectionTestFailureFromError,
+  connectionTestText,
+  connectionTestTone,
+  normalizeConnectionTestResult,
+  type ConnectionTestResult,
+} from './systemSettingsModel'
 import {
   DEFAULT_TEMPLATE,
-  SYSTEM_PROMPT_MAX_LENGTH,
   cloneTemplate,
   importSkillTemplate,
   templateCopyPayload,
@@ -270,7 +281,7 @@ interface SystemSettingsPageProps {
   onBack: () => void
 }
 
-type SettingsTab = 'appearance' | 'models' | 'pricing' | 'skill'
+type SettingsTab = 'appearance' | 'models' | 'pricing' | 'skill' | 'about'
 
 const EMPTY_MODEL_CONFIG: ModelConfigState = {
   script: {},
@@ -291,6 +302,7 @@ const TAB_ITEMS: { key: SettingsTab; label: string; desc: string; icon: React.Re
   { key: 'models', label: '模型与 API 配置', desc: '剧本 / 图像 / 视频 / 配音接口', icon: <ApiOutlined /> },
   { key: 'pricing', label: '模型价格', desc: '单价、计价单位与分辨率倍率', icon: <DollarOutlined /> },
   { key: 'skill', label: 'Skill 配置', desc: '子 Agent 生成策略与绑定', icon: <ExperimentOutlined /> },
+  { key: 'about', label: '关于与软件更新', desc: '当前版本 / 更新检查', icon: <InfoCircleOutlined /> },
 ]
 
 const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
@@ -313,6 +325,8 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
   const [modelConfig, setModelConfig] = useState<ModelConfigState>(EMPTY_MODEL_CONFIG)
   const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModelState>(EMPTY_DISCOVERED_MODELS)
   const [discoveringCategory, setDiscoveringCategory] = useState<ModelCategory | null>(null)
+  const [testingCategory, setTestingCategory] = useState<ModelCategory | null>(null)
+  const [connectionResults, setConnectionResults] = useState<Partial<Record<ModelCategory, ConnectionTestResult>>>({})
   const [savingModel, setSavingModel] = useState(false)
   const skillImportRef = useRef<HTMLInputElement>(null)
 
@@ -491,6 +505,27 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
     if (field === 'base_url' || field === 'protocol') {
       setDiscoveredModels((current) => ({ ...current, [category]: [] }))
     }
+    // 表单值变了，旧的测试结果就不再可信，清掉避免误导。
+    setConnectionResults((current) => ({ ...current, [category]: undefined }))
+  }
+
+  // 测的是「当前表单里填的值」（请求携带 config），保存前即可测。
+  const handleTestConnection = async (category: ModelCategory) => {
+    const payload = buildConnectionTestPayload(category, modelConfig[category])
+    if (!payload) return
+    try {
+      setTestingCategory(category)
+      const raw = await settingsApi.testModelConnection(payload)
+      const result = normalizeConnectionTestResult(raw)
+      setConnectionResults((current) => ({
+        ...current,
+        [category]: result ?? connectionTestFailureFromError(new Error('服务端返回了无法解析的测试结果')),
+      }))
+    } catch (err) {
+      setConnectionResults((current) => ({ ...current, [category]: connectionTestFailureFromError(err) }))
+    } finally {
+      setTestingCategory(null)
+    }
   }
 
   const handleDiscoverModels = async (category: ModelCategory) => {
@@ -558,9 +593,18 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
               画风模板、模型 API 与子 Agent Skill 方案集中管理，保存后只影响后续新生成素材。
             </div>
           </div>
-          <Button icon={<ArrowLeftOutlined />} onClick={onBack}>
-            返回工作区
-          </Button>
+          <div className="settings-head-actions">
+            <Button
+              icon={<PlayCircleOutlined />}
+              aria-label="重新运行向导"
+              onClick={() => window.dispatchEvent(new CustomEvent(OPEN_WIZARD_EVENT))}
+            >
+              重新运行向导
+            </Button>
+            <Button icon={<ArrowLeftOutlined />} onClick={onBack}>
+              返回工作区
+            </Button>
+          </div>
         </div>
 
         <div className="settings-shell">
@@ -726,6 +770,9 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
                     discoveredModels={discoveredModels.script}
                     discovering={discoveringCategory === 'script'}
                     onDiscover={handleDiscoverModels}
+                    testing={testingCategory === 'script'}
+                    onTest={handleTestConnection}
+                    testResult={connectionResults.script ?? null}
                     extraFields={[{ key: 'max_tokens', label: '最大 Token', type: 'number' }]}
                     showAuthStyle
                   />
@@ -738,6 +785,9 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
                     discoveredModels={discoveredModels.image}
                     discovering={discoveringCategory === 'image'}
                     onDiscover={handleDiscoverModels}
+                    testing={testingCategory === 'image'}
+                    onTest={handleTestConnection}
+                    testResult={connectionResults.image ?? null}
                     extraFields={[
                       { key: 'image_size', label: '出图尺寸', type: 'text', placeholder: '例如 1440x2560' },
                     ]}
@@ -751,6 +801,9 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
                     discoveredModels={discoveredModels.video}
                     discovering={discoveringCategory === 'video'}
                     onDiscover={handleDiscoverModels}
+                    testing={testingCategory === 'video'}
+                    onTest={handleTestConnection}
+                    testResult={connectionResults.video ?? null}
                     showAudioMode
                   />
                   <ModelConfigCard
@@ -762,6 +815,9 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
                     discoveredModels={discoveredModels.voice}
                     discovering={discoveringCategory === 'voice'}
                     onDiscover={handleDiscoverModels}
+                    testing={testingCategory === 'voice'}
+                    onTest={handleTestConnection}
+                    testResult={connectionResults.voice ?? null}
                     extraFields={[
                       { key: 'voice', label: '默认音色', type: 'text', placeholder: '例如 冰糖、101001 或 longwan_v2' },
                       { key: 'format', label: '音频格式', type: 'text', placeholder: '例如 wav' },
@@ -772,6 +828,8 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
             )}
 
             {activeTab === 'pricing' && <PricingConfigPanel />}
+
+            {activeTab === 'about' && <AboutUpdateSection />}
 
             {activeTab === 'skill' && (
               <section className="settings-section skill-settings-section">
@@ -881,6 +939,60 @@ const SystemSettingsPage: React.FC<SystemSettingsPageProps> = ({ onBack }) => {
   )
 }
 
+// 关于 / 软件更新:版本号单一来源是主进程 app.getVersion()(读
+// package.json),渲染层只经 IPC 取值;手动检查结果降级展示,失败也不弹错。
+function AboutUpdateSection() {
+  const appVersion = useUpdateStore((store) => store.appVersion)
+  const mode = useUpdateStore((store) => store.mode)
+  const checking = useUpdateStore((store) => store.manualChecking)
+  const manualResult = useUpdateStore((store) => store.manualResult)
+  const initialize = useUpdateStore((store) => store.initialize)
+  const checkForUpdates = useUpdateStore((store) => store.checkForUpdates)
+  const runBannerAction = useUpdateStore((store) => store.runBannerAction)
+
+  useEffect(() => {
+    initialize()
+  }, [initialize])
+
+  const summary = describeSettingsUpdate({ mode, appVersion, checking, manualResult })
+
+  return (
+    <section className="settings-section settings-section-wide about-update-section">
+      <div className="settings-section-title">关于 / 软件更新</div>
+      <div className="settings-field">
+        <span>当前版本</span>
+        <div aria-label="当前版本号">{appVersion ? `v${appVersion}` : '—'}</div>
+      </div>
+      <div className="settings-field">
+        <span>更新方式</span>
+        <div className="asset-board-note">{updateModeHint(mode)}</div>
+      </div>
+      <div className="settings-update-actions">
+        <Button
+          type="primary"
+          icon={<ReloadOutlined />}
+          loading={checking}
+          disabled={mode === 'disabled'}
+          onClick={() => void checkForUpdates()}
+        >
+          检查更新
+        </Button>
+        {summary.action ? (
+          <Button onClick={() => runBannerAction(summary.action!.kind)}>{summary.action.label}</Button>
+        ) : null}
+      </div>
+      <div className="settings-update-result" aria-label="更新检查结果">
+        <span className="settings-update-result-detail">{summary.detail}</span>
+        {summary.showLink ? (
+          <Button type="link" size="small" onClick={() => runBannerAction('open-release-page')}>
+            前往下载
+          </Button>
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
 // Provider 能力徽标：数据来自后端适配器 capabilities 声明（实时、如实），
 // 不在前端硬编码任何能力，避免界面宣称不存在的能力。
 function CapabilityBadges({
@@ -947,6 +1059,9 @@ function ModelConfigCard({
   discoveredModels,
   discovering,
   onDiscover,
+  testing,
+  onTest,
+  testResult,
 }: {
   title: string
   subtitle: string
@@ -959,6 +1074,9 @@ function ModelConfigCard({
   discoveredModels: DiscoveredModel[]
   discovering: boolean
   onDiscover: (category: ModelCategory) => void
+  testing: boolean
+  onTest: (category: ModelCategory) => void
+  testResult: ConnectionTestResult | null
 }) {
   const protocolOptions = PROTOCOL_OPTIONS[category]
   const currentProtocol = String(config.protocol || config.provider || '').toLowerCase()
@@ -1040,6 +1158,18 @@ function ModelConfigCard({
           visibilityToggle
           onChange={(event) => onChange(category, 'api_key', event.target.value)}
         />
+      </div>
+      <div className="model-connection-row">
+        <Button icon={<ApiOutlined />} loading={testing} onClick={() => onTest(category)}>
+          测试连接
+        </Button>
+        {testResult ? (
+          <span className={`model-connection-result ${connectionTestTone(testResult.status)}`}>
+            {connectionTestText(testResult)}
+          </span>
+        ) : (
+          <span className="model-connection-hint">用当前表单值发起一次廉价的真实调用，保存前即可测试</span>
+        )}
       </div>
       <div className="model-discovery-row">
         <Button icon={<ReloadOutlined />} loading={discovering} onClick={() => onDiscover(category)}>
@@ -1237,89 +1367,6 @@ function AgentSkillPanel({
         value={agent.action_reference_weight}
         onChange={(value) => update('action_reference_weight', value)}
       />
-    </div>
-  )
-}
-
-// 系统提示词编辑框：多行输入，留空 = 使用后端内置默认提示词；JSON 输出
-// 契约由后端固定拼装，用户提示词无法删除结构约束。计数按去首尾空白后的长度。
-function SystemPromptField({
-  agentKey,
-  value,
-  onChange,
-}: {
-  agentKey: 'script_agent' | 'storyboard_agent'
-  value: string
-  onChange: (value: string) => void
-}) {
-  const label = agentKey === 'script_agent' ? '剧本系统提示词' : '分镜系统提示词'
-  const trimmed = value.trim()
-  const overLimit = trimmed.length > SYSTEM_PROMPT_MAX_LENGTH
-  return (
-    <div className="settings-field skill-system-prompt-field">
-      <span>
-        {label}
-        <em className="skill-system-prompt-count">
-          （{trimmed.length}/{SYSTEM_PROMPT_MAX_LENGTH}
-          {value ? '，留空恢复默认' : '，当前使用默认提示词'}）
-        </em>
-      </span>
-      <TextArea
-        autoSize={{ minRows: 4, maxRows: 12 }}
-        value={value}
-        maxLength={SYSTEM_PROMPT_MAX_LENGTH * 2}
-        showCount={false}
-        placeholder={
-          agentKey === 'script_agent'
-            ? '留空使用默认：你是漫剧编剧。请输出完整中文漫剧剧本，包含标题、人物、场景、动作、对白和情绪……\n可自定义角色定位、创作风格、语言语气；JSON 输出契约由系统固定附加，不可删除。'
-            : '留空使用默认：你是专业漫剧分镜师。根据剧本场景输出可执行分镜 JSON……\n可自定义角色定位、创作风格、语言语气；JSON 输出契约由系统固定附加，不可删除。'
-        }
-        onChange={(event) => onChange(event.target.value)}
-        status={overLimit ? 'error' : undefined}
-      />
-      <div className="skill-system-prompt-actions">
-        <Button
-          size="small"
-          icon={<ReloadOutlined />}
-          disabled={!value}
-          onClick={() => onChange('')}
-          title="清空自定义提示词，恢复后端默认系统提示词"
-        >
-          恢复默认提示词
-        </Button>
-        {overLimit ? (
-          <span className="skill-system-prompt-error">
-            提示词去空白后超过 {SYSTEM_PROMPT_MAX_LENGTH} 字符，保存会被拒绝
-          </span>
-        ) : null}
-      </div>
-    </div>
-  )
-}
-
-function ToggleRow({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string
-  checked: boolean
-  onChange: (value: boolean) => void
-}) {
-  return (
-    <div className="skill-toggle-row">
-      <span>{label}</span>
-      <Switch checked={checked} onChange={onChange} />
-    </div>
-  )
-}
-
-function WeightField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
-  return (
-    <div className="skill-weight-row">
-      <span>{label}</span>
-      <Slider min={0} max={1} step={0.05} value={value} onChange={onChange} />
-      <InputNumber min={0} max={1} step={0.05} value={value} onChange={(next) => onChange(Number(next || 0))} />
     </div>
   )
 }

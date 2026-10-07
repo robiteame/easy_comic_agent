@@ -13,14 +13,9 @@ import inspect
 import json
 import logging
 import os
-import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from PIL import Image  # noqa: E402
 
@@ -28,7 +23,7 @@ from agent import graph  # noqa: E402
 from api.routes import shot as shot_route  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
 from models import Project, Shot  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _noise_image(path: Path, size: tuple[int, int] = (512, 512)) -> str:

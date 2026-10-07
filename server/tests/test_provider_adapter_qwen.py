@@ -3,20 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import unittest
-from pathlib import Path
 from unittest.mock import ANY, AsyncMock, patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from services.providers.base import ImageRequest  # noqa: E402
 from services.providers.endpoint import EndpointConfig, normalize_protocol, settings_defaults  # noqa: E402
 from services.providers.image_qwen import QwenImageAdapter  # noqa: E402
 from services.providers.registry import get_adapter  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class _FakeResponse:

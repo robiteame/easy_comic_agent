@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { test } from 'vitest'
 
 import { expectRender } from '../test-support/ssrTestHelper.mts'
 import GlobalPlayfulMotion from './GlobalPlayfulMotion'

@@ -15,11 +15,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from services.video_ab_evaluation import (  # noqa: E402
     VideoABEvaluationError,

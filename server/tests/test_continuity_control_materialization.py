@@ -10,13 +10,8 @@ Depth，并把画像标记为 enabled——这些是虚假能力声明。新契�
 
 from __future__ import annotations
 
-import sys
 import unittest
 from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from PIL import Image  # noqa: E402
 
@@ -24,7 +19,7 @@ from api.routes import shot as shot_route  # noqa: E402
 from config import settings  # noqa: E402
 from services.reference_asset_service import ReferenceAssetService  # noqa: E402
 from services.video_service import VideoService  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _write_png(path: Path) -> str:

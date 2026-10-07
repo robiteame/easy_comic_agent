@@ -7,14 +7,9 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from api.routes import audio_track as audio_track_route  # noqa: E402
 from api.routes import render as render_route  # noqa: E402
@@ -23,7 +18,7 @@ from config import settings  # noqa: E402
 from db import SessionLocal, init_db  # noqa: E402
 from models import AudioTrack, BackgroundJob, Project, Shot, SubtitleCue, SubtitleTrack  # noqa: E402
 from services.subtitle_service import format_srt_time  # noqa: E402
-from test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402,F401
+from tests.support.test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402,F401
 
 
 class AvWorkbenchTestCase(unittest.TestCase):

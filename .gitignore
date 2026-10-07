@@ -102,3 +102,10 @@ yarn-error.log*
 
 # ZCode 会话数据
 .zcode/
+
+# Python coverage artifacts
+.coverage
+coverage.txt
+htmlcov/
+coverage/
+client/main.js

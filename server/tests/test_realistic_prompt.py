@@ -9,17 +9,11 @@
 
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from services.image_service import ImageService  # noqa: E402
 from services.style_templates import STYLE_TEMPLATES, style_prompt_params, style_template  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 POSITIVE_CONFLICT_WORDS = ("comic", "anime", "cartoon", "chibi", "cel shading", "illustration")
 REQUIRED_POSITIVE_TERMS = (

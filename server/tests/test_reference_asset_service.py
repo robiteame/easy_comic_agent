@@ -11,19 +11,14 @@ from __future__ import annotations
 import base64
 import io
 import random
-import sys
 import unittest
 from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from PIL import Image  # noqa: E402
 
 from services.providers.video_ark_seedance import ArkSeedanceVideoAdapter  # noqa: E402
 from services.reference_asset_service import ReferenceAssetService  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _png_bytes(width: int, height: int, *, noise: bool = False) -> bytes:

@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, StringConstraints
@@ -8,8 +8,10 @@ from pydantic import BaseModel, StringConstraints
 from api.schemas import StyleKeywords, StyleLabel
 from config import settings
 from services.atomic_json import read_json_file
+from services.connection_test_service import test_connection
 from services.model_config_service import get_model_config, save_model_config
 from services.model_discovery_service import ModelDiscoveryError, discover_models
+from services.onboarding_service import get_onboarding_status, save_onboarding_status
 from services.prompts import validate_system_prompt
 from services.providers.capability_matrix import capability_report
 from services.providers.endpoint import KNOWN_PROTOCOLS, endpoint_identity, get_endpoint
@@ -52,6 +54,17 @@ class ModelDiscoveryRequest(BaseModel):
     api_key: str = ""
     protocol: str = ""
     auth_style: str = "bearer"
+
+
+class ConnectionTestRequest(BaseModel):
+    # 用户可见能力名；llm 对应内部 script 端点，tts 对应 voice 端点。
+    capability: Literal["llm", "image", "video", "tts"]
+    # 设置页表单中的待测配置（保存前即可测）；不传则测现行生效配置。
+    config: dict | None = None
+
+
+class OnboardingStatusSave(BaseModel):
+    completed: bool = False
 
 
 @router.get("/style-templates")
@@ -145,6 +158,28 @@ async def discover_model_configs(data: ModelDiscoveryRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/test-connection")
+async def test_model_connection(data: ConnectionTestRequest):
+    """对一类模型能力做廉价的真实探活；结果消息已脱敏，不含密钥。"""
+
+    try:
+        return await test_connection(data.capability, data.config)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/onboarding")
+async def read_onboarding_status():
+    """首次启动向导完成状态：未完成时前端应展示向导。"""
+    return get_onboarding_status()
+
+
+@router.put("/onboarding")
+async def update_onboarding_status(data: OnboardingStatusSave):
+    """写入向导完成状态（原子落盘到 DATA_DIR，随安装迁移）。"""
+    return save_onboarding_status(data.completed)
 
 
 def _template_key(label: str) -> str:

@@ -1,20 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
-
 from services.ffmpeg_service import FFmpegService
 from services.providers.endpoint import EndpointConfig
 from services.providers.video_ark_seedance import ArkSeedanceVideoAdapter
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class _BlockingProcess:

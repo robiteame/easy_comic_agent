@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from PIL import Image  # noqa: E402
 

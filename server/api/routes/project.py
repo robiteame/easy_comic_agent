@@ -22,6 +22,7 @@ from services.reference_readiness_service import (
     mark_reference_success,
     refresh_project_reference_state,
 )
+from services.sample_project_service import create_sample_project as build_sample_project
 from services.security import (
     UploadLimitExceeded,
     safe_path,
@@ -118,6 +119,23 @@ async def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
     if first_episode:
         result["first_episode"] = _serialize_project(first_episode, parent_titles)
     return result
+
+
+@router.post("/sample")
+async def create_sample_project(db: Session = Depends(get_db)):
+    """创建内置示例项目：固定剧本直接落库 + PIL 占位图，不调用任何外部 API。
+
+    返回形状与 POST /api/project 一致（series + first_episode），前端可直接
+    按 first_episode 打开工作台浏览分镜与故事板。
+    """
+    try:
+        return await build_sample_project(db)
+    except OSError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="示例项目素材写入失败，请检查磁盘空间") from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"示例项目创建失败: {exc}") from exc
 
 
 @router.get("/{project_id}")
@@ -637,6 +655,7 @@ def _serialize_project(project: Project, parent_titles: dict[str, str] | None = 
         "timing_plan": json.loads(project.timing_plan) if project.timing_plan else {},
         "consistency_config": json.loads(project.consistency_config) if project.consistency_config else {},
         "consistency_report": json.loads(project.consistency_report) if project.consistency_report else {},
+        "is_sample": bool(project.is_sample),
         "created_at": project.created_at.isoformat(),
         "updated_at": project.updated_at.isoformat(),
     }

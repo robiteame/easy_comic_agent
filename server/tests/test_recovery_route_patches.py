@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from api.routes import shot as shot_route  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: E402
+from tests.support.test_environment import TEST_ROOT  # noqa: E402
 
 
 class RecoveryRoutePatchTests(unittest.TestCase):

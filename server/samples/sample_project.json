@@ -1,0 +1,162 @@
+{
+  "title": "示例项目 · 天台上的告白",
+  "episode_title": "示例剧集 · 天台上的告白",
+  "genre": "校园甜宠",
+  "style": "anime",
+  "output_format": "9:16",
+  "resolution": "1080p",
+  "platform": "douyin",
+  "target_duration": 30,
+  "script_text": "标题：天台上的告白\n场景一：放学后的天台，夕阳把云染成橘色。林晓抱着画板发呆，江远拿着两瓶汽水推门进来。\n林晓：你怎么知道我在这儿？\n江远：全年级都知道，天台是你的秘密基地。\n场景二：两人并肩看夕阳。林晓把画板递给江远，上面画着两个人的侧影。\n江远：下一张，能画成我们吗？\n林晓：（微笑）画板已经留好位置了。",
+  "characters": [
+    {
+      "name": "林晓",
+      "appearance": {
+        "age": "17 岁高中生",
+        "face": "圆润脸型、杏眼、浅棕色长发扎低马尾",
+        "outfit": "白色校服衬衫、藏青色百褶裙、米色针织开衫",
+        "default_outfit": "白色校服衬衫、藏青色百褶裙、米色针织开衫"
+      },
+      "personality": "安静内向，喜欢画画，紧张时会攥住画板边缘",
+      "visual_prompt": "17 岁高中女生林晓，圆润脸型、杏眼、浅棕色长发扎低马尾，白色校服衬衫、藏青色百褶裙、米色针织开衫，温柔安静气质",
+      "negative_prompt": "extra fingers, bad anatomy, watermark, text",
+      "key_features": ["浅棕色低马尾", "米色针织开衫", "随身画板"],
+      "emotion_variants": {
+        "happy": "眼角弯起、嘴角轻扬",
+        "shy": "低头看画板、耳尖泛红",
+        "neutral": "平静微笑、目光柔和"
+      },
+      "voice_id": "冰糖",
+      "seed": 42
+    },
+    {
+      "name": "江远",
+      "appearance": {
+        "age": "17 岁高中生",
+        "face": "清爽短发、剑眉、笑起来有虎牙",
+        "outfit": "白色校服衬衫、深灰色长裤、校服外套搭在肩上",
+        "default_outfit": "白色校服衬衫、深灰色长裤、校服外套搭在肩上"
+      },
+      "personality": "开朗外向，篮球社主力，说话直接但心思细腻",
+      "visual_prompt": "17 岁高中男生江远，清爽短发、剑眉、笑起来有虎牙，白色校服衬衫、深灰色长裤、校服外套搭在肩上，阳光开朗气质",
+      "negative_prompt": "extra fingers, bad anatomy, watermark, text",
+      "key_features": ["清爽黑色短发", "外套搭肩", "虎牙笑容"],
+      "emotion_variants": {
+        "happy": "咧嘴笑、露出虎牙",
+        "serious": "眉眼专注、嘴角收紧",
+        "neutral": "轻松微笑、目光明亮"
+      },
+      "voice_id": "云夏",
+      "seed": 43
+    }
+  ],
+  "scenes": [
+    {
+      "name": "放学后的天台",
+      "location": "学校天台",
+      "time_of_day": "黄昏",
+      "scene_group_key": "sample_rooftop",
+      "description": "夕阳把云染成橘色，铁丝网围栏、水泥护栏、远处教学楼剪影，风掀起画纸一角",
+      "visual_prompt": "放学后的学校天台，夕阳橘色云层，铁丝网围栏与水泥护栏，远处教学楼剪影，逆光暖色调",
+      "emotion": "温暖",
+      "camera_suggestion": "medium",
+      "seed": 1200
+    }
+  ],
+  "shots": [
+    {
+      "shot_id": "shot_001",
+      "scene_number": 1,
+      "shot_type": "wide",
+      "scene_description": "放学后的天台全景，夕阳把云染成橘色，林晓独自抱画板坐在护栏边",
+      "character_action": "林晓抱着画板望向远处的教学楼，发丝被风吹起",
+      "characters_in_scene": ["林晓"],
+      "dialogue": [],
+      "camera_angle": "正面",
+      "camera_movement": "静止",
+      "duration": 3.0,
+      "emotion": "neutral",
+      "transition": "cut",
+      "visual_notes": "逆光剪影开场， establishing shot 建立天台空间感"
+    },
+    {
+      "shot_id": "shot_002",
+      "scene_number": 1,
+      "shot_type": "medium",
+      "scene_description": "天台铁门被推开，江远拿着两瓶汽水走向林晓，夕阳在他身后",
+      "character_action": "江远推开铁门，扬了扬手中的汽水，快步走来",
+      "characters_in_scene": ["林晓", "江远"],
+      "dialogue": [
+        {
+          "speaker": "林晓",
+          "line": "你怎么知道我在这儿？",
+          "emotion": "好奇",
+          "action": "抱紧画板回头",
+          "start_ms": 0,
+          "end_ms": 1800
+        },
+        {
+          "speaker": "江远",
+          "line": "全年级都知道，天台是你的秘密基地。",
+          "emotion": "得意",
+          "action": "递出一瓶汽水",
+          "start_ms": 2000,
+          "end_ms": 4600
+        }
+      ],
+      "camera_angle": "侧面",
+      "camera_movement": "跟随",
+      "duration": 5.0,
+      "emotion": "happy",
+      "transition": "cut",
+      "visual_notes": "双人中景，汽水作为关键道具入画"
+    },
+    {
+      "shot_id": "shot_003",
+      "scene_number": 1,
+      "shot_type": "close-up",
+      "scene_description": "林晓的画板特写，纸上画着并肩的两个人物侧影，线条温柔",
+      "character_action": "林晓的手指轻轻抚过画纸边缘",
+      "characters_in_scene": ["林晓"],
+      "dialogue": [],
+      "camera_angle": "俯视",
+      "camera_movement": "静止",
+      "duration": 3.0,
+      "emotion": "neutral",
+      "transition": "cut",
+      "visual_notes": "插入镜头，画板内容是本集情感线索"
+    },
+    {
+      "shot_id": "shot_004",
+      "scene_number": 1,
+      "shot_type": "medium",
+      "scene_description": "两人并肩坐在护栏边看夕阳，江远侧头看林晓，林晓把画板递过去",
+      "character_action": "江远侧头微笑，接过画板端详；林晓耳尖泛红望向远处",
+      "characters_in_scene": ["林晓", "江远"],
+      "dialogue": [
+        {
+          "speaker": "江远",
+          "line": "下一张，能画成我们吗？",
+          "emotion": "期待",
+          "action": "指着画上的两个侧影",
+          "start_ms": 0,
+          "end_ms": 2600
+        },
+        {
+          "speaker": "林晓",
+          "line": "画板已经留好位置了。",
+          "emotion": "害羞",
+          "action": "低头轻声回应",
+          "start_ms": 3000,
+          "end_ms": 5200
+        }
+      ],
+      "camera_angle": "正面",
+      "camera_movement": "静止",
+      "duration": 6.0,
+      "emotion": "shy",
+      "transition": "cut",
+      "visual_notes": "收尾双人镜头，暖色逆光，呼应标题「天台上的告白」"
+    }
+  ]
+}

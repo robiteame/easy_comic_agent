@@ -17,6 +17,8 @@ interface ProjectState {
   platform: string
   runMode: 'manual' | 'auto'
   characters: any[]
+  /** 内置示例项目标记（后端 is_sample）：为真时置灰依赖外部 Key 的操作。 */
+  isSample: boolean
 
   setProject: (data: Partial<ProjectState>) => void
   reset: () => void
@@ -39,6 +41,7 @@ const DEFAULT_PROJECT: Omit<ProjectState, 'setProject' | 'reset'> = {
   platform: 'douyin',
   runMode: 'manual',
   characters: [],
+  isSample: false,
 }
 
 export const useProjectStore = create<ProjectState>((set) => ({

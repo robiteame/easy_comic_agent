@@ -14,15 +14,9 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import unittest
 import uuid
-from pathlib import Path
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -34,7 +28,7 @@ from models import Project, Shot  # noqa: E402
 from services import audio_routing, provider_readiness  # noqa: E402
 from services.job_types import parse_job_key  # noqa: E402
 from services.providers.endpoint import EndpointConfig  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _endpoint(capability: str, *, api_key: str = "", protocol: str = "") -> EndpointConfig:

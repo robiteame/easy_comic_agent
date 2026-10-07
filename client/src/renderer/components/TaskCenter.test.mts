@@ -1,4 +1,4 @@
-import { test, beforeEach } from 'node:test'
+import { test, beforeEach } from 'vitest'
 
 import { expectRender } from '../test-support/ssrTestHelper.mts'
 import { useTaskStore } from '../stores/taskStore'

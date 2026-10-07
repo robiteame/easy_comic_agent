@@ -13,14 +13,9 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
@@ -36,7 +31,7 @@ from services.shot_version_service import (  # noqa: E402
     create_version,
     parse_snapshot,
 )
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _media_file(name: str) -> str:

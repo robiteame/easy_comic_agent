@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { test, beforeEach } from 'node:test'
+import { test, beforeEach } from 'vitest'
 
 import { useProjectStore } from './projectStore.ts'
 
@@ -21,6 +21,7 @@ test('初始状态为默认项目字段', () => {
   assert.equal(state.platform, 'douyin')
   assert.equal(state.runMode, 'manual')
   assert.deepEqual(state.characters, [])
+  assert.equal(state.isSample, false, '默认非示例项目')
 })
 
 test('setProject 支持部分字段合并，未给字段保持原值', () => {
@@ -54,6 +55,7 @@ test('reset 恢复全部默认值', () => {
     runMode: 'auto',
     characters: [{ name: '主角' }],
     consistencyReport: { score: 0.8 },
+    isSample: true,
   })
 
   useProjectStore.getState().reset()
@@ -65,4 +67,5 @@ test('reset 恢复全部默认值', () => {
   assert.equal(state.runMode, 'manual')
   assert.deepEqual(state.characters, [])
   assert.deepEqual(state.consistencyReport, {})
+  assert.equal(state.isSample, false, '示例项目标记随 reset 清除')
 })

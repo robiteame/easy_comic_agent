@@ -16,13 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import unittest
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from fastapi import HTTPException  # noqa: E402
 
@@ -49,7 +43,7 @@ from services.skill_config_service import (  # noqa: E402
     resolve_skill_config,
     save_skill_template,
 )
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 # 历史硬编码的原文（逐字节），用于断言默认行为不变。
 LEGACY_SCRIPT_GENERATION_PROMPT = (

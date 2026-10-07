@@ -8,23 +8,17 @@ from __future__ import annotations
 import asyncio
 import base64
 import struct
-import sys
 import unittest
 import wave
 from io import BytesIO
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from services.providers.endpoint import EndpointConfig, normalize_protocol, settings_defaults  # noqa: E402
 from services.providers.registry import get_adapter  # noqa: E402
 from services.providers.tts_tencent import TencentTTSAdapter, normalize_tencent_voice  # noqa: E402
 from services.providers.usage import CAPABILITY_TTS, CAPABILITY_VIDEO  # noqa: E402
 from services.providers.video_dashscope_wanx import DashscopeWanxVideoAdapter  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class _FakeResponse:

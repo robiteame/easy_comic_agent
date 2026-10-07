@@ -16,14 +16,8 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from agent import decision, graph  # noqa: E402
 from agent.contracts import FailureKind, RecoveryStrategy  # noqa: E402
@@ -37,7 +31,7 @@ from services import task_registry  # noqa: E402
 from services.job_types import ERROR_CODE_LLM_OUTPUT_TRUNCATED, classify_error_code  # noqa: E402
 from services.llm_service import LLMOutputTruncatedError, LLMService, large_json_max_tokens  # noqa: E402
 from services.providers.endpoint import EndpointConfig  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def chat_response(

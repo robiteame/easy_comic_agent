@@ -14,14 +14,8 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from agent import graph  # noqa: E402
 from agent.contracts import (  # noqa: E402

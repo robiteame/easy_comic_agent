@@ -14,15 +14,10 @@ import asyncio
 import json
 import logging
 import os
-import sys
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from PIL import Image  # noqa: E402
 
@@ -39,7 +34,7 @@ from services.quality_review_service import (  # noqa: E402
     merge_quality_fix_notes,
     quality_review_service,
 )
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _noise_image(path: Path, size: tuple[int, int] = (512, 512)) -> str:

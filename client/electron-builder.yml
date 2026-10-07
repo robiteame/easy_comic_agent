@@ -36,9 +36,9 @@ extraResources:
       - '!**/.mypy_cache/**'
       - '!**/.ruff_cache/**'
       - '!**/.claude/**'
+      - '!**/comic_agent_server.egg-info/**'
       - '!**/test_*.py'
-      - '!**/simple_test.py'
-      - '!**/start_test.py'
+      - '!tests/**'
       - '!scripts/**'
   # Relocatable python-build-standalone runtime with production dependencies
   # preinstalled, produced by `node scripts/build-python-runtime.mjs`. The

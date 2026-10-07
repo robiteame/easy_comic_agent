@@ -538,7 +538,7 @@ uvicorn main:app --host 0.0.0.0 --port 8011 --reload
 
 ## 开发注意事项
 
-1. **sys.path**: `main.py` 开头会将 server 目录加入 sys.path，确保模块导入正确
+1. **包安装**: 本地开发先执行 `server/.venv/bin/pip install -e server`；源码包与顶层 `config` 模块由 `pyproject.toml` 声明，不再依赖 `sys.path` 引导
 2. **运行模式**: `mode=manual`(默认) 由 route 逐步触发；`mode=auto` 经 `agent/graph.py` 端到端跑。二者**复用同一批 route 步骤函数**，新增/修改流程逻辑只需改一处
 3. **异步执行**: 流水线通过 `asyncio.create_task()` 异步执行，不阻塞 API 响应
 4. **WebSocket 进度**: 通过 `ws_manager` 向项目的所有连接推送进度

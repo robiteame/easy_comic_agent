@@ -4,7 +4,6 @@ import shutil
 import subprocess
 import sys
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
@@ -12,9 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-sys.path.insert(0, str(Path(__file__).parent))
-
-from api.routes import (  # noqa: E402
+from api.routes import (
     asset,
     audio_track,
     budget,
@@ -31,19 +28,19 @@ from api.routes import (  # noqa: E402
     subtitle,
 )
 from api.routes import settings as settings_routes
-from api.websocket import jobs_manager, ws_manager  # noqa: E402
-from config import settings as app_settings  # noqa: E402
-from db import SessionLocal, engine, init_db  # noqa: E402
-from services import job_center  # noqa: E402
-from services.error_reporter import install_log_redaction  # noqa: E402
-from services.local_auth import (  # noqa: E402
+from api.websocket import jobs_manager, ws_manager
+from config import settings as app_settings
+from db import SessionLocal, engine, init_db
+from services import job_center
+from services.error_reporter import install_log_redaction
+from services.local_auth import (
     configured_token,
     is_allowed_websocket_origin,
     is_public_path,
     is_token_valid,
     request_token,
 )
-from services.task_registry import recover_interrupted  # noqa: E402
+from services.task_registry import recover_interrupted
 
 
 @asynccontextmanager

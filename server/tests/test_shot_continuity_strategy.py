@@ -2,22 +2,16 @@
 
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from PIL import Image  # noqa: E402
 
 from agent.output_schemas import parse_storyboard_output  # noqa: E402
 from services.consistency_service import ConsistencyService  # noqa: E402
 from services.reference_readiness_service import build_manifest_for_shot  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _png(name: str) -> str:

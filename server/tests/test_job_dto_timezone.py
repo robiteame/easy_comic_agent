@@ -15,21 +15,15 @@
 
 from __future__ import annotations
 
-import sys
 import unittest
 from datetime import UTC, datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from db import SessionLocal, init_db  # noqa: E402
 from models import BackgroundJob, Project  # noqa: E402
 from services.job_center import attempt_history, job_stats  # noqa: E402
 from services.job_dto import as_utc, job_dto, job_duration_seconds  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 init_db()
 

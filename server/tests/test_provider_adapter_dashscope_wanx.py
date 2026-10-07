@@ -11,18 +11,12 @@ import asyncio
 import base64
 import io
 import random
-import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PIL import Image
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
-
 import httpx  # noqa: E402
+from PIL import Image
 
 from config import settings  # noqa: E402
 from services.providers.base import VideoRequest  # noqa: E402
@@ -31,7 +25,7 @@ from services.providers.http_retry import request_with_retry  # noqa: E402
 from services.providers.registry import get_adapter  # noqa: E402
 from services.providers.video_dashscope_wanx import DashscopeWanxVideoAdapter  # noqa: E402
 from services.reference_asset_service import ReferenceAssetService  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _endpoint(base_url: str = "") -> EndpointConfig:

@@ -8,14 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 import unittest
-from pathlib import Path
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from agent import graph as graph_module  # noqa: E402
 from api.routes import script as script_route  # noqa: E402
@@ -27,7 +21,7 @@ from services import (
     error_reporter,  # noqa: E402
     task_registry,  # noqa: E402
 )
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 SECRET_KEY = "sk-abcdefghijklmnop0123456789"
 SECRET_PATH = "/Users/someone/private/comic-agent/keys.txt"

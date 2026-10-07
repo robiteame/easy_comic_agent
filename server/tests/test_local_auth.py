@@ -1,14 +1,8 @@
 from __future__ import annotations
 
 import os
-import sys
 import unittest
-from pathlib import Path
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from services.local_auth import (
     TOKEN_ENV,
@@ -18,7 +12,7 @@ from services.local_auth import (
     is_token_valid,
     request_token,
 )
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 class LocalAuthTests(unittest.TestCase):

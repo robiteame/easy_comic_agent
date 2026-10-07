@@ -167,6 +167,9 @@ export const projectApi = {
 
   delete: (id: string) => api.delete(`/api/project/${id}`).then((r) => r.data),
 
+  /** 创建内置示例项目：后端固定剧本 + PIL 占位图直接落库，零外部 API。 */
+  createSample: () => api.post('/api/project/sample').then((r) => r.data),
+
   rebuildAssets: (id: string) => api.post(`/api/project/${id}/assets/rebuild`, {}).then((r) => r.data),
 
   importVideo: (id: string, formData: FormData) =>
@@ -651,6 +654,29 @@ export const settingsApi = {
   }) => api.post('/api/settings/model-configs/discover', data).then((r) => r.data),
 
   saveModelConfigs: (data: Record<string, any>) => api.put('/api/settings/model-configs', data).then((r) => r.data),
+
+  testModelConnection: (data: { capability: 'llm' | 'image' | 'video' | 'tts'; config?: Record<string, any> }) =>
+    api.post('/api/settings/test-connection', data).then((r) => r.data),
+
+  onboardingStatus: () => api.get('/api/settings/onboarding').then((r) => r.data as OnboardingStatus),
+
+  completeOnboarding: (completed = true) =>
+    api.put('/api/settings/onboarding', { completed }).then((r) => r.data as OnboardingStatus),
+}
+
+/** 首启向导完成状态（后端持久化于 DATA_DIR，随安装迁移）。 */
+export interface OnboardingStatus {
+  completed: boolean
+  completed_at: string
+}
+
+/** 模型连通性测试结果（消息已脱敏，不含密钥）。 */
+export interface ModelConnectionTestResult {
+  status: 'ok' | 'fail' | 'unsupported_check'
+  provider: string
+  model: string
+  latency_ms: number
+  message: string
 }
 
 /**

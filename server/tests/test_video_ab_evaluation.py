@@ -11,8 +11,6 @@ import unittest
 from pathlib import Path
 
 _SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from config import settings  # noqa: E402
 from services.video_ab_evaluation import (  # noqa: E402
@@ -22,8 +20,9 @@ from services.video_ab_evaluation import (  # noqa: E402
     build_evaluation_report,
     load_evaluation_payload,
 )
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
+_SERVER_DIR = Path(__file__).resolve().parents[1]
 FIXTURE_PATH = _SERVER_DIR / "tests" / "fixtures" / "video_ab_evaluation" / "fixture.json"
 CLI_PATH = _SERVER_DIR / "scripts" / "video_ab_evaluate.py"
 

@@ -7,14 +7,8 @@ API Key / 供应商原始响应」的安全约束。
 
 from __future__ import annotations
 
-import sys
 import unittest
 import uuid
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -24,7 +18,7 @@ from models import BackgroundJob, Project, Shot  # noqa: E402
 from services import pricing_service, task_registry, usage_service  # noqa: E402
 from services.providers.endpoint import get_endpoint  # noqa: E402
 from services.providers.usage import CAPABILITY_IMAGE, UsageMetadata  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 init_db()
 

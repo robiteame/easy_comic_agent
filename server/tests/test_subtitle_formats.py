@@ -2,13 +2,7 @@
 
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from config import settings  # noqa: E402
 from services.subtitle_service import (  # noqa: E402
@@ -30,7 +24,7 @@ from services.subtitle_service import (  # noqa: E402
     validate_cue_text,
     validate_cues,
 )
-from test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402,F401
+from tests.support.test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402,F401
 
 
 def _cue(start: int, end: int, text: str, name: str = "") -> SubtitleCueData:

@@ -10,15 +10,9 @@
 
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 # 必须先于 services/config 导入，保证 settings 绑定测试沙箱目录，
 # 不污染同批运行的其它模块（参考图 allowed_roots 校验依赖 OUTPUT_DIR）。
@@ -34,7 +28,7 @@ from services.story_timing import (  # noqa: E402
     split_shot,
 )
 from services.video_service import VideoService  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 
 def _fixed_5s_provider() -> ProviderDurationCapability:

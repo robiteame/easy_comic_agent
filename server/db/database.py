@@ -138,6 +138,8 @@ def _ensure_sqlite_columns() -> None:
                 # 记录渲染时的版本，发布前不一致则丢弃成片（配置已过期）。
                 "av_config_version": "INTEGER DEFAULT 0",
                 "consistency_report": "TEXT DEFAULT '{}'",
+                # 内置示例项目标记：前端据此禁用依赖外部 API Key 的操作。
+                "is_sample": "BOOLEAN DEFAULT 0 NOT NULL",
             },
         )
     if "characters" in inspector.get_table_names():

@@ -16,14 +16,9 @@ import asyncio
 import json
 import shutil
 import subprocess
-import sys
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from PIL import Image  # noqa: E402
 
@@ -36,7 +31,7 @@ from models import Character, Project, QualityReview, SceneAsset, Shot  # noqa: 
 from services import structural_validation as sv  # noqa: E402
 from services.quality_review_providers import VLMCapability  # noqa: E402
 from services.quality_review_service import STAGE_STORYBOARD, quality_review_service  # noqa: E402
-from test_environment import TEST_ROOT  # noqa: F401,E402
+from tests.support.test_environment import TEST_ROOT  # noqa: F401,E402
 
 FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 MEDIA_ROOT = TEST_ROOT / "auto-quality-closure"

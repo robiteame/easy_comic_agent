@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import BottomBar from './components/BottomBar'
+import FirstRunWizard, { OPEN_WIZARD_EVENT } from './components/FirstRunWizard'
 import GlobalPlayfulMotion from './components/GlobalPlayfulMotion'
 import LeftSidebar from './components/LeftSidebar'
 import MainWorkspace from './components/MainWorkspace'
@@ -7,6 +8,8 @@ import RightSidebar from './components/RightSidebar'
 import TaskCenter, { OPEN_TASK_CENTER_EVENT } from './components/TaskCenter'
 import TopBar from './components/TopBar'
 import { OPEN_SETTINGS_EVENT } from './components/TopBar'
+import UpdateBanner from './components/UpdateBanner'
+import { settingsApi } from './services/api'
 import { beginProjectNavigationIntent, requestProjectNavigation } from './services/projectNavigationGuard'
 import { useProjectStore } from './stores/projectStore'
 import { useTaskStore } from './stores/taskStore'
@@ -25,6 +28,7 @@ const App: React.FC = () => {
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(true)
   const [settingsPageOpen, setSettingsPageOpen] = useState(false)
   const [taskCenterOpen, setTaskCenterOpen] = useState(false)
+  const [wizardOpen, setWizardOpen] = useState(false)
   const settingsPageOpenRef = useRef(settingsPageOpen)
   const pendingWorkspaceNavigationRef = useRef<WorkspaceNavigateDetail | null>(null)
   const settingsNavigationRequestRef = useRef(0)
@@ -32,6 +36,35 @@ const App: React.FC = () => {
   useEffect(() => {
     settingsPageOpenRef.current = settingsPageOpen
   }, [settingsPageOpen])
+
+  // 首启判定：读后端持久化标志（DATA_DIR 内，随安装迁移；不用 localStorage）。
+  // 完成标志在后端写入，渲染进程只读；查询失败时保守不弹向导，避免后端启动
+  // 竞态误伤第二次及以后启动。
+  useEffect(() => {
+    let active = true
+    const check = (retried: boolean) => {
+      settingsApi
+        .onboardingStatus()
+        .then((status) => {
+          if (active && status && !status.completed) setWizardOpen(true)
+        })
+        .catch(() => {
+          // 打包环境后端端口注入可能略晚于渲染进程首帧，失败重试一次。
+          if (active && !retried) window.setTimeout(() => check(true), 1500)
+        })
+    }
+    check(false)
+    return () => {
+      active = false
+    }
+  }, [])
+
+  // 设置页「重新运行向导」入口：手动触发不重置完成标志，向导完成时照常回写。
+  useEffect(() => {
+    const openWizard = () => setWizardOpen(true)
+    window.addEventListener(OPEN_WIZARD_EVENT, openWizard)
+    return () => window.removeEventListener(OPEN_WIZARD_EVENT, openWizard)
+  }, [])
 
   useEffect(() => {
     const openShotConfig = () => setRightSidebarCollapsed(false)
@@ -105,6 +138,7 @@ const App: React.FC = () => {
   return (
     <div className="app-shell">
       <GlobalPlayfulMotion />
+      <UpdateBanner />
       <TopBar />
       <div
         className={`app-main${sidebarCollapsed ? ' sidebar-collapsed' : ''}${rightSidebarCollapsed ? ' right-sidebar-collapsed' : ''}${settingsPageOpen ? ' settings-mode' : ''}`}
@@ -134,6 +168,7 @@ const App: React.FC = () => {
       </div>
       <BottomBar />
       <TaskCenter open={taskCenterOpen} onClose={() => setTaskCenterOpen(false)} />
+      <FirstRunWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
     </div>
   )
 }

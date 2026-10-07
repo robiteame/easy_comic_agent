@@ -6,12 +6,9 @@ import atexit
 import inspect
 import json
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from api.routes import shot as shot_route
 from api.routes.render import _apply_post_profiles

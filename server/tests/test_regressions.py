@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import gc
 import json
-import sys
 import types
 import unittest
 import warnings
@@ -22,10 +21,6 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-
-_SERVER_DIR = Path(__file__).resolve().parents[1]
-if str(_SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVER_DIR))
 
 from fastapi import HTTPException  # noqa: E402
 from sqlalchemy import event, text  # noqa: E402
@@ -49,7 +44,7 @@ from services import (
 from services.security import validate_script_upload, validate_video_upload  # noqa: E402
 from services.storage_service import StorageQuotaExceeded, StorageService  # noqa: E402
 from services.task_registry import claim, finish, recover_interrupted  # noqa: E402
-from test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402
+from tests.support.test_environment import TEST_ROOT as _TEST_ROOT  # noqa: E402
 
 
 class DatabaseTestCase(unittest.TestCase):

@@ -1,8 +1,4 @@
 import sys
-from pathlib import Path
-
-# Add server directory to path
-sys.path.insert(0, str(Path(__file__).parent))
 
 
 def _run_startup_check() -> None:
@@ -122,6 +118,6 @@ def _run_startup_check() -> None:
 
 # 本文件名匹配 pytest 的 ``*_test.py`` 收集模式：作为模块导入时（例如在
 # server/ 目录下直接运行 pytest）绝不能启动阻塞的 uvicorn 服务器，只在
-# 显式执行 ``python start_test.py`` 时跑启动自检。
+# 显式执行 ``python scripts/startup_selfcheck.py`` 时跑启动自检。
 if __name__ == "__main__":
     _run_startup_check()
