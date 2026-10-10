@@ -490,6 +490,25 @@ test('module assertions', async () => {
   assert.equal(describeBudgetError({ response: { status: 500, data: 'boom' } }, '保存失败'), '保存失败（HTTP 500）')
   assert.equal(describeBudgetError(new Error('Network Error'), '保存失败'), '保存失败（网络不可用）')
   assert.match(describeBudgetError(new Error('boom'), '保存失败'), /保存失败/)
+  assert.equal(
+    describeBudgetError(
+      {
+        response: {
+          status: 502,
+          data: {
+            detail: {
+              ok: false,
+              status: 'provider_error',
+              error_code: 'provider_config_error',
+              message: '剧本生成模型认证失败或配置不完整，请检查 API Key。',
+            },
+          },
+        },
+      },
+      '自动生成剧本失败',
+    ),
+    '剧本生成模型认证失败或配置不完整，请检查 API Key。',
+  )
 
   // --- 模型端点未配置拦截（provider_not_configured） ---------------------------
 

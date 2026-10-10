@@ -103,6 +103,10 @@ export function describeBudgetError(error: unknown, fallback = '操作失败，�
       const msg = asString(first?.msg).trim()
       if (msg) return msg
     }
+    if (detail && typeof detail === 'object') {
+      const msg = asString((detail as { message?: unknown }).message).trim()
+      if (msg) return msg
+    }
     const message = asString((data as { message?: unknown }).message).trim()
     if (message) return message
   }

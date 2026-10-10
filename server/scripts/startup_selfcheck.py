@@ -1,3 +1,4 @@
+import os
 import sys
 
 
@@ -102,11 +103,18 @@ def _run_startup_check() -> None:
     print("=" * 60)
 
     # Try to start the server
-    print("\nStarting server on port 8011...")
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "8011"))
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        from services.local_auth import configured_token
+
+        if not configured_token():
+            raise SystemExit("HOST 绑定到非本机地址时必须设置 COMIC_AGENT_LOCAL_TOKEN")
+    print(f"\nStarting server on {host}:{port}...")
     try:
         import uvicorn
 
-        uvicorn.run("main:app", host="0.0.0.0", port=8011, reload=False)
+        uvicorn.run("main:app", host=host, port=port, reload=False)
     except KeyboardInterrupt:
         print("\nServer stopped by user")
     except Exception as e:

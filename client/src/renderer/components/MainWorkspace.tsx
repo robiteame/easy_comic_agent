@@ -49,6 +49,7 @@ import { getWorkspacePanelAriaProps, getWorkspaceTabAriaProps, resolveWorkspaceT
 const AvWorkbench = React.lazy(() => import('./AvWorkbench'))
 import BudgetSummaryPanel from './BudgetSummaryPanel'
 import { consistencyImpactText, referenceStatusClass, referenceStatusLabel } from './consistencyModel'
+import { describeBudgetError } from '../services/costModelError'
 import QualityReviewPanel from './QualityReviewPanel'
 import { qualityBadgeFor, verdictMeta } from './qualityReviewModel'
 import {
@@ -67,6 +68,8 @@ const WORKSPACE_NAVIGATE_EVENT = 'workspace:navigate'
 import {
   getStepLabel,
   normalizeShot,
+  resolvePreviewMediaKind,
+  resolvePreviewModeForTab,
   WORKSPACE_TABS,
   type ProjectOperation,
   type StyleOption,
@@ -1044,7 +1047,7 @@ const MainWorkspace: React.FC = () => {
       message.success('新建项目成功，已自动创建第一集')
     } catch (err: any) {
       if (!isCurrentOperation(operation)) return
-      message.error('新建项目失败：' + (err.message || '未知错误'))
+      message.error(describeBudgetError(err, '新建项目失败'))
     } finally {
       if (isLatestOperation(operation) && mountedRef.current) setCreatingProject(false)
     }
@@ -1120,8 +1123,7 @@ const MainWorkspace: React.FC = () => {
       )
     } catch (err: any) {
       if (!isCurrentOperation(operation)) return
-      if (!notifyBudgetBlocked(err) && !notifyProviderBlocked(err))
-        message.error('提交失败：' + (err.message || '未知错误'))
+      if (!notifyBudgetBlocked(err) && !notifyProviderBlocked(err)) message.error(describeBudgetError(err, '提交失败'))
       setGenerating(false)
       setLoading(false)
     }
@@ -1163,7 +1165,9 @@ const MainWorkspace: React.FC = () => {
       await submitScriptForStoryboard(generatedScript, operation)
     } catch (err: any) {
       if (!isCurrentOperation(operation)) return
-      message.error('自动生成剧本失败：' + (err.message || '未知错误'))
+      if (!notifyBudgetBlocked(err) && !notifyProviderBlocked(err)) {
+        message.error(describeBudgetError(err, '自动生成剧本失败'))
+      }
       setGenerating(false)
       setLoading(false)
     } finally {
@@ -1541,7 +1545,7 @@ const MainWorkspace: React.FC = () => {
         onClick={() => setImagePreview({ url: previewUrl, title: item.name || label })}
         aria-label="查看高清原图"
       >
-        <img src={previewUrl} alt={label} loading="lazy" decoding="async" />
+        <img src={previewUrl} alt={`${item.name || label}参考图`} loading="lazy" decoding="async" />
       </button>
     ) : (
       <span>{label}</span>
@@ -1555,6 +1559,7 @@ const MainWorkspace: React.FC = () => {
       !selectedShot.media_stale,
   )
   const showPreviewSurface = workspaceTab === 'storyboard' || workspaceTab === 'review' || workspaceTab === 'video'
+  const previewMediaKind = resolvePreviewMediaKind(previewMode, Boolean(currentVideoUrl), Boolean(imageUrl))
 
   const toggleQueueShot = (shotId: string) => {
     setQueueSelectedIds((current) =>
@@ -1606,7 +1611,7 @@ const MainWorkspace: React.FC = () => {
         .sync({ silent: true })
         .catch(() => undefined)
     } catch (error: any) {
-      message.error(error?.response?.data?.detail || error?.message || '队列提交失败')
+      message.error(describeBudgetError(error, '队列提交失败'))
     } finally {
       setQueueSubmitting(false)
     }
@@ -1615,12 +1620,7 @@ const MainWorkspace: React.FC = () => {
   // 切换工作区标签：同时同步预览模式（点击与键盘操作共用同一条路径）
   const selectWorkspaceTab = (tabId: WorkspaceTab) => {
     setWorkspaceTab(tabId)
-    if (tabId === 'video' && currentVideoUrl) {
-      setPreviewMode('video')
-    }
-    if (tabId === 'storyboard' || tabId === 'review') {
-      setPreviewMode('shot')
-    }
+    setPreviewMode(resolvePreviewModeForTab(tabId))
   }
 
   // ARIA 标签页「自动激活」模式：方向键 / Home / End 同时移动焦点与选中项，
@@ -2245,9 +2245,9 @@ const MainWorkspace: React.FC = () => {
                     <div>{getStepLabel(currentStep)}...</div>
                     <div className="preview-loading-bar" />
                   </div>
-                ) : currentVideoUrl && previewMode === 'video' ? (
+                ) : previewMediaKind === 'video' && currentVideoUrl ? (
                   <video src={currentVideoUrl} controls className="final-video" poster={imageUrl || undefined} />
-                ) : imageUrl ? (
+                ) : previewMediaKind === 'image' && imageUrl ? (
                   <div className="preview-image-pan">
                     <img
                       src={imageUrl}
@@ -2263,7 +2263,9 @@ const MainWorkspace: React.FC = () => {
                     />
                   </div>
                 ) : (
-                  <span className="preview-placeholder">选择镜头即可预览画面</span>
+                  <span className="preview-placeholder">
+                    {previewMode === 'video' ? '成片尚未生成，完成镜头视频与合成后可在此预览' : '选择镜头即可预览画面'}
+                  </span>
                 )}
 
                 {selectedShot && !isGenerating && previewMode === 'shot' && (

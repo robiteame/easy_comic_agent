@@ -15,7 +15,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.mts', 'scripts/**/*.test.mts'],
+    include: ['*.test.mts', 'src/**/*.test.mts', 'scripts/**/*.test.mts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary', 'html'],

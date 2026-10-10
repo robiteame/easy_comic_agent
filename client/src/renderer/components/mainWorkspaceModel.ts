@@ -27,6 +27,22 @@ export const WORKSPACE_TABS = [
 ] as const
 
 export type WorkspaceTab = (typeof WORKSPACE_TABS)[number]['id']
+export type PreviewMode = 'shot' | 'video'
+
+/** 工作区标签与预览模式的唯一映射；成片页始终进入视频模式。 */
+export function resolvePreviewModeForTab(tabId: WorkspaceTab): PreviewMode {
+  return tabId === 'video' ? 'video' : 'shot'
+}
+
+/** 成片模式没有视频时显示空状态，绝不回退到旧故事板画面。 */
+export function resolvePreviewMediaKind(
+  previewMode: PreviewMode,
+  hasVideo: boolean,
+  hasImage: boolean,
+): 'video' | 'image' | 'placeholder' {
+  if (previewMode === 'video') return hasVideo ? 'video' : 'placeholder'
+  return hasImage ? 'image' : 'placeholder'
+}
 
 export type ProjectOperation = {
   key: string

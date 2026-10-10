@@ -509,6 +509,14 @@ def _serialize_character(item: Character) -> dict:
         "wardrobe_lock": item.wardrobe_lock or "",
         "seed": item.seed,
         "asset_status": str(item.asset_status or "active"),
+        "reference_status": str(item.reference_status or "stale"),
+        "reference_version": int(item.reference_version or 1),
+        "reference_retry_count": int(item.reference_retry_count or 0),
+        "reference_failure_reason": item.reference_failure_reason or "",
+        "reference_error_id": item.reference_error_id or "",
+        "reference_skip_reason": item.reference_skip_reason or "",
+        "reference_capability_warning": item.reference_capability_warning or "",
+        "reference_impact": json.loads(item.reference_impact) if item.reference_impact else {},
     }
 
 
@@ -530,6 +538,14 @@ def _serialize_scene(item: SceneAsset) -> dict:
         "prop_lock": item.prop_lock or "",
         "seed": item.seed,
         "asset_status": str(item.asset_status or "active"),
+        "reference_status": str(item.reference_status or "stale"),
+        "reference_version": int(item.reference_version or 1),
+        "reference_retry_count": int(item.reference_retry_count or 0),
+        "reference_failure_reason": item.reference_failure_reason or "",
+        "reference_error_id": item.reference_error_id or "",
+        "reference_skip_reason": item.reference_skip_reason or "",
+        "reference_capability_warning": item.reference_capability_warning or "",
+        "reference_impact": json.loads(item.reference_impact) if item.reference_impact else {},
     }
 
 

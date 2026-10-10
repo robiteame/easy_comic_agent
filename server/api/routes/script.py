@@ -21,6 +21,7 @@ from models import Shot as ShotModel
 from services.consistency_service import ConsistencyService
 from services.error_reporter import ERROR_PIPELINE, log_failure, redact, report_failure
 from services.image_service import ImageService
+from services.job_types import ERROR_CODE_CONFIG, ERROR_CODE_LABELS, ERROR_CODE_PROVIDER, classify_error_code
 from services.llm_service import LLMService
 from services.prompts import SCRIPT_GENERATION_SYSTEM_PROMPT, resolve_system_prompt
 from services.reference_readiness_service import (
@@ -73,6 +74,7 @@ class ScriptParseRequest(BaseModel):
 
 @router.post("/generate")
 async def generate_script(data: ScriptGenerateRequest):
+    ensure_providers_ready("script_pipeline", mode="manual")
     skill_config = _resolved_skill_config(data.project_id or "")
     style_meta = resolve_effective_style(data.style, skill_config, "script_agent")
     script = await _generate_script_text(data, skill_config)
@@ -217,7 +219,15 @@ async def upload_script(
 
 async def _generate_script_text(data: ScriptGenerateRequest, skill_config: dict | None = None) -> str:
     if not llm_service.available:
-        raise RuntimeError("未配置可用的 Mimo/LLM API Key，无法生成真实剧本")
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "ok": False,
+                "status": "provider_not_configured",
+                "error_code": "provider_not_configured",
+                "message": "未配置可用的剧本生成模型，请在「系统设置 → 模型服务」补齐后重试。",
+            },
+        )
 
     script_style = resolve_effective_style(data.style, skill_config, "script_agent")["effective_style"]
     script_append = agent_prompt_append(skill_config, "script_agent")
@@ -240,10 +250,44 @@ Skill 配置：{script_append}
             temperature=0.75,
         )
     except Exception as exc:
-        raise RuntimeError(f"Mimo 剧本生成失败: {exc}") from exc
+        safe_error = redact(str(exc), limit=500)
+        error_code = classify_error_code(safe_error)
+        if error_code not in {ERROR_CODE_CONFIG, ERROR_CODE_PROVIDER} and not error_code.startswith("provider_"):
+            error_code = ERROR_CODE_PROVIDER
+        message = (
+            "剧本生成模型认证失败或配置不完整，请在「系统设置 → 模型服务」检查 API Key。"
+            if error_code == ERROR_CODE_CONFIG
+            else "剧本生成服务调用失败，请稍后重试或检查模型服务配置。"
+        )
+        log_failure(
+            exc,
+            error_type=ERROR_PIPELINE,
+            context={"provider": settings.LLM_PROVIDER, "error_code": error_code},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "ok": False,
+                "status": "provider_error",
+                "error_code": error_code,
+                "error_code_label": ERROR_CODE_LABELS.get(error_code, "模型调用失败"),
+                "message": message,
+                "provider": settings.LLM_PROVIDER,
+            },
+        ) from exc
 
     if not script.strip():
-        raise RuntimeError("Mimo 剧本生成返回为空")
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "ok": False,
+                "status": "provider_error",
+                "error_code": ERROR_CODE_PROVIDER,
+                "error_code_label": ERROR_CODE_LABELS[ERROR_CODE_PROVIDER],
+                "message": "剧本生成模型返回为空，请重试或更换模型端点。",
+                "provider": settings.LLM_PROVIDER,
+            },
+        )
     return script
 
 
