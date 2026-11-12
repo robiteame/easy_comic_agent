@@ -122,8 +122,8 @@ class ShotVideoReadinessTests(unittest.TestCase):
                 [],
             )
 
-    def test_voice_not_required_when_video_supports_native_audio(self) -> None:
-        """视频模型支持原生对白语音时不强制要求 TTS。"""
+    def test_native_capability_does_not_skip_default_tts_configuration(self) -> None:
+        """模型有原生能力，但实际默认路由仍为 TTS。"""
 
         with (
             _patch_endpoints(video="b", voice=""),
@@ -132,15 +132,38 @@ class ShotVideoReadinessTests(unittest.TestCase):
             self.assertTrue(provider_readiness.native_video_audio_ready())
             self.assertEqual(
                 provider_readiness.missing_providers("shot_video", has_dialogue=True),
-                [],
+                [provider_readiness._issue("voice")],
             )
 
     def test_shot_level_native_override_skips_voice(self) -> None:
-        with _patch_endpoints(video="b", voice=""):
+        with (
+            _patch_endpoints(video="b", voice=""),
+            patch.object(audio_routing, "get_adapter", return_value=_native_adapter_class()),
+        ):
             self.assertEqual(
                 provider_readiness.missing_providers("shot_video", has_dialogue=True, audio_mode_override="native"),
                 [],
             )
+
+    def test_unsupported_native_override_requires_fallback_tts(self) -> None:
+        with _patch_endpoints(video="b", voice=""):
+            missing = provider_readiness.missing_providers(
+                "shot_video", has_dialogue=True, audio_mode_override="native"
+            )
+        self.assertEqual([item["capability"] for item in missing], ["voice"])
+
+    def test_endpoint_native_mode_skips_tts_when_supported(self) -> None:
+        def endpoint(capability):
+            value = _endpoint(capability, api_key="video-key" if capability == "video" else "")
+            if capability == "video":
+                value.params["audio_mode"] = "native"
+            return value
+
+        with (
+            patch.object(provider_readiness, "get_endpoint", side_effect=endpoint),
+            patch.object(audio_routing, "get_adapter", return_value=_native_adapter_class()),
+        ):
+            self.assertEqual(provider_readiness.missing_providers("shot_video", has_dialogue=True), [])
 
     def test_shot_level_explicit_tts_still_requires_voice(self) -> None:
         with (

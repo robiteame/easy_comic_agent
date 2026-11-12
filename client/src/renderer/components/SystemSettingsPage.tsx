@@ -73,9 +73,17 @@ const PROTOCOL_OPTIONS: Partial<Record<ModelCategory, { value: string; label: st
     { value: 'placeholder', label: '本地占位图（离线/免密钥）' },
   ],
   video: [
-    { value: 'ark-seedance', label: '火山方舟 Seedance（首帧参考 + 无声视频 + TTS，固定约 5 秒）' },
-    { value: 'dashscope-wanx', label: '阿里云百炼 通义万相（首帧参考 + 无声视频 + TTS）' },
-    { value: 'native-audio', label: '原生音视频（对白直出，厂商接入中）' },
+    { value: 'ark-seedance', label: '火山方舟 Seedance（按模型支持首尾帧与多模态参考）' },
+    { value: 'dashscope-wanx', label: '阿里云百炼 通义万相（按模型支持首尾帧与续写）' },
+    { value: 'openai-sora', label: 'OpenAI Sora（官方 Videos API）' },
+    { value: 'google-veo', label: 'Google Veo（Vertex AI）' },
+    { value: 'runway', label: 'Runway Gen-4.5 / Turbo' },
+    { value: 'kling', label: '可灵 Kling（密钥填写 AK:SK）' },
+    { value: 'minimax', label: 'MiniMax H3 / H3-Max' },
+    { value: 'vidu', label: 'Vidu Q3' },
+    { value: 'pixverse', label: 'PixVerse（官方上传与生成接口）' },
+    { value: 'luma', label: 'Luma Dream Machine' },
+    { value: 'native-audio', label: '旧版原生音视频占位协议（未接入）' },
   ],
   voice: [
     { value: 'mimo-tts', label: 'Mimo 内置 TTS' },
@@ -170,6 +178,33 @@ const VENDOR_PRESETS: Record<ModelCategory, { label: string; patch: ModelConfig 
     { label: '本地占位图', patch: { protocol: 'placeholder' } },
   ],
   video: [
+    {
+      label: 'OpenAI Sora 2',
+      patch: { protocol: 'openai-sora', base_url: 'https://api.openai.com/v1', model: 'sora-2' },
+    },
+    {
+      label: 'Google Veo 3.1（Vertex）',
+      patch: {
+        protocol: 'google-veo',
+        base_url: 'https://us-central1-aiplatform.googleapis.com/v1',
+        model: 'veo-3.1-generate-001',
+      },
+    },
+    {
+      label: 'Runway Gen-4.5',
+      patch: { protocol: 'runway', base_url: 'https://api.dev.runwayml.com/v1', model: 'gen4.5' },
+    },
+    {
+      label: '可灵 Kling 2.6（AK:SK）',
+      patch: { protocol: 'kling', base_url: 'https://api-beijing.klingai.com/v1', model: 'kling-v2-6' },
+    },
+    { label: 'MiniMax H3', patch: { protocol: 'minimax', base_url: 'https://api.minimax.cn', model: 'MiniMax-H3' } },
+    { label: 'Vidu Q3 Pro', patch: { protocol: 'vidu', base_url: 'https://api.vidu.com/ent/v2', model: 'viduq3-pro' } },
+    { label: 'PixVerse V6', patch: { protocol: 'pixverse', base_url: 'https://app-api.pixverse.ai', model: 'v6' } },
+    {
+      label: 'Luma Ray-2',
+      patch: { protocol: 'luma', base_url: 'https://api.lumalabs.ai/dream-machine/v1', model: 'ray-2' },
+    },
     {
       label: '火山 Seedance 2.5',
       patch: {
@@ -1015,13 +1050,15 @@ function CapabilityBadges({
     if (capabilities.requires_credentials === false) badges.push('免密钥（本地占位图）')
   }
   if (category === 'video') {
-    badges.push(
-      capabilities.reference_image
-        ? `首帧参考：${capabilities.reference_mode || 'first_frame_only'}`
-        : '不支持首帧参考图',
-    )
-    if (capabilities.fixed_duration) badges.push(`固定时长 ${capabilities.fixed_duration}s（超长镜头需拆分）`)
-    badges.push(capabilities.native_audio ? '原生音频' : '无声视频（对白走 TTS 配音链路）')
+    const features = capabilities.features || {}
+    badges.push(features.first_frame?.status === 'supported' ? '支持首帧参考' : '不支持首帧参考图')
+    if (features.first_last_frame_interpolation?.status === 'supported') badges.push('支持首尾帧')
+    if (capabilities.fixed_duration) badges.push(`固定时长 ${capabilities.fixed_duration}s`)
+    else if (capabilities.duration_options?.length) badges.push(`时长 ${capabilities.duration_options.join(' / ')} 秒`)
+    else if (capabilities.min_duration && capabilities.max_duration) {
+      badges.push(`时长 ${capabilities.min_duration}–${capabilities.max_duration} 秒`)
+    }
+    badges.push(features.native_audio?.status === 'supported' ? '支持原生音频' : '对白走 TTS 配音')
   }
   if (!badges.length) return null
   return (
@@ -1159,6 +1196,52 @@ function ModelConfigCard({
           onChange={(event) => onChange(category, 'api_key', event.target.value)}
         />
       </div>
+      {category === 'video' && currentProtocol === 'google-veo' && (
+        <>
+          <div className="settings-field">
+            <span>Google Cloud 项目 ID</span>
+            <Input
+              value={config.params?.project_id || ''}
+              onChange={(event) => onChange(category, 'params', { ...config.params, project_id: event.target.value })}
+            />
+          </div>
+          <div className="settings-field">
+            <span>区域 Location</span>
+            <Input
+              value={config.params?.location || 'us-central1'}
+              onChange={(event) => onChange(category, 'params', { ...config.params, location: event.target.value })}
+            />
+          </div>
+          <div className="asset-board-note">
+            密钥填写 Google OAuth 访问令牌；此协议使用 Vertex Veo，Omni 需独立接入。
+          </div>
+        </>
+      )}
+      {category === 'video' && currentProtocol === 'kling' && (
+        <div className="asset-board-note">
+          密钥格式为 AccessKey:SecretKey，适配器自动签发 JWT。模型名称请按账户权限填写。
+        </div>
+      )}
+      {category === 'video' && ['luma', 'minimax'].includes(currentProtocol) && (
+        <>
+          <div className="settings-field">
+            <span>公网输出目录地址（可选）</span>
+            <Input
+              value={config.params?.public_media_base_url || ''}
+              placeholder="https://your-domain.example/output"
+              onChange={(event) =>
+                onChange(category, 'params', {
+                  ...config.params,
+                  public_media_base_url: event.target.value,
+                })
+              }
+            />
+          </div>
+          <div className="asset-board-note">
+            这两家需要公网素材 URL。填写已托管的输出目录地址后，本地分镜会映射到对应 URL；留空时请直接提供公网素材。
+          </div>
+        </>
+      )}
       <div className="model-connection-row">
         <Button icon={<ApiOutlined />} loading={testing} onClick={() => onTest(category)}>
           测试连接
@@ -1168,7 +1251,7 @@ function ModelConfigCard({
             {connectionTestText(testResult)}
           </span>
         ) : (
-          <span className="model-connection-hint">用当前表单值发起一次廉价的真实调用，保存前即可测试</span>
+          <span className="model-connection-hint">按协议检测连接；不支持免费检测的视频接口会明确提示</span>
         )}
       </div>
       <div className="model-discovery-row">

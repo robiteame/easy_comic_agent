@@ -233,11 +233,11 @@ def _video_preflight_issues() -> list[str]:
 def _voice_issue(*, has_dialogue: bool | None, audio_mode_override: str) -> dict | None:
     if has_dialogue is False:
         return None  # 没有台词的镜头不会调用 TTS
-    override = str(audio_mode_override or "").strip().lower()
-    if override == "native":
-        return None
-    if override != "tts" and native_video_audio_ready():
-        # 视频模型支持原生对白语音：不强制要求 TTS。
+    endpoint = get_endpoint("video")
+    requested = str(audio_mode_override or endpoint.param("audio_mode") or "tts").strip().lower()
+    if requested == "native" and native_video_audio_ready(endpoint):
+        # 只有实际选择了可用的原生路径才跳过 TTS。auto 的其它镜头仍会
+        # 使用 TTS；无能力的 native 也会回退 TTS，均须预先检查凭据。
         return None
     if voice_endpoint_configured():
         return None

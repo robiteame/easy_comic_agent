@@ -17,7 +17,15 @@ from services.providers.tts_mimo import MimoTTSAdapter
 from services.providers.tts_tencent import TencentTTSAdapter
 from services.providers.video_ark_seedance import ArkSeedanceVideoAdapter
 from services.providers.video_dashscope_wanx import DashscopeWanxVideoAdapter
+from services.providers.video_google_veo import GoogleVeoVideoAdapter
+from services.providers.video_kling import KlingVideoAdapter
+from services.providers.video_luma import LumaVideoAdapter
+from services.providers.video_minimax import MiniMaxVideoAdapter
 from services.providers.video_native_audio import NativeAudioVideoAdapter
+from services.providers.video_openai_sora import OpenAISoraVideoAdapter
+from services.providers.video_pixverse import PixVerseVideoAdapter
+from services.providers.video_runway import RunwayVideoAdapter
+from services.providers.video_vidu import ViduVideoAdapter
 
 ADAPTERS: dict[tuple[str, str], type[BaseAdapter]] = {
     ("script", "openai-chat"): OpenAIChatAdapter,
@@ -28,6 +36,14 @@ ADAPTERS: dict[tuple[str, str], type[BaseAdapter]] = {
     ("video", "ark-seedance"): ArkSeedanceVideoAdapter,
     ("video", "dashscope-wanx"): DashscopeWanxVideoAdapter,
     ("video", "native-audio"): NativeAudioVideoAdapter,
+    ("video", "openai-sora"): OpenAISoraVideoAdapter,
+    ("video", "google-veo"): GoogleVeoVideoAdapter,
+    ("video", "runway"): RunwayVideoAdapter,
+    ("video", "kling"): KlingVideoAdapter,
+    ("video", "minimax"): MiniMaxVideoAdapter,
+    ("video", "vidu"): ViduVideoAdapter,
+    ("video", "pixverse"): PixVerseVideoAdapter,
+    ("video", "luma"): LumaVideoAdapter,
     ("voice", "dashscope-tts"): DashscopeTTSAdapter,
     ("voice", "mimo-tts"): MimoTTSAdapter,
     ("voice", "tencent-tts"): TencentTTSAdapter,

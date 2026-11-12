@@ -1,10 +1,8 @@
 """视频生成服务：prompt/参考图/一致性策略 + 协议适配器路由。
 
 端点来自 ``get_endpoint("video")``，协议调用委托给
-``services.providers.registry.get_adapter("video", protocol)`` 注册的适配器：
-- ``ark-seedance``：异步任务式无声视频（对白走独立 TTS 路径），首帧参考
-  （first_frame_only），固定时长约 5 秒；
-- ``native-audio``：原生音视频骨架（对白编入 prompt，音频随视频直出）。
+``services.providers.registry.get_adapter("video", protocol)`` 注册的原生适配器。
+时长、首尾帧、多参考与音频能力按具体模型裁决，音频开关随执行计划传递。
 """
 
 import asyncio
@@ -13,7 +11,9 @@ import re
 import time
 from collections.abc import Mapping
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from config import settings
 from services import usage_service
@@ -100,6 +100,11 @@ class VideoService:
         reference_assets: list[ReferenceAsset] | None = None,
         provider_override: str = "",
         seed: int | None = None,
+        generate_audio: bool | None = None,
+        negative_prompt: str = "",
+        reference_video: str | None = None,
+        reference_audio: str | None = None,
+        task_type: str = "auto",
     ) -> dict[str, str]:
         endpoint = video_protocol_defaults(provider_override) if provider_override else get_endpoint("video")
         adapter_cls = get_adapter("video", endpoint.protocol)
@@ -114,6 +119,9 @@ class VideoService:
             content = [{"type": "text", "text": prompt}]
         reference_image, content_reference_assets, content_payload_mode = self._reference_from_content(content)
         request_reference_assets = list(reference_assets or content_reference_assets)
+        reference_image, request_reference_assets = self._public_video_references(
+            endpoint, reference_image, request_reference_assets
+        )
 
         try:
             safe_project_id = validate_identifier(project_id, "项目 ID")
@@ -149,6 +157,10 @@ class VideoService:
                 "complete the full action and all dialogue within this exact duration"
             )
         end_frame_asset = next((item for item in request_reference_assets if item.type == "end_frame"), None)
+        if generate_audio is None:
+            from services.audio_routing import resolve_audio_mode
+
+            generate_audio = resolve_audio_mode({}, endpoint) == "native"
         request = VideoRequest(
             prompt=prompt,
             reference_image=reference_image,
@@ -162,12 +174,21 @@ class VideoService:
             output_video_path=video_path,
             output_frame_path=frame_path,
             seed=int(seed) if seed is not None else None,
+            generate_audio=bool(generate_audio),
+            negative_prompt=negative_prompt,
+            reference_video=reference_video,
+            reference_audio=reference_audio,
+            task_type=task_type,
         )
         report = capability_report("video", endpoint.protocol, model=endpoint.model, adapter_cls=adapter_cls)
         sent_items: list[dict] = []
         if reference_image:
             sent_items.append(
-                {"type": "approved_storyboard_first_frame", "role": "first_frame", "parameter": "content[].role"}
+                {
+                    "type": "approved_storyboard_first_frame",
+                    "role": "first_frame",
+                    "parameter": getattr(effective_caps, "reference_parameter", "") or "content",
+                }
             )
         if getattr(effective_caps, "multiple_reference_images", False):
             sent_items.extend(
@@ -185,7 +206,7 @@ class VideoService:
                 {
                     "type": item.type,
                     "role": item.role or item.type,
-                    "parameter": "input.media[].type",
+                    "parameter": getattr(effective_caps, "reference_role_parameter", "") or "end_frame",
                 }
                 for item in request_reference_assets
                 if item.type == "end_frame"
@@ -222,7 +243,7 @@ class VideoService:
                 "\n".join(str(item.text or "") for item in (request.dialogues or []))
             ),
             "reference_mode": "multi_reference"
-            if len(sent_items) > 1
+            if any(item["type"] != "approved_storyboard_first_frame" for item in sent_items)
             else ("first_frame_reference" if reference_image else "text_only"),
             "video_mode": payload_video_mode,
             "references_validated": validated_count,
@@ -331,6 +352,36 @@ class VideoService:
             "native_audio": bool(result.native_audio),
             "generation_report": dict(generation_metadata),
         }
+
+    @staticmethod
+    def _public_video_references(endpoint, reference_image, assets):
+        """Map output assets to an explicitly configured public /output mirror."""
+
+        base = str(endpoint.param("public_media_base_url", "") or "").rstrip("/")
+        if endpoint.protocol not in {"minimax", "luma"} or not base:
+            return reference_image, assets
+        if not base.startswith(("https://", "http://")):
+            raise ValueError("public_media_base_url 必须为可公开访问的 HTTP(S) 输出目录地址")
+
+        def public_url(value: str, source_path: str = "") -> str:
+            if str(value).startswith(("http://", "https://", "generation:")):
+                return value
+            if str(source_path or value).startswith("data:"):
+                raise ValueError("内联素材缺少本地来源路径，无法映射公网 URL；请提供 OUTPUT_DIR 文件或公网地址")
+            path = Path(source_path or value).resolve()
+            try:
+                relative = path.relative_to(settings.OUTPUT_DIR.resolve())
+            except ValueError as exc:
+                raise ValueError("公网素材映射只允许 OUTPUT_DIR 内的文件") from exc
+            if not path.is_file():
+                raise ValueError("公网素材映射的本地文件不存在")
+            return f"{base}/{quote(relative.as_posix(), safe='/')}"
+
+        mapped = [replace(asset, url=public_url(asset.url, asset.source_path)) for asset in assets]
+        first = next((asset for asset in mapped if asset.type == "approved_storyboard_first_frame"), None)
+        if reference_image:
+            reference_image = first.url if first else public_url(reference_image)
+        return reference_image, mapped
 
     async def generate_shot_video(
         self,
@@ -469,6 +520,8 @@ class VideoService:
             reference_assets=selected_assets,
             provider_override=provider_override,
             seed=int(shot.get("seed")) if shot.get("seed") is not None else None,
+            generate_audio=execution_plan.audio_mode == "native",
+            negative_prompt=str(shot.get("negative_prompt") or ""),
         )
         report = dict(result.get("generation_report") or self.last_generation_metadata or {})
         shot["reference_mode"] = str(
@@ -532,6 +585,17 @@ class VideoService:
         first_frame = ""
         assets: list[ReferenceAsset] = []
         for item in content or []:
+            if item.get("type") in {"video_url", "audio_url"}:
+                kind = str(item["type"])
+                media = item.get(kind) or {}
+                url = media.get("url") if isinstance(media, dict) else ""
+                if url:
+                    role = str(item.get("role") or kind.replace("_url", ""))
+                    provider_type = "reference_audio" if kind == "audio_url" else "reference_video"
+                    assets.append(
+                        ReferenceAsset(url=str(url), type=provider_type, role=role, provider_type=provider_type)
+                    )
+                continue
             if item.get("type") != "image_url":
                 continue
             url = (item.get("image_url") or {}).get("url") if isinstance(item.get("image_url"), dict) else None
@@ -540,11 +604,11 @@ class VideoService:
             role = str(item.get("role") or "")
             if role == "first_frame":
                 first_frame = first_frame or str(url)
-            elif role == "end_frame":
+            elif role in {"end_frame", "last_frame"}:
                 assets.append(
                     ReferenceAsset(url=str(url), type="end_frame", role="end_frame", provider_type="end_frame")
                 )
-            elif not first_frame:
+            elif not role and not first_frame:
                 # 兼容旧 content：第一张未标 role 的图按历史语义作为首帧。
                 first_frame = str(url)
             else:

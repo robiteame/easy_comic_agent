@@ -1,15 +1,12 @@
-"""火山方舟 Seedance 视频适配器（原 SeedanceVideoService 异步任务逻辑迁入）。
-
-异步任务式：创建任务 → 轮询 → 下载视频 + 尾帧。产物为无声视频（对白由独立的
-TTS 路径配音），capabilities.native_audio=False 供音频路由识别。
-参考图模式为 first_frame_only：只接受一张已审核故事板首帧。
-"""
+"""方舟 Seedance：保留旧版首帧协议，并适配 2.x 多模态参考与首尾帧。"""
 
 from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import replace
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 
@@ -52,6 +49,134 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
         self.storage = StorageService()
         self.reference_assets = ReferenceAssetService()
 
+    @classmethod
+    def effective_capabilities(cls, model: str = ""):
+        normalized = model.replace(".", "-").lower()
+        if "seedance-2" not in normalized:
+            return cls.capabilities
+        version_25 = "seedance-2-5" in normalized
+        return replace(
+            cls.capabilities,
+            fixed_duration=None,
+            min_duration=4,
+            max_duration=30 if version_25 else 15,
+            duration_step=1,
+            multiple_reference_images=True,
+            max_reference_images=30 if version_25 else 9,
+            last_frame_input=True,
+            first_last_frame_interpolation=True,
+            native_audio=True,
+            dialogue_in_prompt=True,
+            reference_mode="multi_reference",
+            reference_video=True,
+            reference_audio=True,
+            max_reference_videos=10 if version_25 else 3,
+            max_reference_audios=10 if version_25 else 3,
+        )
+
+    def _content(self, request: VideoRequest) -> list[dict]:
+        caps = self.effective_capabilities(self.endpoint.model)
+        content: list[dict] = [{"type": "text", "text": request.prompt}]
+        image_count = video_count = audio_count = 0
+
+        def append_media(value: str | None, media_type: str, role: str) -> None:
+            nonlocal image_count, video_count, audio_count
+            if not value:
+                return
+            if media_type == "image_url":
+                if not value.startswith("asset://"):
+                    value = self.reference_assets.to_image_url(value, max_bytes=caps.max_reference_inline_bytes)
+                if not value:
+                    raise RuntimeError("视频参考图缺失，或无法压缩到方舟请求体预算内")
+                image_count += 1
+            elif media_type == "video_url":
+                video_count += 1
+            else:
+                audio_count += 1
+            content.append({"type": media_type, media_type: {"url": value}, "role": role})
+
+        append_media(request.reference_image, "image_url", "first_frame")
+        if request.end_frame:
+            if not caps.last_frame_input or not request.reference_image:
+                raise ValueError("当前 Seedance 模型不支持此首尾帧请求，或缺少首帧")
+            append_media(request.end_frame, "image_url", "last_frame")
+        if caps.multiple_reference_images:
+            seen = {request.reference_image, request.end_frame}
+            for asset in request.reference_assets:
+                value = asset.url or asset.source_path
+                if asset.type in {"approved_storyboard_first_frame", "end_frame"} or value in seen:
+                    continue
+                role = asset.provider_type or asset.role or asset.type
+                if role in {"reference_video", "reference_audio"}:
+                    append_media(value, role.replace("reference_", "") + "_url", role)
+                else:
+                    append_media(value, "image_url", "reference_image")
+                seen.add(value)
+        elif any(a.type not in {"approved_storyboard_first_frame", "end_frame"} for a in request.reference_assets):
+            raise ValueError("当前 Seedance 模型仅支持首帧参考")
+        if request.reference_video or request.reference_audio:
+            if not caps.reference_video:
+                raise ValueError("当前 Seedance 模型不支持视频或音频参考")
+            append_media(request.reference_video, "video_url", "reference_video")
+            append_media(request.reference_audio, "audio_url", "reference_audio")
+        modern = "seedance-2" in self.endpoint.model.replace(".", "-").lower()
+        if modern:
+            version_25 = "seedance-2-5" in self.endpoint.model.replace(".", "-").lower()
+            if (
+                image_count > caps.max_reference_images
+                or video_count > (10 if version_25 else 3)
+                or audio_count > (10 if version_25 else 3)
+            ):
+                raise ValueError("Seedance 参考素材数量超过当前模型上限")
+            if not version_25 and audio_count and not (image_count or video_count):
+                raise ValueError("Seedance 2.0 音频参考必须搭配图片或视频")
+        return content
+
+    def build_payload(self, request: VideoRequest, *, content: list[dict] | None = None) -> dict:
+        caps = self.effective_capabilities(self.endpoint.model)
+        if request.generate_audio and not caps.native_audio:
+            raise ValueError("当前 Seedance 适配模式不支持原生音频，请使用独立 TTS")
+        request_content = self._content(request) if content is None else content
+        modern = "seedance-2" in self.endpoint.model.replace(".", "-").lower()
+        task_type = request.task_type or "auto"
+        if task_type not in {"auto", "edit", "extend"}:
+            raise ValueError("Seedance task_type 仅支持 auto / edit / extend")
+        has_video = any(item.get("type") == "video_url" for item in request_content)
+        if task_type != "auto" and (not modern or not has_video):
+            raise ValueError("Seedance 编辑或延长任务需要 2.x 模型和参考视频")
+        duration = -1 if task_type == "edit" else request.duration
+        if duration != -1 and modern and not (caps.min_duration <= duration <= caps.max_duration):
+            raise ValueError(f"Seedance 时长必须为 {caps.min_duration:g}–{caps.max_duration:g} 秒")
+        adaptive = modern and (
+            task_type in {"edit", "extend"}
+            or any(item.get("role") in {"first_frame", "last_frame"} for item in request_content)
+        )
+        ratio = "adaptive" if adaptive else request.ratio
+        if modern and ratio not in {"21:9", "16:9", "4:3", "1:1", "3:4", "9:16", "adaptive"}:
+            raise ValueError("Seedance 不支持此画幅比例")
+        resolution = self._normalized_resolution(request.resolution)
+        allowed_resolutions = {"480p", "720p", "1080p"}
+        if "seedance-2-0" in self.endpoint.model.replace(".", "-").lower():
+            allowed_resolutions.add("4k")
+        if modern and resolution not in allowed_resolutions:
+            raise ValueError("当前 Seedance 模型不支持此分辨率")
+        payload = {
+            "model": self.endpoint.model,
+            "content": request_content,
+            "duration": duration,
+            "ratio": ratio,
+            "resolution": resolution,
+            "return_last_frame": bool(self.endpoint.param("return_last_frame", True)),
+            "watermark": bool(self.endpoint.param("watermark", False)),
+        }
+        if self._supports_generate_audio(self.endpoint.model):
+            payload["generate_audio"] = bool(request.generate_audio)
+        if modern:
+            payload["omni_reference_task_type"] = task_type
+            if request.seed is not None:
+                payload["seed"] = request.seed
+        return payload
+
     def usage_for_request(
         self,
         capability: str,
@@ -61,32 +186,25 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
     ) -> UsageMetadata:
         """Seedance 按秒计费：时长取请求里的有效时长（已按协议固定时长归一化）。"""
 
+        auto_duration = bool(request and (request.duration == -1 or request.task_type == "edit"))
         return UsageMetadata(
             capability=CAPABILITY_VIDEO,
             provider=self.endpoint.protocol,
             model=model or self.endpoint.model,
-            seconds=float(getattr(request, "duration", 0) or 0),
+            seconds=0 if auto_duration else float(getattr(request, "duration", 0) or 0),
             resolution=str(getattr(request, "resolution", "") or ""),
-            known=True,
+            known=not auto_duration,
             billable=True,
-            source="request",
+            source="unknown" if auto_duration else "request",
             extra={"ratio": str(getattr(request, "ratio", "") or "")},
         )
 
     async def generate(self, request: VideoRequest) -> VideoResult:
-        content: list[dict] = [{"type": "text", "text": request.prompt}]
-        if request.reference_image:
-            # 服务层已按能力预算压缩；这里兜底覆盖直传大 data URL 的调用路径。
-            reference_url = self.reference_assets.to_image_url(
-                request.reference_image,
-                max_bytes=self.capabilities.max_reference_inline_bytes or settings.VIDEO_REFERENCE_INLINE_BUDGET_BYTES,
-            )
-            if not reference_url:
-                raise RuntimeError("视频首帧参考图缺失，或无法压缩到方舟请求体预算内")
-            content.append({"type": "image_url", "image_url": {"url": reference_url}, "role": "first_frame"})
+        content = self._content(request)
         payload_mode = self._reference_payload_mode(content)
-
-        task = await self._create_task(request.prompt, request.duration, request.ratio, request.resolution, content)
+        task = await self._create_task(
+            request.prompt, request.duration, request.ratio, request.resolution, content, request=request
+        )
         task_id = self._extract_task_id(task)
         data = await self._wait_for_task(task_id)
 
@@ -103,7 +221,7 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
         return VideoResult(
             video_path=str(video_path),
             frame_path=str(frame_path),
-            native_audio=False,
+            native_audio=bool(request.generate_audio and self.effective_capabilities(self.endpoint.model).native_audio),
             payload_mode=payload_mode,
             task_id=task_id,
         )
@@ -111,24 +229,17 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
     # --- 异步任务协议 ---
 
     async def _create_task(
-        self, prompt: str, duration: int, ratio: str, resolution: str, content: list[dict] | None = None
+        self,
+        prompt: str,
+        duration: int,
+        ratio: str,
+        resolution: str,
+        content: list[dict] | None = None,
+        *,
+        request: VideoRequest | None = None,
     ) -> dict:
-        request_content = content or [{"type": "text", "text": prompt}]
-        payload = {
-            "model": self.endpoint.model,
-            "content": request_content,
-            "duration": duration,
-            "ratio": ratio,
-            "resolution": self._normalized_resolution(resolution),
-            # 保留尾帧返回：同场景下一镜的连续性参考依赖上一镜尾帧。
-            "return_last_frame": True,
-            "watermark": False,
-        }
-        # Seedance 1.5 Pro 及 2.x 系列「音画同生」默认开启（generate_audio=true）；
-        # 本链路契约为无声视频 + 独立 TTS 配音，需显式关闭。1.0 系列不支持该参数，
-        # 强校验下携带会报错，故仅在受支持的模型上发送。
-        if self._supports_generate_audio(self.endpoint.model):
-            payload["generate_audio"] = False
+        request = request or VideoRequest(prompt=prompt, duration=duration, ratio=ratio, resolution=resolution)
+        payload = self.build_payload(request, content=content)
         async with httpx.AsyncClient(timeout=60, trust_env=settings.PROVIDER_HTTP_TRUST_ENV) as client:
             response = await request_with_retry(
                 client,
@@ -137,6 +248,7 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
                 headers=self._headers(),
                 json=payload,
                 name="ark-seedance:create",
+                attempts=1,
             )
         if response.status_code >= 400:
             raise RuntimeError(f"Seedance 创建任务失败: {response.status_code} {response.text[:1000]}")
@@ -144,11 +256,11 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
 
     async def _wait_for_task(self, task_id: str) -> dict:
         async with httpx.AsyncClient(timeout=60, trust_env=settings.PROVIDER_HTTP_TRUST_ENV) as client:
-            for _ in range(90):
+            for _ in range(max(1, int(self.endpoint.param("max_poll_attempts", 90)))):
                 response = await request_with_retry(
                     client,
                     "GET",
-                    f"{self._tasks_url()}/{task_id}",
+                    f"{self._tasks_url()}/{quote(task_id, safe='')}",
                     headers=self._headers(),
                     name="ark-seedance:poll",
                 )
@@ -162,7 +274,7 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
                     return data
                 if status in {"failed", "cancelled", "canceled", "error"}:
                     raise RuntimeError(f"Seedance 任务失败: {data}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(max(0.1, float(self.endpoint.param("poll_interval_seconds", 30))))
         raise TimeoutError(f"Seedance 任务超时: {task_id}")
 
     @staticmethod
@@ -191,7 +303,9 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
         return value
 
     def _reference_payload_mode(self, content: list[dict]) -> str:
-        roles = {str(item.get("role") or "") for item in content if item.get("type") == "image_url"}
+        roles = {str(item.get("role") or "") for item in content if item.get("type") != "text"}
+        if {"first_frame", "last_frame"} <= roles:
+            return "first_last_frame"
         if "first_frame" in roles:
             return "first_frame_reference"
         if roles:
@@ -337,4 +451,6 @@ class ArkSeedanceVideoAdapter(BaseAdapter):
     def _tasks_url(self) -> str:
         base = (self.endpoint.base_url or "https://ark.cn-beijing.volces.com/api/v3").rstrip("/")
         base = base.replace("/api/plan/v3", "/api/v3")
+        if base.endswith("/contents/generations/tasks"):
+            return base
         return f"{base}/contents/generations/tasks"

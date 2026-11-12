@@ -77,7 +77,22 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
         """r2v 模型支持多参考图；普通 i2v/t2v 仍只能驱动首帧。"""
 
         caps = cls.capabilities
-        if "-r2v" in str(model or "").strip().lower():
+        name = str(model or "").strip().lower()
+        if name.startswith("wan2.7"):
+            caps = replace(caps, min_duration=2, max_duration=15, duration_step=1)
+            if "-i2v" in name:
+                caps = replace(
+                    caps,
+                    last_frame_input=True,
+                    first_last_frame_interpolation=True,
+                    reference_video=True,
+                    reference_audio=True,
+                    max_reference_videos=1,
+                    max_reference_audios=1,
+                    native_audio=True,
+                    dialogue_in_prompt=True,
+                )
+        if "-r2v" in name:
             return replace(
                 caps,
                 multiple_reference_images=True,
@@ -127,14 +142,35 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
         return VideoResult(
             video_path=str(video_path),
             frame_path=str(frame_path),
-            native_audio=False,
+            native_audio=bool(self.effective_capabilities(self.endpoint.model).native_audio),
             payload_mode=payload_mode,
             task_id=task_id,
         )
 
     # --- 异步任务协议 ---
 
-    async def _create_task(self, request: VideoRequest) -> str:
+    def build_payload(self, request: VideoRequest) -> dict:
+        caps = self.effective_capabilities(self.endpoint.model)
+        if request.task_type not in {"auto", "extend"}:
+            raise ValueError("万相当前适配器不支持视频编辑任务")
+        if request.task_type == "extend" and not request.reference_video:
+            raise ValueError("万相视频续写需要 reference_video 输入")
+        modern_i2v = self.endpoint.model.lower().startswith("wan2.7") and "-i2v" in self.endpoint.model.lower()
+        if modern_i2v and any(
+            asset.type not in {"approved_storyboard_first_frame", "end_frame"} for asset in request.reference_assets
+        ):
+            raise ValueError("万相 2.7 i2v 仅支持首尾帧、驱动音频或视频续写，不支持主体参考图")
+        duration = request.duration
+        if not isinstance(duration, int) or not caps.min_duration <= duration <= caps.max_duration:
+            raise ValueError(f"万相时长必须为 {caps.min_duration:g}–{caps.max_duration:g} 秒内的整数")
+        if request.end_frame and not caps.last_frame_input:
+            raise ValueError("当前万相模型不支持尾帧输入")
+        if request.reference_video and not caps.reference_video:
+            raise ValueError("当前万相模型不支持视频续写")
+        if request.reference_audio and not caps.reference_audio:
+            raise ValueError("当前万相模型不支持驱动音频")
+        if len(request.prompt) > 5000 or len(request.negative_prompt) > 500:
+            raise ValueError("万相提示词最多 5000 字符，负向提示词最多 500 字符")
         img_url = ""
         if request.reference_image:
             # 百炼网关对超过 ~200KB 的请求体直接重置连接，参考图必须先压进
@@ -147,28 +183,41 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
                 raise RuntimeError("视频首帧参考图缺失，或无法压缩到请求体预算内")
 
         task_input: dict[str, Any] = {"prompt": request.prompt}
+        if request.negative_prompt:
+            task_input["negative_prompt"] = request.negative_prompt
         if self._uses_media_input():
             # Wan 2.7 / 3.0：首帧放 input.media 数组。
-            if img_url:
-                task_input["media"] = self._media_entries(img_url, request)
+            task_input["media"] = self._media_entries(img_url, request)
+            if "-i2v" in self.endpoint.model.lower() and not task_input["media"]:
+                raise ValueError("万相图生视频需要首帧或续写视频")
+            if not task_input["media"]:
+                task_input.pop("media")
         elif img_url:
             # Wan 2.6 及更早：首帧放 input.img_url。
             task_input["img_url"] = img_url
 
         parameters: dict[str, Any] = {
             "resolution": self._resolve_resolution(request.resolution),
-            "duration": max(1, int(request.duration or 5)),
-            "prompt_extend": True,
+            "duration": duration,
+            "prompt_extend": bool(self.endpoint.param("prompt_extend", True)),
+            "watermark": bool(self.endpoint.param("watermark", False)),
         }
+        if request.seed is not None:
+            if not 0 <= request.seed <= 2147483647:
+                raise ValueError("万相 seed 必须在 0–2147483647 范围内")
+            parameters["seed"] = request.seed
         # Wan 3.0 默认输出有声视频；本链路契约为无声视频 + 独立 TTS 配音。
         if self._generates_audio_by_default():
             parameters["audio"] = False
 
-        payload = {
+        return {
             "model": self.endpoint.model,
             "input": task_input,
             "parameters": parameters,
         }
+
+    async def _create_task(self, request: VideoRequest) -> str:
+        payload = self.build_payload(request)
         headers = self._headers()
         headers["X-DashScope-Async"] = "enable"
         async with httpx.AsyncClient(timeout=60, trust_env=settings.PROVIDER_HTTP_TRUST_ENV) as client:
@@ -179,6 +228,7 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
                 headers=headers,
                 json=payload,
                 name="dashscope-wanx:create",
+                attempts=1,
             )
         if response.status_code >= 400:
             raise RuntimeError(f"百炼创建视频任务失败: {response.status_code} {response.text[:1000]}")
@@ -190,7 +240,7 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
 
     async def _wait_for_task(self, task_id: str) -> dict:
         async with httpx.AsyncClient(timeout=60, trust_env=settings.PROVIDER_HTTP_TRUST_ENV) as client:
-            for _ in range(90):
+            for _ in range(max(1, int(self.endpoint.param("max_poll_attempts", 90)))):
                 response = await request_with_retry(
                     client,
                     "GET",
@@ -206,7 +256,7 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
                     return data
                 if status in {"FAILED", "CANCELED", "UNKNOWN"}:
                     raise RuntimeError(f"百炼视频任务失败: {data}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(max(0.1, float(self.endpoint.param("poll_interval_seconds", 15))))
         raise TimeoutError(f"百炼视频任务超时: {task_id}")
 
     def _resolve_resolution(self, resolution: str) -> str:
@@ -239,7 +289,7 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
         ``effective_capabilities(model)`` 为准，不做模型名字符串嗅探。
         """
 
-        media: list[dict[str, str]] = [{"type": "first_frame", "url": img_url}]
+        media: list[dict[str, str]] = [{"type": "first_frame", "url": img_url}] if img_url else []
         capabilities = self.effective_capabilities(self.endpoint.model)
         end_frame_url = ""
         if supports_first_last_frame(capabilities):
@@ -247,8 +297,18 @@ class DashscopeWanxVideoAdapter(BaseAdapter):
                 getattr(request, "end_frame", "") or "",
                 max_bytes=settings.VIDEO_REFERENCE_INLINE_BUDGET_BYTES,
             )
-            if end_frame_url and end_frame_url != img_url:
-                media.append({"type": "end_frame", "url": end_frame_url})
+            if end_frame_url:
+                media.append({"type": "last_frame", "url": end_frame_url})
+        if getattr(request, "reference_video", None):
+            if img_url:
+                raise ValueError("万相视频续写 first_clip 不可与 first_frame 同传")
+            media.insert(0, {"type": "first_clip", "url": request.reference_video})
+        if getattr(request, "reference_audio", None):
+            if not img_url:
+                raise ValueError("万相驱动音频必须与首帧同传，不支持 first_clip + driving_audio")
+            media.append({"type": "driving_audio", "url": request.reference_audio})
+        if end_frame_url and not img_url and not getattr(request, "reference_video", None):
+            raise ValueError("万相尾帧必须搭配首帧或续写视频")
         if str(getattr(capabilities, "reference_mode", "") or "") != "multi_reference":
             return media
         max_refs = max(0, int(getattr(capabilities, "max_reference_images", 0) or 0))

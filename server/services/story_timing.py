@@ -91,6 +91,7 @@ class ProviderDurationCapability:
     duration_step: float = DEFAULT_DURATION_STEP_SECONDS
     # 规划侧的视频路由事实；首尾帧能力由视频服务按模型级 capability 裁决。
     reference_mode: str = ""
+    duration_options: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         fixed = self.fixed_duration
@@ -109,6 +110,10 @@ class ProviderDurationCapability:
         object.__setattr__(self, "min_duration", min_duration)
         object.__setattr__(self, "max_duration", max_duration)
         object.__setattr__(self, "duration_step", step)
+        options = tuple(sorted(set(int(value) for value in self.duration_options)))
+        if options and (options[0] < min_duration or options[-1] > max_duration):
+            raise ValueError("视频 Provider 时长枚举必须在能力范围内")
+        object.__setattr__(self, "duration_options", options)
 
     @property
     def is_fixed(self) -> bool:
@@ -128,6 +133,8 @@ class ProviderDurationCapability:
 
     def is_aligned(self, duration_s: float) -> bool:
         value = float(duration_s)
+        if self.duration_options:
+            return value in self.duration_options
         units = value / self.duration_step
         return math.isfinite(value) and abs(units - round(units)) <= 1e-6
 
@@ -159,13 +166,14 @@ class ProviderDurationCapability:
                 ]
             )
         if not self.is_aligned(value):
+            constraint = (
+                f"时长枚举 {self.describe()}" if self.duration_options else f"{self.duration_step:g} 秒生成步长"
+            )
             raise StoryTimingError(
                 [
                     TimingIssue(
                         code="provider_duration_step_mismatch",
-                        message=(
-                            f"{label} 时长 {value:g} 秒不符合当前视频 Provider 的 {self.duration_step:g} 秒生成步长"
-                        ),
+                        message=(f"{label} 时长 {value:g} 秒不符合当前视频 Provider 的 {constraint}"),
                         shot_ids=(shot_id,) if shot_id else (),
                     )
                 ]
@@ -174,6 +182,8 @@ class ProviderDurationCapability:
     def describe(self) -> str:
         if self.is_fixed:
             return f"固定 {self.fixed_duration:g} 秒"
+        if self.duration_options:
+            return " / ".join(str(value) for value in self.duration_options) + " 秒"
         return f"{self.min_duration:g} 到 {self.max_duration:g} 秒，步长 {self.duration_step:g} 秒"
 
     def to_dict(self) -> dict[str, Any]:
@@ -211,6 +221,7 @@ def provider_duration_capability(
         max_duration=float(raw_max) if raw_max is not None else default_max,
         duration_step=float(raw_step) if raw_step not in (None, 0) else default_step,
         reference_mode=str(getattr(capabilities, "reference_mode", "") or ""),
+        duration_options=tuple(getattr(capabilities, "duration_options", ()) or ()),
     )
 
 
@@ -800,6 +811,11 @@ class ShotExecutionPlan:
             step_ms = max(1, int(round(provider.duration_step * 1000)))
             snapped_ms = int(math.ceil(needed_ms / step_ms - 1e-6)) * step_ms
             generation_s = min(max(snapped_ms / 1000, provider.min_duration), provider.max_duration)
+            if provider.duration_options:
+                generation_s = next(
+                    (float(value) for value in provider.duration_options if value >= generation_s),
+                    float(provider.duration_options[-1]),
+                )
         else:
             generation_s = requested_generation_s if requested_generation_s > 0 else needed_ms / 1000
         generation_s = round(max(generation_s, 0.001), 3)
@@ -1594,6 +1610,37 @@ class StoryTimingPlan:
 
         for index, shot in enumerate(shots):
             shot["duration"] = round(units[index] * step, 3)
+
+        if self.provider.duration_options:
+            self._allocate_enum_durations(shots)
+
+    def _allocate_enum_durations(self, shots: list[dict[str, Any]]) -> None:
+        """Choose legal discrete clip lengths while keeping the total near budget."""
+
+        states: dict[int, tuple[float, tuple[int, ...]]] = {0: (0.0, ())}
+        for shot in shots:
+            speech_ms = shot_speech_ms(shot) + (
+                ACTION_LEAD_RESERVE_MS if str(shot.get("character_action") or "").strip() else 0
+            )
+            options = [value for value in self.provider.duration_options if value * 1000 >= speech_ms]
+            if not options:
+                raise StoryTimingError(
+                    [TimingIssue(code="dialogue_exceeds_shot_duration", message="对白超过模型时长枚举的最大容量")]
+                )
+            next_states = {}
+            desired = float(shot.get("duration") or self.provider.min_duration)
+            for total, (cost, durations) in states.items():
+                for value in options:
+                    candidate_cost = cost + (value - desired) ** 2
+                    candidate_total = total + value
+                    if candidate_total not in next_states or candidate_cost < next_states[candidate_total][0]:
+                        next_states[candidate_total] = (candidate_cost, (*durations, value))
+            states = next_states
+        if not states:
+            return
+        selected = min(states, key=lambda total: (abs(total - self.target_duration_s), states[total][0]))
+        for shot, value in zip(shots, states[selected][1], strict=True):
+            shot["duration"] = float(value)
 
     def rebalance(self, shots: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         """Split/merge/retime shots so the result is executable and close to target."""

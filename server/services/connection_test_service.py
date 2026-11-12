@@ -183,6 +183,16 @@ async def _run_probe(family: str, endpoint: EndpointConfig) -> tuple[str, str]:
 
 
 async def _dispatch_probe(family: str, endpoint: EndpointConfig) -> tuple[str, str]:
+    if family == "video" and endpoint.protocol in {
+        "google-veo",
+        "runway",
+        "kling",
+        "minimax",
+        "vidu",
+        "pixverse",
+        "luma",
+    }:
+        return STATUS_UNSUPPORTED, "此原生视频协议暂不提供免费连接检测；请填写厂商模型名称，生成任务会按原生协议调用。"
     if family == "script":
         return await _probe_openai_chat(endpoint)
     if family == "voice":

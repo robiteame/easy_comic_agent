@@ -49,6 +49,11 @@ class VideoCapabilities:
     min_duration: float | None = None  # 协议最短时长（秒）；None 表示未声明
     max_duration: float | None = None  # 协议最长时长（秒）；None 表示未声明
     duration_step: float = 1.0  # 时长步进（秒）
+    duration_options: tuple[int, ...] = ()  # 非连续枚举，例如 Luma 的 5/9 秒
+    reference_video: bool = False
+    reference_audio: bool = False
+    max_reference_videos: int = 0
+    max_reference_audios: int = 0
     camera_movement_prompt: bool = False  # 运镜是否通过 prompt 文本驱动
     supported_camera_movements: tuple[str, ...] = (
         "静止",
@@ -121,6 +126,11 @@ class VideoRequest:
     output_frame_path: Path | None = None
     end_frame: str | None = None  # 仅显式支持 first_last_frame_interpolation 的 Provider 可用
     seed: int | None = None  # 候选可追溯 seed；Provider 不支持时只记录 recipe，不声称已生效
+    negative_prompt: str = ""
+    generate_audio: bool = False
+    reference_video: str | None = None
+    reference_audio: str | None = None
+    task_type: str = "auto"  # auto / edit / extend；仅支持的协议发送
 
 
 @dataclass

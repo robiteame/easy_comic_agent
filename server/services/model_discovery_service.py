@@ -64,6 +64,12 @@ def _audio_modes(protocol: str, item: dict[str, Any]) -> list[str]:
     if protocol == "native-audio":
         return ["native"]
     if protocol in {"ark-seedance", "dashscope-wanx"}:
+        from services.providers.registry import get_adapter
+
+        model = str(item.get("id") or item.get("model") or "")
+        caps = get_adapter("video", protocol).effective_capabilities(model)
+        return ["native", "silent"] if caps.native_audio else ["silent"]
+    if protocol in {"openai-sora", "runway", "luma"}:
         return ["silent"]
     return []
 
@@ -127,6 +133,8 @@ async def discover_models(
     category = str(category or "").strip().lower()
     if category not in {"script", "image", "video", "voice"}:
         raise ModelDiscoveryError("不支持的模型类别")
+    if category == "video" and protocol in {"google-veo", "runway", "kling", "minimax", "vidu", "pixverse", "luma"}:
+        raise ModelDiscoveryError("该厂商原生 API 没有接入统一模型列表；请选择预设或手动填写账户可用的模型名称")
     url = _models_url(base_url)
     key = str(api_key or "").strip()
     if key == "********":

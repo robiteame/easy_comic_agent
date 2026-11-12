@@ -94,9 +94,9 @@ class DashscopeWanxProtocolTests(unittest.TestCase):
     def test_normalize_protocol_aliases(self) -> None:
         for alias in ("wanx", "dashscope", "bailian", "aliyun", "wan2.5-i2v-plus"):
             self.assertEqual(normalize_protocol("video", alias), "dashscope-wanx")
-        # 既有别名不受影响
+        # 已落地的原生协议别名直接路由到对应适配器
         self.assertEqual(normalize_protocol("video", "seedance"), "ark-seedance")
-        self.assertEqual(normalize_protocol("video", "veo3"), "native-audio")
+        self.assertEqual(normalize_protocol("video", "veo3"), "google-veo")
 
     def test_video_defaults_follow_wanx_provider(self) -> None:
         from services.providers import endpoint as endpoint_module

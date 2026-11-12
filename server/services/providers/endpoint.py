@@ -28,12 +28,40 @@ API_KEY_REQUIRED = "api_key_required"
 KNOWN_PROTOCOLS: dict[str, tuple[str, ...]] = {
     "script": ("openai-chat",),
     "image": ("placeholder", "stability", "ark-seedream", "qwen-image"),
-    "video": ("ark-seedance", "native-audio", "dashscope-wanx"),
+    "video": (
+        "ark-seedance",
+        "dashscope-wanx",
+        "openai-sora",
+        "google-veo",
+        "runway",
+        "kling",
+        "minimax",
+        "vidu",
+        "pixverse",
+        "luma",
+        "native-audio",
+    ),
     "voice": ("mimo-tts", "tencent-tts", "dashscope-tts"),
     "identity": ("openai-embeddings",),
 }
 
 DEFAULT_PROTOCOLS = {capability: protocols[0] for capability, protocols in KNOWN_PROTOCOLS.items()}
+
+# Public native API defaults. Credentials are configured separately and never
+# inherited from another vendor when switching protocols.
+VIDEO_PROTOCOL_PRESETS: dict[str, dict] = {
+    "openai-sora": {"base_url": "https://api.openai.com/v1", "model": "sora-2"},
+    "google-veo": {
+        "base_url": "https://us-central1-aiplatform.googleapis.com/v1",
+        "model": "veo-3.1-generate-001",
+    },
+    "runway": {"base_url": "https://api.dev.runwayml.com/v1", "model": "gen4.5"},
+    "kling": {"base_url": "https://api-beijing.klingai.com/v1", "model": "kling-v2-6"},
+    "minimax": {"base_url": "https://api.minimax.cn", "model": "MiniMax-H3"},
+    "vidu": {"base_url": "https://api.vidu.com/ent/v2", "model": "viduq3-pro"},
+    "pixverse": {"base_url": "https://app-api.pixverse.ai", "model": "v6"},
+    "luma": {"base_url": "https://api.lumalabs.ai/dream-machine/v1", "model": "ray-2"},
+}
 
 # 旧版 provider 字符串 -> 显式协议。仅用于加载旧 JSON / 旧 .env 字段时的一次性
 # 归一化，运行时代码不再做 provider 嗅探。
@@ -67,8 +95,11 @@ LEGACY_PROTOCOL_ALIASES: dict[str, dict[str, str]] = {
         "aliyun": "dashscope-wanx",
         "native": "native-audio",
         "native-audio": "native-audio",
-        "veo3": "native-audio",
-        "sora2": "native-audio",
+        "veo3": "google-veo",
+        "veo": "google-veo",
+        "sora2": "openai-sora",
+        "sora": "openai-sora",
+        "hailuo": "minimax",
     },
     "voice": {
         "mimo": "mimo-tts",
@@ -131,7 +162,7 @@ def normalize_protocol(capability: str, value: str) -> str:
             return "ark-seedance"
         if "wan" in text:
             return "dashscope-wanx"
-        return "native-audio"
+        return "google-veo" if "veo" in text else "openai-sora"
     return text
 
 
@@ -257,8 +288,16 @@ def _image_defaults(protocol: str = "") -> dict:
     }
 
 
-def _video_defaults() -> dict:
-    protocol = normalize_protocol("video", settings.VIDEO_PROVIDER)
+def _video_defaults(protocol: str = "") -> dict:
+    protocol = normalize_protocol("video", protocol or settings.VIDEO_PROVIDER)
+    if protocol in VIDEO_PROTOCOL_PRESETS:
+        return {
+            "protocol": protocol,
+            "api_key": "",
+            "auth_style": "bearer",
+            "params": {},
+            **VIDEO_PROTOCOL_PRESETS[protocol],
+        }
     if protocol == "dashscope-wanx":
         return {
             "protocol": "dashscope-wanx",
@@ -332,6 +371,10 @@ def endpoint_from_stored(capability: str, stored: dict | None) -> EndpointConfig
     防止换端点后误用旧凭据。
     """
     merged = settings_defaults(capability)
+    if capability == "video" and (stored or {}).get("protocol"):
+        selected = normalize_protocol("video", stored["protocol"])
+        if selected != merged["protocol"]:
+            merged = _video_defaults(selected)
     params = dict(merged.get("params") or {})
     for key, value in (stored or {}).items():
         if key == API_KEY_REQUIRED:
@@ -360,6 +403,11 @@ def video_protocol_defaults(protocol: str) -> EndpointConfig:
     """按显式视频协议构造端点，供 Agent ``switch_provider`` 使用。"""
 
     normalized = normalize_protocol("video", protocol)
+    configured = get_endpoint("video")
+    if configured.protocol == normalized:
+        return configured
+    if normalized in VIDEO_PROTOCOL_PRESETS:
+        return _endpoint_from_merged("video", _video_defaults(normalized))
     if normalized == "dashscope-wanx":
         return _endpoint_from_merged(
             "video",
@@ -374,7 +422,7 @@ def video_protocol_defaults(protocol: str) -> EndpointConfig:
         )
     if normalized == "native-audio":
         return _endpoint_from_merged("video", {"protocol": normalized, "auth_style": "bearer", "params": {}})
-    return _endpoint_from_merged("video", _video_defaults())
+    return _endpoint_from_merged("video", _video_defaults(normalized))
 
 
 def image_protocol_defaults(protocol: str) -> EndpointConfig:
